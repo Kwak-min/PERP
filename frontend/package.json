@@ -1,0 +1,27 @@
+{
+  "name": "orbitflow-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "OrbitFlow frontend - Vite / React",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "node scripts/check-routes.mjs"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "6.0.5",
+    "vite": "8.2.1",
+    "typescript": "5.9.2",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "react-router-dom": "7.18.2",
+    "zod": "4.1.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "@types/react": "19.1.12",
+    "@types/react-dom": "19.1.9"
+  }
+}

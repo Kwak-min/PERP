@@ -1,0 +1,20 @@
+import { Router } from "express";
+
+import * as controller from "../controllers/documents.controller.js";
+import { asyncRoute } from "../middleware/error.js";
+
+export const documentsRouter = Router();
+
+documentsRouter.post("/spaces", asyncRoute(controller.createSpace));
+documentsRouter.get("/spaces", asyncRoute(controller.listSpaces));
+documentsRouter.get("/search/query", asyncRoute(controller.searchDocuments));
+documentsRouter.post("/meetings", asyncRoute(controller.createMeeting));
+documentsRouter.get("/meetings/:meetingId", asyncRoute(controller.getMeeting));
+documentsRouter.post("/meetings/:meetingId/decisions", asyncRoute(controller.addDecision));
+documentsRouter.post("/meetings/:meetingId/decisions/confirm", asyncRoute(controller.confirmDecisions));
+documentsRouter.post("", asyncRoute(controller.createDocument));
+documentsRouter.get("", asyncRoute(controller.listDocuments));
+documentsRouter.get("/:documentId", asyncRoute(controller.getDocument));
+documentsRouter.patch("/:documentId", asyncRoute(controller.patchDocument));
+documentsRouter.delete("/:documentId", asyncRoute(controller.archiveDocument));
+documentsRouter.post("/:documentId/restore/:revision", asyncRoute(controller.restoreVersion));

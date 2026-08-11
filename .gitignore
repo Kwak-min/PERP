@@ -1,0 +1,13 @@
+node_modules/
+.env
+*.log
+.demo_token
+*.db
+*.db-wal
+*.db-shm
+dist/
+.artifacts/
+.next/
+__pycache__/
+.pytest_cache/
+.omo/
