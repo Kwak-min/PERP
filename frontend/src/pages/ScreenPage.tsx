@@ -14,10 +14,12 @@ import { Button } from "../components/ui/Button";
 import { ListRow } from "../components/ui/ListRow";
 import { SectionCard } from "../components/ui/SectionCard";
 import { StatCard, type Stat } from "../components/ui/StatCard";
+import { StatTrendModal, metricKeyOf, type MetricKey } from "../components/data/StatTrendModal";
 import { fixtureFor, type ScreenFixture, type TableFixture } from "../fixtures/screens";
 import { useResource } from "../hooks/useResource";
 import { sectionLabels, type ScreenDefinition } from "../routes/catalog";
 import { useSession } from "../store/session";
+import { useBranch } from "../store/branch";
 import { useDemoMode } from "../store/demo";
 
 const NUMERIC_HINT = ["금액", "수량", "진행률", "시간", "건수", "잔액"];
@@ -157,7 +159,16 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
     () => (session ? { token: session.token, orgId: session.orgId } : null),
     [session],
   );
-  const resource = useResource(screen.endpoint, apiSession);
+  // 프로젝트 계열 화면만 부서 브랜치로 좁힌다. 휴가·근태·회계는 전사 기준을 유지한다.
+  const branchId = useBranch(session?.orgId ?? null);
+  const branchScoped = screen.module === "projects" && branchId !== null;
+  const endpoint = useMemo(() => {
+    if (!screen.endpoint) return null;
+    if (!branchScoped || !branchId) return screen.endpoint;
+    const separator = screen.endpoint.includes("?") ? "&" : "?";
+    return `${screen.endpoint}${separator}department_id=${encodeURIComponent(branchId)}`;
+  }, [screen.endpoint, branchScoped, branchId]);
+  const resource = useResource(endpoint, apiSession);
   const fixture: ScreenFixture = useMemo(
     () => fixtureFor(screen.id, isDetail),
     [screen.id, isDetail],
@@ -168,6 +179,9 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const [activeFilter, setActiveFilter] = useState(0);
   const [monthOffset, setMonthOffset] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
+  // 구성원 지표는 실제 가입·탈퇴 기록으로 기간별 추이를 보여줄 수 있다.
+  const trendable = (screen.endpoint ?? "").startsWith("/members");
+  const [trend, setTrend] = useState<{ stat: Stat; metric: MetricKey } | null>(null);
 
   // 서버가 응답했으면(빈 결과 포함) 서버가 진실이다. 데모는 서버가 없을 때만 쓴다.
   const serverAnswered = resource.status === "ready" || resource.status === "empty";
@@ -269,14 +283,31 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
       )}
 
       <section className="stat-grid" aria-label={`${screen.label} 지표`}>
-        {stats.map((stat) => (
+        {stats.map((stat, index) => (
           <StatCard
             key={stat.label}
             stat={stat}
-            action={<DetailAction onClick={() => setNotice(`${stat.label}: ${stat.value}${stat.unit ?? ""} — ${stat.foot ?? "상세 분석 준비 중"}`)} />}
+            action={
+              <DetailAction
+                onClick={() =>
+                  trendable
+                    ? setTrend({ stat, metric: metricKeyOf(stat, index) })
+                    : setNotice(`${stat.label}: ${stat.value}${stat.unit ?? ""} — ${stat.foot ?? "상세 분석 준비 중"}`)
+                }
+              />
+            }
           />
         ))}
       </section>
+
+      {trend && (
+        <StatTrendModal
+          stat={trend.stat}
+          metric={trend.metric}
+          session={apiSession}
+          onClose={() => setTrend(null)}
+        />
+      )}
 
       {blocked ? (
         <SectionCard title="상태" subtitle="서버 응답" >
@@ -567,11 +598,10 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
                 {filter}
               </button>
             ))}
-            {(query || activeFilter !== 0) && (
-              <span className="filter-bar__result">
-                {table ? `${table.rows.length}건` : "0건"}
-              </span>
-            )}
+            {/* 전체를 포함한 모든 필터에서 같은 자리에 건수를 보여준다. */}
+            <span className="filter-bar__result">
+              {table ? table.rows.length : visibleRows.length}건
+            </span>
           </div>
           <StateBoundary
             status={

@@ -18,20 +18,11 @@ export function WelcomePage() {
           <span>조직 유형과 필요한 모듈을 직접 선택합니다.</span>
           <em>설정 시작 →</em>
         </Link>
-        <button
-          type="button"
-          className="choice-card"
-          onClick={() => {
-            const token = window.prompt("관리자에게 받은 초대 토큰을 붙여넣으세요.");
-            if (token && token.trim()) {
-              window.location.href = `/signup?invite=${encodeURIComponent(token.trim())}`;
-            }
-          }}
-        >
+        <Link className="choice-card" to="/invitations">
           <strong>초대 링크로 참여</strong>
-          <span>관리자가 보낸 초대 토큰으로 기존 조직에 참여합니다.</span>
+          <span>{session.email} 주소로 온 초대를 확인하거나 초대 링크를 직접 입력합니다.</span>
           <em>초대 확인 →</em>
-        </button>
+        </Link>
       </div>
     </section>
   );

@@ -164,6 +164,121 @@ export function changePassword(req, res) {
   res.json({ changed: true, sessions_revoked: true, must_change_password: false });
 }
 
+const invitationTokenSchema = z.object({ token: z.string().min(1).max(500) });
+const acceptInvitationSchema = z
+  .object({
+    token: z.string().min(1).max(500).optional(),
+    invitation_id: z.string().min(1).optional(),
+  })
+  .refine((value) => Boolean(value.token || value.invitation_id), {
+    message: "token 또는 invitation_id가 필요합니다",
+  });
+
+// 초대 링크 전체를 붙여넣어도 되도록 URL에서 토큰만 뽑아낸다.
+function extractInvitationToken(raw) {
+  const value = raw.trim();
+  const match = /[?&](?:invite|token|invitation_token)=([^&#\s]+)/.exec(value);
+  if (match?.[1]) return decodeURIComponent(match[1]);
+  const tail = /([^/?&#\s]+)\s*$/.exec(value);
+  return tail?.[1] ? decodeURIComponent(tail[1]) : value;
+}
+
+function invitationView(invite) {
+  const org = db().prepare("SELECT * FROM organization WHERE id = ?").get(invite.org_id);
+  return {
+    invitation_id: invite.id,
+    email: invite.email,
+    org_id: invite.org_id,
+    org_name: org?.name ?? invite.org_id,
+    org_type: org?.type ?? null,
+    roles: (invite.roles ?? "").split(",").filter(Boolean),
+    status: invite.status,
+    expires_at: invite.expires_at,
+  };
+}
+
+// 확인 전용: 토큰이 살아있는지, 어떤 조직인지, 내 이메일과 맞는지만 알려준다.
+function inspectInvitation(token, email) {
+  const invite = db().prepare("SELECT * FROM invitation WHERE token = ?").get(token);
+  if (!invite) return { valid: false, reason: "not_found", message: "초대를 찾을 수 없습니다. 링크를 다시 확인하세요." };
+  if (invite.status !== "pending") {
+    return { valid: false, reason: invite.status, message: `이미 처리된 초대입니다: ${invite.status}`, invitation: invitationView(invite) };
+  }
+  if (invite.expires_at < nowIso()) {
+    return { valid: false, reason: "expired", message: "초대 유효기간이 지났습니다.", invitation: invitationView(invite) };
+  }
+  if (email && invite.email.toLowerCase() !== email.toLowerCase()) {
+    return {
+      valid: false,
+      reason: "email_mismatch",
+      message: `이 초대는 ${invite.email} 주소로 발송되었습니다.`,
+      invitation: invitationView(invite),
+    };
+  }
+  return { valid: true, reason: "ok", message: "사용할 수 있는 초대입니다.", invitation: invitationView(invite) };
+}
+
+export function listMyInvitations(req, res) {
+  const user = currentUser(req);
+  const rows = db()
+    .prepare(
+      `SELECT * FROM invitation
+       WHERE lower(email) = ? AND status = 'pending' AND expires_at >= ?
+       ORDER BY created_at DESC`,
+    )
+    .all(user.email.toLowerCase(), nowIso());
+  res.json({ email: user.email, items: rows.map(invitationView) });
+}
+
+export function verifyInvitation(req, res) {
+  const payload = invitationTokenSchema.parse(req.body);
+  const user = currentUser(req);
+  res.json(inspectInvitation(extractInvitationToken(payload.token), user.email));
+}
+
+export function acceptInvitation(req, res) {
+  const payload = acceptInvitationSchema.parse(req.body);
+  const user = currentUser(req);
+
+  // 내 메일함에 뜬 초대는 id로, 직접 붙여넣은 링크는 토큰으로 받는다.
+  const invite = payload.invitation_id
+    ? db().prepare("SELECT * FROM invitation WHERE id = ?").get(payload.invitation_id)
+    : db()
+        .prepare("SELECT * FROM invitation WHERE token = ?")
+        .get(extractInvitationToken(payload.token ?? ""));
+  if (!invite) throw new ApiError("NOT_FOUND", "초대를 찾을 수 없습니다");
+
+  const check = inspectInvitation(invite.token, user.email);
+  if (!check.valid) throw new ApiError("VALIDATION_ERROR", check.message, { reason: check.reason });
+
+  const already = db()
+    .prepare("SELECT id FROM membership WHERE user_id = ? AND org_id = ? AND deleted_at IS NULL")
+    .get(user.id, invite.org_id);
+  if (already) throw new ApiError("CONFLICT", "이미 이 조직의 구성원입니다");
+
+  insert("membership", {
+    tenant_id: invite.tenant_id,
+    user_id: user.id,
+    org_id: invite.org_id,
+    roles: invite.roles,
+    status: "active",
+    joined_at: nowIso(),
+    created_by: user.id,
+  });
+  update("invitation", invite.id, { status: "accepted" });
+
+  audit.record({
+    tenantId: invite.tenant_id,
+    action: "member.invitation.accepted",
+    resourceType: "membership",
+    resourceId: user.id,
+    actorId: user.id,
+    requestId: req.requestId,
+  });
+
+  res.status(201).json({ joined: true, ...invitationView({ ...invite, status: "accepted" }) });
+}
+
 export function me(req, res) {
   const user = currentUser(req);
   const memberships = db()

@@ -4,6 +4,7 @@ export type ScreenSection =
   | "operations"
   | "people"
   | "knowledge"
+  | "personal"
   | "ai"
   | "admin";
 
@@ -23,6 +24,7 @@ export const publicRoutes = [
   "/login",
   "/signup",
   "/welcome",
+  "/invitations",
   "/change-password",
   "/onboarding/organization",
 ] as const;
@@ -31,8 +33,10 @@ export const screens: readonly ScreenDefinition[] = [
   { id: "DASH-001", path: "/", label: "나의 홈", description: "오늘의 업무와 조직 흐름을 한눈에 확인합니다.", section: "home", endpoint: "/tenants/usage", module: null, nav: true },
   { id: "DASH-002", path: "/dashboard/org", label: "조직 대시보드", description: "조직의 핵심 운영 지표와 주의 항목을 봅니다.", section: "home", endpoint: "/tenants/usage", module: "analytics" },
   { id: "ORG-002", path: "/members", label: "구성원", description: "구성원, 초대, 역할과 상태를 관리합니다.", section: "people", endpoint: "/members", module: null, nav: true },
-  { id: "ORG-003", path: "/org-chart", label: "조직도", description: "부서 구조와 책임자를 계층으로 확인합니다.", section: "people", endpoint: "/members/org-chart", module: null },
+  { id: "ORG-003", path: "/org-chart", label: "조직도", description: "부서 구조와 책임자를 계층으로 확인합니다.", section: "people", endpoint: "/members/org-chart", module: null, nav: true },
+  { id: "ORG-006", path: "/org-log", label: "조직 변경 로그", description: "조직도, 구성원과 브랜치에 일어난 변경을 시간순으로 확인합니다.", section: "people", endpoint: "/members/activity", module: null, nav: true },
   { id: "ORG-001", path: "/settings/organization", label: "조직 설정", description: "조직 정보, 용어와 활성 모듈을 설정합니다.", section: "admin", endpoint: "/tenants/current", module: null },
+  { id: "ORG-005", path: "/settings/branches", label: "브랜치 설정", description: "부서 브랜치와 들어갈 수 있는 그룹을 설정합니다.", section: "admin", endpoint: "/members/departments", module: null },
   { id: "ORG-004", path: "/settings/roles", label: "역할과 권한", description: "역할별 권한 범위와 접근 결과를 점검합니다.", section: "admin", endpoint: "/members", module: null },
   { id: "PRJ-001", path: "/projects", label: "프로젝트", description: "목표, 일정과 책임자를 중심으로 프로젝트를 운영합니다.", section: "work", endpoint: "/projects", module: "projects", nav: true },
   { id: "PRJ-002", path: "/projects/:projectId", label: "프로젝트 상세", description: "프로젝트 진행률과 참여자, 최근 활동을 확인합니다.", section: "work", endpoint: null, module: "projects" },
@@ -59,6 +63,8 @@ export const screens: readonly ScreenDefinition[] = [
   { id: "DOC-001", path: "/documents", label: "문서", description: "조직 문서와 위키를 공간별로 정리합니다.", section: "knowledge", endpoint: "/documents", module: "documents", nav: true },
   { id: "DOC-002", path: "/documents/:documentId", label: "문서 편집", description: "문서 본문, 버전과 검토 상태를 관리합니다.", section: "knowledge", endpoint: null, module: "documents" },
   { id: "DOC-003", path: "/documents/meetings/:meetingId", label: "회의록", description: "회의 결정사항을 검토하고 후속 업무로 확정합니다.", section: "knowledge", endpoint: null, module: "documents" },
+  { id: "VLT-001", path: "/vault", label: "개인 노트", description: "개인 파일과 노트를 작성하고 폴더·태그로 관리합니다. 소유자만 볼 수 있습니다.", section: "personal", endpoint: "/vault/notes", module: "agent", nav: true },
+  { id: "VLT-002", path: "/vault/graph", label: "Vault 그래프", description: "내 노트의 위키링크와 백링크 관계를 그래프로 탐색합니다.", section: "personal", endpoint: "/vault/graph", module: "agent", nav: true },
   { id: "APR-001", path: "/approvals", label: "결재", description: "내 결재함과 요청 진행 상태를 확인합니다.", section: "operations", endpoint: "/approvals/requests", module: "approvals", nav: true },
   { id: "HND-001", path: "/handover", label: "인수인계", description: "직책별 인계 패키지와 확인 상태를 관리합니다.", section: "knowledge", endpoint: "/handovers", module: "handover" },
   { id: "AGT-001", path: "/agent", label: "AI Agent", description: "권한 범위 안의 조직 데이터를 근거로 업무를 돕습니다.", section: "ai", endpoint: "/agent/conversations", module: "agent", nav: true, ai: true },
@@ -66,8 +72,6 @@ export const screens: readonly ScreenDefinition[] = [
   { id: "AGT-003", path: "/agent/memory", label: "AI 기억", description: "Agent가 사용하는 개인 선호와 기억을 관리합니다.", section: "ai", endpoint: "/agent/memory", module: "agent", ai: true },
   { id: "AGT-004", path: "/agent/actions/:actionId", label: "AI 실행 검토", description: "도구 실행 전 변경 내용, 승인과 롤백 정보를 검토합니다.", section: "ai", endpoint: null, module: "agent", ai: true },
   { id: "AGT-005", path: "/agent/templates", label: "AI 템플릿", description: "반복 업무를 위한 Agent 요청 템플릿을 관리합니다.", section: "ai", endpoint: "/agent/tools", module: "agent", ai: true },
-  { id: "VLT-001", path: "/vault", label: "개인 Vault", description: "개인 노트, 폴더와 태그를 소유자 전용으로 관리합니다.", section: "knowledge", endpoint: "/vault/notes", module: "agent", nav: true },
-  { id: "VLT-002", path: "/vault/graph", label: "Vault 그래프", description: "위키링크와 백링크 관계를 그래프로 탐색합니다.", section: "knowledge", endpoint: "/vault/graph", module: "agent" },
   { id: "AUT-001", path: "/automations/:workflowId/edit", label: "자동화 편집", description: "트리거, 조건과 실행 단계를 안전하게 구성합니다.", section: "operations", endpoint: null, module: "automations" },
   { id: "AUT-002", path: "/automations/runs", label: "자동화 실행 기록", description: "워크플로 실행 결과와 단계별 오류를 확인합니다.", section: "operations", endpoint: "/automations/runs", module: "automations" },
   { id: "INT-001", path: "/settings/integrations", label: "외부 연동", description: "캘린더, 메신저, 웹훅과 API 키를 관리합니다.", section: "admin", endpoint: "/integrations/connections", module: "integrations" },
@@ -91,6 +95,7 @@ export const sectionLabels: Readonly<Record<ScreenSection, string>> = {
   operations: "운영",
   people: "사람",
   knowledge: "지식",
+  personal: "개인",
   ai: "AI",
   admin: "관리",
 };

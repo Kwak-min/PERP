@@ -171,6 +171,36 @@ export const ORG_TEMPLATES = {
     ],
     "custom": false
   },
+  "personal": {
+    "terminology": {
+      "attendance": "활동 기록",
+      "member": "협업자",
+      "leader": "본인"
+    },
+    "modules": [
+      "projects",
+      "tasks",
+      "calendar",
+      "documents",
+      "agent"
+    ],
+    "departments": [
+      "개인"
+    ],
+    "accounts": [
+      [
+        "4100",
+        "개인수입",
+        "income"
+      ],
+      [
+        "5100",
+        "개인지출",
+        "expense"
+      ]
+    ],
+    "custom": false
+  },
   "custom": {
     "terminology": {
       "attendance": "활동",

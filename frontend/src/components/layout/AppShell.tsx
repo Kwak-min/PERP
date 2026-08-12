@@ -7,8 +7,8 @@ import { apiRequest } from "../../services/api";
 import { sessionStore, useSession } from "../../store/session";
 import { demoStore, useDemoMode } from "../../store/demo";
 import { Button } from "../ui/Button";
-import { Logo } from "../ui/Logo";
 import { AgentPanel } from "./AgentPanel";
+import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 const mobilePaths = ["/", "/tasks", "/calendar", "/notifications", "/agent"];
 
@@ -17,7 +17,6 @@ export function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
   const { sidebarOpen, setSidebarOpen, toggleAgent, toggleSidebar } = useAppContext();
-  const [orgMenuOpen, setOrgMenuOpen] = useState(false);
   const [search, setSearch] = useState("");
   const demoMode = useDemoMode();
   if (!session) return null;
@@ -50,7 +49,7 @@ export function AppShell() {
         onClick={() => setSidebarOpen(false)}
       />
       <aside className={`sidebar ${sidebarOpen ? "sidebar--open" : ""}`}>
-        <div className="sidebar__brand"><Logo /></div>
+        <div className="sidebar__brand"><WorkspaceSwitcher session={activeSession} /></div>
         <nav aria-label="주 메뉴">
           {grouped.map(([section, items]) => (
             <div className="nav-group" key={section}>
@@ -83,37 +82,6 @@ export function AppShell() {
       <div className="app-main">
         <header className="topbar">
           <Button className="menu-button" tone="neutral" size="small" onClick={toggleSidebar} aria-label="메뉴 열기">메뉴</Button>
-          <div className="workspace-wrap">
-            <button
-              className="workspace-switcher"
-              type="button"
-              aria-expanded={orgMenuOpen}
-              onClick={() => setOrgMenuOpen((value) => !value)}
-            >
-              <span>{activeSession.organizations.find((org) => org.org_id === activeSession.orgId)?.org_name ?? "조직 선택"}</span>
-              <small>워크스페이스 ▾</small>
-            </button>
-            {orgMenuOpen && (
-              <ul className="workspace-menu">
-                {activeSession.organizations.map((org) => (
-                  <li key={org.org_id}>
-                    <button
-                      type="button"
-                      className={org.org_id === activeSession.orgId ? "workspace-menu__item workspace-menu__item--on" : "workspace-menu__item"}
-                      onClick={() => {
-                        sessionStore.patch({ orgId: org.org_id });
-                        setOrgMenuOpen(false);
-                      }}
-                    >
-                      <b>{org.org_name}</b>
-                      <span>{org.roles.join(", ") || "구성원"}</span>
-                    </button>
-                  </li>
-                ))}
-                {activeSession.organizations.length === 0 && <li className="workspace-menu__empty">소속 조직이 없습니다</li>}
-              </ul>
-            )}
-          </div>
           <form
             className="global-search"
             onSubmit={(event) => {

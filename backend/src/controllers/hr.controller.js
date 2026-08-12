@@ -1,8 +1,11 @@
 import { z } from "zod";
 
+import { db } from "../config/db.js";
+import { permissionsFor } from "../config/rbac.js";
 import { resolvePrincipal } from "../middleware/auth.js";
 import { getScoped, insert, listScoped, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
+import { createApproval } from "../services/approval.service.js";
 import { notify } from "../services/notification.service.js";
 import { ApiError } from "../utils/errors.js";
 
@@ -233,7 +236,72 @@ export function requestLeave(req, res) {
     requestId: req.requestId,
   });
 
-  res.status(201).json(leaveView(row));
+  // 휴가 신청은 결재함으로 넘어간다. 결재자가 없으면 접수만 하고 넘어간다.
+  const approvers = leaveApprovers(principal);
+  let approvalId = null;
+  if (approvers.length > 0) {
+    const approval = createApproval(principal, {
+      title: `휴가 신청 ${payload.start_on} ~ ${payload.end_on} (${days}일)`,
+      formKey: "leave",
+      steps: approvers.map((approverId) => ({ approver_id: approverId })),
+      subjectType: "leave_request",
+      subjectId: row.id,
+      payload: {
+        kind: payload.kind,
+        start_on: payload.start_on,
+        end_on: payload.end_on,
+        days,
+        reason: payload.reason,
+      },
+    });
+    approvalId = approval.id;
+  }
+
+  res.status(201).json({ ...leaveView(row), approval_id: approvalId, days });
+}
+
+/** 휴가를 결재할 수 있는 사람(신청자 제외). 없으면 결재 없이 접수만 한다. */
+function leaveApprovers(principal) {
+  const rows = listScoped("membership", principal, [{ sql: "status = ?", params: ["active"] }], {
+    limit: 500,
+  });
+  return rows
+    .filter((membership) => {
+      const permissions = permissionsFor((membership.roles ?? "").split(",").filter(Boolean));
+      return permissions.has("*") || permissions.has("leave.approve");
+    })
+    .map((membership) => membership.user_id)
+    .filter((userId) => userId !== principal.userId);
+}
+
+export function leaveCalendar(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("member.read");
+
+  const filters = [{ sql: "status IN ('pending','approved')", params: [] }];
+  if (req.query.from) filters.push({ sql: "end_on >= ?", params: [req.query.from] });
+  if (req.query.to) filters.push({ sql: "start_on <= ?", params: [req.query.to] });
+
+  const rows = listScoped("leave_request", principal, filters, {
+    limit: Number(req.query.limit ?? 500),
+    orderBy: "start_on ASC",
+  });
+
+  // 달력에는 이름·휴가 종류·기간·상태만 노출한다.
+  res.json({
+    items: rows.map((row) => {
+      const user = db().prepare("SELECT name FROM app_user WHERE id = ?").get(row.member_id);
+      return {
+        leave_id: row.id,
+        member_id: row.member_id,
+        member_name: user?.name ?? "구성원",
+        kind: row.kind,
+        start_on: row.start_on,
+        end_on: row.end_on,
+        status: row.status,
+      };
+    }),
+  });
 }
 
 export function listLeaves(req, res) {

@@ -1,0 +1,17 @@
+/* 조직 변경 로그 화면 전용 스타일 */
+.orglog-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
+.orglog-filters .filter-bar__result { margin-left: auto; }
+.orglog-empty { margin: 0; padding: 20px 0; color: var(--of-text-muted); font-size: 12.5px; text-align: center; }
+
+.orglog-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.orglog-list > li { border: 1px solid var(--of-border); border-left: 3px solid var(--of-primary); border-radius: var(--r-md); padding: 9px 12px; }
+.orglog-item__head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.orglog-item__head b { font-size: 12.5px; }
+.orglog-item__when { color: var(--of-text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.orglog-item__target { border-radius: 999px; background: var(--of-primary-soft); padding: 1px 8px; color: var(--of-primary); font-size: 10.5px; font-weight: 700; }
+.orglog-item__actor { margin-left: auto; color: var(--of-text-muted); font-size: 11px; }
+.orglog-item__diff { display: grid; gap: 3px; margin: 7px 0 0; padding: 0; list-style: none; }
+.orglog-item__diff li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: 11.5px; }
+.orglog-item__diff li > span:first-child { min-width: 78px; color: var(--of-text-muted); font-weight: 700; }
+.orglog-item__diff del { color: var(--of-danger); text-decoration: line-through; }
+.orglog-item__diff ins { color: var(--of-success); text-decoration: none; font-weight: 700; }

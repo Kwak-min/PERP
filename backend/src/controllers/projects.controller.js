@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { assertBranchAccess } from "./members.controller.js";
 import { resolvePrincipal } from "../middleware/auth.js";
 import { bumpVersion, getScoped, insert, listScoped, softDelete } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
@@ -90,6 +91,11 @@ export function list(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("project.read");
   const filters = req.query.status ? [{ sql: "status = ?", params: [req.query.status] }] : [];
+  // 부서 브랜치로 좁혀 보는 경우. 들어갈 권한이 없는 브랜치는 거부한다.
+  if (req.query.department_id) {
+    assertBranchAccess(principal, req.query.department_id);
+    filters.push({ sql: "department_id = ?", params: [req.query.department_id] });
+  }
   const rows = listScoped("project", principal, filters, { limit: Number(req.query.limit ?? 50) });
   res.json({ items: rows.map(view), next_cursor: null });
 }

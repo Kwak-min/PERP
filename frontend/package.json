@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "node scripts/check-routes.mjs"
+    "test": "node scripts/check-routes.mjs && node scripts/check-markdown.mjs",
+    "test:orgchart": "node scripts/org-chart-editor.e2e.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "6.0.5",

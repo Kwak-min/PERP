@@ -9,6 +9,7 @@ hrRouter.post("/attendance", asyncRoute(controller.checkAttendance));
 hrRouter.get("/attendance", asyncRoute(controller.listAttendance));
 
 hrRouter.post("/leaves", asyncRoute(controller.requestLeave));
+hrRouter.get("/leaves/calendar", asyncRoute(controller.leaveCalendar));
 hrRouter.get("/leaves", asyncRoute(controller.listLeaves));
 hrRouter.post("/leaves/:leaveId/decide", asyncRoute(controller.decideLeave));
 

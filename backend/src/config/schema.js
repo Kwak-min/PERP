@@ -45,6 +45,10 @@ export const TABLES = [
     org_id TEXT NOT NULL, name TEXT NOT NULL, parent_id TEXT, leader_id TEXT,
     active_from TEXT, active_to TEXT)`,
 
+  // 브랜치(부서)에 들어갈 수 있는 그룹(역할). 행이 없으면 조직 전체가 들어갈 수 있다.
+  `CREATE TABLE IF NOT EXISTS department_access (${COMMON},
+    org_id TEXT NOT NULL, department_id TEXT NOT NULL, role TEXT NOT NULL)`,
+
   `CREATE TABLE IF NOT EXISTS session_token (
     id TEXT PRIMARY KEY, user_id TEXT NOT NULL, fingerprint TEXT NOT NULL UNIQUE,
     expires_at TEXT NOT NULL, revoked_at TEXT, ip TEXT, device TEXT, created_at TEXT NOT NULL)`,
@@ -364,6 +368,7 @@ export const TABLES = [
 export const INDEXES = [
   `CREATE INDEX IF NOT EXISTS ix_membership_user ON membership(user_id, status)`,
   `CREATE INDEX IF NOT EXISTS ix_membership_org ON membership(tenant_id, org_id)`,
+  `CREATE INDEX IF NOT EXISTS ix_department_access ON department_access(tenant_id, org_id, department_id)`,
   `CREATE INDEX IF NOT EXISTS ix_session_fingerprint ON session_token(fingerprint)`,
   `CREATE INDEX IF NOT EXISTS ix_audit_tenant_seq ON audit_event(tenant_id, seq)`,
   `CREATE INDEX IF NOT EXISTS ix_task_org ON task(tenant_id, org_id, deleted_at)`,

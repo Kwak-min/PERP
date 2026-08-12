@@ -44,6 +44,7 @@ Pretendard → Noto Sans KR → system-ui.
 | `SectionCard` | 제목 + 부제 + 우상단 액션 슬롯 + 본문 | — |
 | `ListRow` | 좌측 마크 + 2줄(제목/부제) + 우측 메타·액션 | hover |
 | `DataTable` | 낮은 행 높이, 헤더 대문자, 가로 스크롤 | 빈 상태 |
+| `OrgTreeEditor` | 상하 연결선 + 담당자·직급·부서 + 권한 배지 + 하위 직급 추가 | 편집/저장/취소/비활성 |
 
 ## 4. 레이아웃
 
@@ -61,6 +62,7 @@ Pretendard → Noto Sans KR → system-ui.
 
 - 포커스 링 2px `--of-primary`, offset 2px
 - 상태를 색만으로 전달하지 않는다(텍스트/아이콘 병기)
+- 조직도 연결선은 보고 관계를 보조하며, 각 노드의 부서명과 권한 텍스트를 함께 제공한다.
 - 375 / 768 / 1280px 검증
 - 최소 터치 타깃 44px (모바일)
 
