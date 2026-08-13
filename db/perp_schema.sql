@@ -1,9 +1,9 @@
 -- =====================================================================
 -- PERP 전체 스키마 (단일 파일, 실행 순서 정리됨)
--- 대상: PostgreSQL 18 / DB = perp_main
--- 실행: DataGrip 에서 perp_main 에 접속한 뒤 이 파일 전체를 Run
---       (또는  psql -d perp_main -f perp_schema.sql)
--- 전제: 먼저 CREATE DATABASE perp_main; 로 DB 를 만들어 두고 그 DB 에서 실행.
+-- 대상: PostgreSQL 18 / DB = perp_db
+-- 실행: DataGrip 에서 perp_db 에 접속한 뒤 이 파일 전체를 Run
+--       (또는  psql -d perp_db -f perp_schema.sql)
+-- 전제: 먼저 CREATE DATABASE perp_db; 로 DB 를 만들어 두고 그 DB 에서 실행.
 -- =====================================================================
 
 -- ---------------------------------------------------------------------

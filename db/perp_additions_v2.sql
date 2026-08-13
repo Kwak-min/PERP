@@ -1,6 +1,6 @@
 -- =====================================================================
 -- PERP 스키마 확장 v2 (과업지시서 신규 요구사항 반영)
--- 대상: perp_main (PostgreSQL 18). perpadmin 으로 실행.
+-- 대상: perp_db (PostgreSQL 18). perpadmin 으로 실행.
 -- 전제: perp_schema.sql 이 이미 적용돼 있어야 함(common.* 함수/타입 사용).
 -- 성격: 신규 스키마/테이블 추가 전용. 기존 48개 테이블은 변경하지 않음.
 --       (예외: calendar.events 에 external_uid 컬럼 1개만 추가 - SIR-001)
