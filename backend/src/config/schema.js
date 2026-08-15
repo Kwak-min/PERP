@@ -249,6 +249,13 @@ export const TABLES = [
     org_id TEXT NOT NULL, member_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'annual',
     granted_days INTEGER NOT NULL DEFAULT 0, used_days INTEGER NOT NULL DEFAULT 0)`,
 
+  `CREATE TABLE IF NOT EXISTS leave_policy (${COMMON},
+    org_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'annual',
+    default_days INTEGER NOT NULL DEFAULT 0,
+    carryover_enabled INTEGER NOT NULL DEFAULT 0,
+    carryover_max_days INTEGER NOT NULL DEFAULT 0,
+    expiry_note TEXT NOT NULL DEFAULT '')`,
+
   `CREATE TABLE IF NOT EXISTS job_posting (${COMMON},
     org_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'open', closes_on TEXT)`,

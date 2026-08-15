@@ -3,6 +3,7 @@ import type { ComponentType } from "react";
 import type { ScreenDefinition } from "../routes/catalog";
 import { AttendanceScreen } from "./AttendanceScreen";
 import { BranchSettingsScreen } from "./BranchSettingsScreen";
+import { LeaveScreen } from "./LeaveScreen";
 import { OrgChartScreen } from "./OrgChartScreen";
 import { OrgLogScreen } from "./OrgLogScreen";
 import { VaultScreen } from "./VaultScreen";
@@ -17,5 +18,6 @@ export const screenOverrides: Readonly<Record<string, ScreenComponent>> = {
   "ORG-005": BranchSettingsScreen,
   "ORG-006": OrgLogScreen,
   "HR-002": AttendanceScreen,
+  "HR-003": LeaveScreen,
   "VLT-001": VaultScreen,
 };

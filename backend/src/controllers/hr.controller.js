@@ -39,6 +39,16 @@ const balanceSchema = z.object({
   granted_days: z.number().int().min(0),
 });
 
+const LEAVE_KINDS = ["annual", "sick", "special", "unpaid"];
+
+const leavePolicySchema = z.object({
+  kind: z.enum(LEAVE_KINDS).default("annual"),
+  default_days: z.number().int().min(0),
+  carryover_enabled: z.boolean().default(false),
+  carryover_max_days: z.number().int().min(0).default(0),
+  expiry_note: z.string().default(""),
+});
+
 const postingSchema = z.object({
   title: z.string().min(1),
   description: z.string().default(""),
@@ -94,6 +104,15 @@ const leaveView = (l) => ({
   reason: l.reason,
   status: l.status,
   substitute_id: l.substitute_id,
+});
+
+const policyView = (p) => ({
+  id: p.id,
+  kind: p.kind,
+  default_days: p.default_days,
+  carryover_enabled: Boolean(p.carryover_enabled),
+  carryover_max_days: p.carryover_max_days,
+  expiry_note: p.expiry_note,
 });
 
 const applicationView = (a) => ({
@@ -423,6 +442,17 @@ export function grantBalance(req, res) {
         created_by: principal.userId,
       });
 
+  audit.record({
+    tenantId: principal.tenantId,
+    action: "leave_balance.granted",
+    resourceType: "leave_balance",
+    resourceId: row.id,
+    actorId: principal.userId,
+    before: existing ? { granted_days: existing.granted_days } : null,
+    after: { member_id: row.member_id, kind: row.kind, granted_days: row.granted_days },
+    requestId: req.requestId,
+  });
+
   res.status(existing ? 200 : 201).json({
     id: row.id,
     member_id: row.member_id,
@@ -430,6 +460,84 @@ export function grantBalance(req, res) {
     granted_days: row.granted_days,
     used_days: row.used_days,
     remaining_days: row.granted_days - row.used_days,
+  });
+}
+
+export function listLeavePolicies(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("leave.approve");
+  const rows = listScoped("leave_policy", principal, [], { limit: 50 });
+  res.json({ items: rows.map(policyView) });
+}
+
+export function upsertLeavePolicy(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("leave.approve");
+  const payload = leavePolicySchema.parse(req.body);
+
+  const existing = listScoped(
+    "leave_policy",
+    principal,
+    [{ sql: "kind = ?", params: [payload.kind] }],
+    { limit: 1 },
+  )[0];
+
+  const patch = {
+    default_days: payload.default_days,
+    carryover_enabled: payload.carryover_enabled,
+    carryover_max_days: payload.carryover_max_days,
+    expiry_note: payload.expiry_note,
+  };
+  const row = existing
+    ? update("leave_policy", existing.id, patch, principal.userId)
+    : insert("leave_policy", {
+        tenant_id: principal.tenantId,
+        org_id: principal.orgId,
+        kind: payload.kind,
+        ...patch,
+        created_by: principal.userId,
+      });
+
+  audit.record({
+    tenantId: principal.tenantId,
+    action: "leave_policy.updated",
+    resourceType: "leave_policy",
+    resourceId: row.id,
+    actorId: principal.userId,
+    before: existing ? policyView(existing) : null,
+    after: policyView(row),
+    requestId: req.requestId,
+  });
+
+  res.status(existing ? 200 : 201).json(policyView(row));
+}
+
+export function leaveStats(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("leave.approve");
+
+  const balances = listScoped("leave_balance", principal, [], { limit: 1000 });
+  const items = balances.map((b) => ({
+    member_id: b.member_id,
+    kind: b.kind,
+    granted_days: b.granted_days,
+    used_days: b.used_days,
+    remaining_days: b.granted_days - b.used_days,
+    usage_rate: b.granted_days > 0 ? Math.round((1000 * b.used_days) / b.granted_days) / 10 : 0,
+  }));
+
+  const totalGranted = items.reduce((sum, item) => sum + item.granted_days, 0);
+  const totalUsed = items.reduce((sum, item) => sum + item.used_days, 0);
+
+  res.json({
+    items,
+    totals: {
+      granted_days: totalGranted,
+      used_days: totalUsed,
+      usage_rate: totalGranted > 0 ? Math.round((1000 * totalUsed) / totalGranted) / 10 : 0,
+    },
+    formula: "소진율 = 사용일수 / 부여일수 × 100",
+    generated_at: new Date().toISOString(),
   });
 }
 
