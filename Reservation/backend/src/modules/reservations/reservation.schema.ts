@@ -34,6 +34,11 @@ export const updateReservationSchema = z.object({
 export const timetableQuerySchema = z.object({
   spaceId: z.coerce.number().int().positive('공간 ID는 필수입니다.'),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD 형식으로 입력해주세요.'),
+  slotMinutes: z.coerce
+    .number()
+    .int()
+    .refine((v) => [15, 30, 60].includes(v), '슬롯 단위는 15, 30, 60 중 하나여야 합니다.')
+    .default(60),
 });
 
 export const listQuerySchema = z.object({

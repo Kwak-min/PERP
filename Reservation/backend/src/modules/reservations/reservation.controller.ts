@@ -33,8 +33,8 @@ export const reservationController = {
    */
   getTimetable: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { spaceId, date } = timetableQuerySchema.parse(req.query);
-      const data = await reservationService.getTimetable(spaceId, date);
+      const { spaceId, date, slotMinutes } = timetableQuerySchema.parse(req.query);
+      const data = await reservationService.getTimetable(spaceId, date, slotMinutes);
       sendSuccess(res, data);
     } catch (err) { next(err); }
   },
@@ -96,7 +96,14 @@ export const reservationController = {
     try {
       const userId = Number(req.query.userId);
       if (!userId || isNaN(userId)) return next(new Error('userId 쿼리파라미터가 필요합니다.'));
-      const data = await reservationService.cancel(Number(req.params.id), userId);
+
+      const rawScope = req.query.cancelScope as string | undefined;
+      const validScopes = ['THIS', 'THIS_AND_FOLLOWING', 'ALL'] as const;
+      const cancelScope = validScopes.includes(rawScope as typeof validScopes[number])
+        ? (rawScope as typeof validScopes[number])
+        : 'THIS';
+
+      const data = await reservationService.cancel(Number(req.params.id), userId, cancelScope);
       sendSuccess(res, data, 200, '예약이 취소되었습니다.');
     } catch (err) { next(err); }
   },

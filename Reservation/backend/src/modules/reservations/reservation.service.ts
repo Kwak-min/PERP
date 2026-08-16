@@ -3,6 +3,7 @@ import { ConflictError, ForbiddenError, NotFoundError } from '../../common/error
 import { CreateReservationDto, UpdateReservationDto } from './reservation.schema';
 import { emailService } from '../../notification/email.service';
 import { addDays, addWeeks, addMonths, startOfWeek, format } from './reservation.utils';
+import { waitlistService } from '../waitlist/waitlist.service';
 
 export const reservationService = {
   // ── 목록 조회 ─────────────────────────────────────────────────────────────
@@ -32,8 +33,8 @@ export const reservationService = {
     return r;
   },
 
-  // ── 타임테이블 조회 (1시간 단위 슬롯) ────────────────────────────────────
-  getTimetable: async (spaceId: number, date: string) => {
+  // ── 타임테이블 조회 (n분 단위 슬롯) ───────────────────────────────────
+  getTimetable: async (spaceId: number, date: string, slotMinutes: number = 60) => {
     const dayStart = new Date(`${date}T08:00:00`);
     const dayEnd = new Date(`${date}T22:00:00`);
 
@@ -48,10 +49,11 @@ export const reservationService = {
     });
 
     const slots = [];
+    const slotMs = slotMinutes * 60 * 1000;
     let cursor = new Date(dayStart);
 
     while (cursor < dayEnd) {
-      const slotEnd = new Date(cursor.getTime() + 60 * 60 * 1000);
+      const slotEnd = new Date(cursor.getTime() + slotMs);
       const matched = reservations.find(
         (r: { startTime: Date; endTime: Date; id: number; title: string }) =>
           r.startTime < slotEnd && r.endTime > cursor,
@@ -110,17 +112,57 @@ export const reservationService = {
   },
 
   // ── 취소 ──────────────────────────────────────────────────────────────────
-  cancel: async (id: number, userId: number) => {
+  cancel: async (id: number, userId: number, cancelScope: 'THIS' | 'THIS_AND_FOLLOWING' | 'ALL' = 'THIS') => {
     const reservation = await reservationService.findById(id);
     if (reservation.userId !== userId) throw new ForbiddenError('본인의 예약만 취소할 수 있습니다.');
 
-    const cancelled = await prisma.reservation.update({
-      where: { id },
-      data: { status: 'CANCELLED' },
+    // 단건 취소 (기본)
+    if (cancelScope === 'THIS' || !reservation.recurrenceRuleId) {
+      const cancelled = await prisma.reservation.update({
+        where: { id },
+        data: { status: 'CANCELLED' },
+        include: { space: true, attendees: true },
+      });
+      emailService.sendReservationCancelled(cancelled).catch(console.error);
+      // 같은 시간대 대기자 자동 승격
+      waitlistService.promote(cancelled.spaceId, cancelled.startTime, cancelled.endTime).catch(console.error);
+      return { cancelled: [cancelled], scope: 'THIS' };
+    }
+
+    // 일괄 취소 대상 조회 조건
+    const whereClause = {
+      recurrenceRuleId: reservation.recurrenceRuleId,
+      status: 'CONFIRMED' as const,
+      ...(cancelScope === 'THIS_AND_FOLLOWING' && {
+        startTime: { gte: reservation.startTime },
+      }),
+    };
+
+    // 이메일 발송을 위해 먼저 조회
+    const targets = await prisma.reservation.findMany({
+      where: whereClause,
       include: { space: true, attendees: true },
     });
-    emailService.sendReservationCancelled(cancelled).catch(console.error);
-    return cancelled;
+
+    // 일괄 CANCELLED 처리
+    await prisma.reservation.updateMany({
+      where: whereClause,
+      data: { status: 'CANCELLED' },
+    });
+
+    // 각 예약 참석자에게 취소 이메일 발송 (병렬)
+    await Promise.allSettled(
+      targets.map((r: typeof targets[number]) => emailService.sendReservationCancelled(r).catch(console.error)),
+    );
+
+    // 취소된 각 예약 시간대에 대해 대기자 자동 승격
+    await Promise.allSettled(
+      targets.map((r: typeof targets[number]) =>
+        waitlistService.promote(r.spaceId, r.startTime, r.endTime).catch(console.error),
+      ),
+    );
+
+    return { cancelled: targets, scope: cancelScope };
   },
 };
 

@@ -7,6 +7,7 @@ import { swaggerSpec } from './config/swagger';
 import { spaceRouter } from './modules/spaces/space.router';
 import { reservationRouter } from './modules/reservations/reservation.router';
 import { attendeeRouter } from './modules/attendees/attendee.router';
+import { waitlistRouter } from './modules/waitlist/waitlist.router';
 import { AppError } from './common/errors';
 import { sendError } from './common/response';
 
@@ -25,6 +26,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use('/api/v1/spaces', spaceRouter);
 app.use('/api/v1/reservations', reservationRouter);
 app.use('/api/v1', attendeeRouter);
+app.use('/api/v1/waitlist', waitlistRouter);
 
 // ── 헬스체크 ─────────────────────────────────
 app.get('/health', (_req, res) => {

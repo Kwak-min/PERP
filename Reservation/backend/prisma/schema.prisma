@@ -46,6 +46,7 @@ model Space {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
   reservations Reservation[]
+  waitlists    Waitlist[]
 
   @@map("spaces")
 }
@@ -98,4 +99,20 @@ model Attendee {
 
   @@index([reservationId])
   @@map("attendees")
+}
+
+model Waitlist {
+  id          Int      @id @default(autoincrement())
+  spaceId     Int
+  userId      Int
+  title       String
+  description String?
+  startTime   DateTime
+  endTime     DateTime
+  createdAt   DateTime @default(now())
+
+  space Space @relation(fields: [spaceId], references: [id])
+
+  @@index([spaceId, startTime])
+  @@map("waitlists")
 }
