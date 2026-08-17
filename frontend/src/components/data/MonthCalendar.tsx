@@ -58,11 +58,13 @@ export function MonthCalendar({
                 <>
                   <span className={`calendar__date${isWeekend ? " calendar__weekend" : ""}`}>{day}</span>
                   <div className="calendar__events">
-                    {dayEvents.slice(0, 3).map((event) => (
+                    {dayEvents.slice(0, 3).map((event, eventIndex) => (
                       <span
-                        key={event.title}
+                        key={`${event.title}-${event.time ?? ""}-${eventIndex}`}
                         className={`calendar__event calendar__event--${event.tone ?? "primary"}`}
                         title={`${event.time ?? ""} ${event.title}`.trim()}
+                        role="listitem"
+                        aria-label={`${day}일 ${event.time ?? ""} ${event.title}`.trim()}
                       >
                         {event.time && <b>{event.time}</b>}
                         {event.title}

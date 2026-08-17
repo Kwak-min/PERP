@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
@@ -29,6 +29,7 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const openRequest = useRef<AbortController | null>(null);
 
   const apiSession = useMemo(
     () => (session?.orgId ? { token: session.token, orgId: session.orgId } : null),
@@ -65,18 +66,25 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
 
   async function open(noteId: string): Promise<void> {
     if (!apiSession) return;
+    openRequest.current?.abort();
+    const controller = new AbortController();
+    openRequest.current = controller;
     setBusy(true);
     setError(null);
     try {
       const detail = noteDetailSchema.parse(
-        await apiRequest(`/vault/notes/${noteId}`, { session: apiSession }),
+        await apiRequest(`/vault/notes/${noteId}`, { session: apiSession, signal: controller.signal }),
       );
+      if (controller.signal.aborted) return;
       setEditingId(detail.id);
       setDraft(draftOf(detail));
     } catch (caught) {
-      setError(userMessageOf(caught));
+      if (!controller.signal.aborted) setError(userMessageOf(caught));
     } finally {
-      setBusy(false);
+      if (openRequest.current === controller) {
+        openRequest.current = null;
+        setBusy(false);
+      }
     }
   }
 

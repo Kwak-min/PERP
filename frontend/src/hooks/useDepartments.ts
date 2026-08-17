@@ -16,6 +16,40 @@ const listSchema = z.object({ items: z.array(departmentSchema) });
 
 export type Department = z.infer<typeof departmentSchema>;
 
+const cache = new Map<string, readonly Department[]>();
+const pending = new Map<string, Promise<readonly Department[]>>();
+
+function loadDepartments(
+  token: string,
+  orgId: string,
+  signal?: AbortSignal,
+): Promise<readonly Department[]> {
+  const key = `${token}:${orgId}`;
+  const cached = cache.get(key);
+  if (cached) return Promise.resolve(cached);
+  const inflight = pending.get(key);
+  if (inflight) return inflight;
+  const abortCleanup = () => {
+    pending.delete(key);
+  };
+  signal?.addEventListener("abort", abortCleanup, { once: true });
+  const request = apiRequest("/members/departments", {
+    session: { token, orgId },
+    ...(signal ? { signal } : {}),
+  })
+    .then((data) => {
+      const departments = listSchema.parse(data).items;
+      cache.set(key, departments);
+      return departments;
+    })
+    .finally(() => {
+      signal?.removeEventListener("abort", abortCleanup);
+      if (pending.get(key) === request) pending.delete(key);
+    });
+  pending.set(key, request);
+  return request;
+}
+
 export function useDepartments(
   session: ApiSession | null,
   reloadKey = 0,
@@ -29,18 +63,20 @@ export function useDepartments(
       setDepartments([]);
       return;
     }
+    let active = true;
     const controller = new AbortController();
-    apiRequest("/members/departments", {
-      session: { token, orgId },
-      signal: controller.signal,
-    })
+    if (reloadKey > 0) cache.delete(`${token}:${orgId}`);
+    loadDepartments(token, orgId, controller.signal)
       .then((data) => {
-        if (!controller.signal.aborted) setDepartments(listSchema.parse(data).items);
+        if (active) setDepartments(data);
       })
       .catch(() => {
-        if (!controller.signal.aborted) setDepartments([]);
+        if (active) setDepartments([]);
       });
-    return () => controller.abort();
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, [token, orgId, reloadKey]);
 
   return departments;

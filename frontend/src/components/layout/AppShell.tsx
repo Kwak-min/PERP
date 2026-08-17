@@ -87,7 +87,13 @@ export function AppShell() {
             onSubmit={(event) => {
               event.preventDefault();
               const term = search.trim();
-              if (term) navigate(`/tasks?q=${encodeURIComponent(term)}`);
+              if (!term) return;
+              const target = term.includes("@")
+                ? "/members"
+                : /문서|자료|규정|계약/.test(term)
+                  ? "/documents"
+                  : "/tasks";
+              navigate(`${target}?q=${encodeURIComponent(term)}`);
             }}
           >
             <label>

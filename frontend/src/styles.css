@@ -263,8 +263,40 @@ input:focus, select:focus, textarea:focus { border-color: var(--of-primary); box
 .modal__summary dd.up { color: var(--of-success); }
 .modal__summary dd.down { color: var(--of-danger); }
 .modal__foot { margin: 12px 0 0; color: var(--of-text-faint); font-size: 10.5px; }
+.member-modal { width: min(760px, 100%); display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
+.member-modal__toolbar { display: flex; align-items: end; gap: 16px; margin: 16px -20px 0; padding: 12px 20px; border-block: 1px solid var(--of-border); background: var(--of-surface-muted); }
+.member-modal__toolbar > strong { margin-left: auto; padding-bottom: 8px; color: var(--of-text-muted); font-size: 11.5px; white-space: nowrap; }
+.member-modal__search { min-width: 0; flex: 1; display: grid; gap: 5px; }
+.member-modal__search > span { font-size: 11px; font-weight: 800; }
+.member-modal__search input { width: 100%; min-height: 36px; border: 1px solid var(--of-border-strong); border-radius: var(--r-md); background: var(--of-card); padding: 0 11px; color: var(--of-text); font: inherit; font-size: 12.5px; }
+.member-modal__search input:focus-visible { outline: 2px solid var(--of-primary); outline-offset: 2px; }
+.member-modal__list { min-height: 0; overflow-y: auto; margin: 0 -20px; padding: 0; list-style: none; }
+.member-modal__item { min-height: 64px; display: grid; grid-template-columns: 36px minmax(0, 1.4fr) minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 10px 20px; border-bottom: 1px solid var(--of-border); }
+.member-modal__item:hover { background: var(--of-surface-muted); }
+.member-modal__item:last-child { border-bottom: 0; }
+.member-modal__avatar { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #c7d2fe; border-radius: var(--r-md); background: var(--of-primary-soft); color: var(--of-primary); font-size: 13px; font-weight: 800; }
+.member-modal__identity, .member-modal__assignment { min-width: 0; display: grid; gap: 3px; }
+.member-modal__identity strong, .member-modal__assignment strong { overflow: hidden; color: var(--of-text); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.member-modal__identity span, .member-modal__assignment span { overflow: hidden; color: var(--of-text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.member-modal__empty { min-height: 180px; display: grid; place-content: center; gap: 5px; text-align: center; }
+.member-modal__empty strong { font-size: 13px; }
+.member-modal__empty span { color: var(--of-text-muted); font-size: 11.5px; }
+.quick-create-modal { width: min(480px, 100%); }
+.quick-create-modal .field { display: grid; gap: 6px; margin-top: 18px; font-size: 11.5px; font-weight: 800; }
+.quick-create-modal .field input { min-height: 38px; border: 1px solid var(--of-border-strong); border-radius: var(--r-md); padding: 0 11px; font: inherit; }
+.quick-create-modal .field input:focus-visible { outline: 2px solid var(--of-primary); outline-offset: 2px; }
+.modal__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.table-row--interactive { cursor: pointer; }
+.table-row--interactive:hover { background: var(--of-primary-soft); }
+.table-row--interactive:focus-visible { outline: 2px solid var(--of-primary); outline-offset: -2px; }
 @media (max-width: 700px) {
   .modal__summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .modal-scrim { align-items: end; padding: 0; }
+  .member-modal { width: 100%; max-height: 92dvh; border-radius: var(--r-lg) var(--r-lg) 0 0; }
+  .member-modal__toolbar { align-items: stretch; flex-direction: column; gap: 7px; }
+  .member-modal__toolbar > strong { margin-left: 0; padding-bottom: 0; }
+  .member-modal__item { grid-template-columns: 36px minmax(0, 1fr) auto; }
+  .member-modal__assignment { grid-column: 2 / 4; padding-left: 0; }
 }
 
 .section-card { display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--of-border); border-radius: var(--r-lg); background: var(--of-card); }
@@ -328,8 +360,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .progress-item__top { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; }
 .progress-item__top b { font-weight: 700; }
 .progress-item__top span { color: var(--of-text-muted); font-variant-numeric: tabular-nums; }
-.progress-track { height: 6px; border-radius: var(--r-sm); background: var(--of-surface-muted); overflow: hidden; }
-.progress-fill { height: 100%; border-radius: var(--r-sm); background: var(--of-primary); }
+.progress-track { height: 6px; border-radius: var(--r-sm); background: var(--of-border); overflow: hidden; }
+.progress-fill { display: block; height: 100%; border-radius: var(--r-sm); background: var(--of-primary); }
 .progress-fill--warning { background: var(--of-warning); }
 .progress-fill--danger { background: var(--of-danger); }
 

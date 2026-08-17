@@ -22,12 +22,21 @@ export function SignupPage() {
       setError("비밀번호 확인이 일치하지 않습니다.");
       return;
     }
+    const name = String(form.get("name")).replace(/[\p{Cf}\p{Cc}]/gu, "").trim();
+    if (!name) {
+      setError("이름을 입력해 주세요.");
+      return;
+    }
+    if (name.length > 120) {
+      setError("이름은 120자 이하로 입력해 주세요.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       const session = await signup(
         String(form.get("email")),
-        String(form.get("name")),
+        name,
         String(form.get("password")),
         invitation ?? undefined,
       );

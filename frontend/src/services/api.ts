@@ -60,12 +60,15 @@ export async function apiRequest(
   }
   if (options.session?.orgId) headers.set("X-Org-Id", options.session.orgId);
 
+  const timeout = AbortSignal.timeout(10_000);
   const request: RequestInit = {
     method: options.method ?? "GET",
     headers,
+    signal: options.signal
+      ? AbortSignal.any([options.signal, timeout])
+      : timeout,
   };
   if (options.body !== undefined) request.body = JSON.stringify(options.body);
-  if (options.signal) request.signal = options.signal;
   const response = await fetch(`${API_BASE_URL}${path}`, request);
 
   if (response.status === 204 || response.status === 205) return null;

@@ -19,14 +19,16 @@ export function LoginPage() {
     setError(null);
     try {
       const session = await login(String(form.get("email")), String(form.get("password")));
-      sessionStore.set(session);
-      if (form.get("remember") === null) sessionStorage.setItem("orbitflow.session.ephemeral", "1");
-      else sessionStorage.removeItem("orbitflow.session.ephemeral");
+      sessionStore.set(session, form.get("remember") !== null);
       const requested = new URLSearchParams(location.search).get("next");
+      const safeRequested =
+        requested?.startsWith("/") && !requested.startsWith("//")
+          ? requested
+          : null;
       navigate(
         session.mustChangePassword
           ? "/change-password"
-          : requested ?? (session.orgId ? "/" : "/welcome"),
+          : safeRequested ?? (session.orgId ? "/" : "/welcome"),
         { replace: true },
       );
     } catch (caught) {
@@ -42,7 +44,7 @@ export function LoginPage() {
       <h2 id="login-title">OrbitFlow에 로그인</h2>
       <p className="auth-card__intro">오늘의 업무 흐름을 이어서 확인하세요.</p>
       {error && <div className="form-error" role="alert">{error}</div>}
-      <form className="form-stack" onSubmit={submit}>
+      <form className="form-stack" onSubmit={submit} onChange={() => setError(null)}>
         <label>
           이메일
           <input name="email" type="email" autoComplete="email" required />
