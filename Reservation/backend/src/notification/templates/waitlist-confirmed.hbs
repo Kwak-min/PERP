@@ -1,0 +1,39 @@
+﻿<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<style>
+  body{margin:0;padding:24px;background:#f4f4f5;font-family:'Apple SD Gothic Neo',Arial,sans-serif}
+  .card{max-width:540px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.08)}
+  .header{background:linear-gradient(135deg,#F59E0B,#D97706);padding:32px;color:#fff}
+  .header h1{margin:0;font-size:22px;font-weight:700}
+  .header p{margin:6px 0 0;opacity:.85;font-size:14px}
+  .body{padding:28px 32px}
+  .info{background:#FFFBEB;border-radius:10px;padding:16px 20px;margin:16px 0}
+  .row{display:flex;margin-bottom:10px;font-size:14px;align-items:flex-start}
+  .label{color:#6B7280;width:72px;flex-shrink:0;padding-top:1px}
+  .value{color:#111827;font-weight:600}
+  .badge{display:inline-block;background:#F59E0B;color:#fff;border-radius:20px;padding:4px 14px;font-size:13px;font-weight:700;margin-bottom:16px}
+  .footer{background:#F9FAFB;padding:14px 32px;font-size:12px;color:#9CA3AF;text-align:center}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="header">
+    <h1>⏳ 대기 등록이 완료되었습니다</h1>
+    <p>{{userName}}님, 앞 예약이 취소되면 자동으로 예약이 확정됩니다.</p>
+  </div>
+  <div class="body">
+    <div class="badge">대기 순번 {{position}}번</div>
+    <div class="info">
+      <div class="row"><span class="label">제목</span><span class="value">{{title}}</span></div>
+      <div class="row"><span class="label">회의실</span><span class="value">{{spaceName}}</span></div>
+      <div class="row"><span class="label">시작</span><span class="value">{{startTime}}</span></div>
+      <div class="row"><span class="label">종료</span><span class="value">{{endTime}}</span></div>
+    </div>
+    <p style="font-size:13px;color:#6B7280;margin:0">예약이 취소될 경우 자동으로 승격되며 별도로 안내 메일이 발송됩니다.</p>
+  </div>
+  <div class="footer">본 메일은 자동 발송된 메일입니다.</div>
+</div>
+</body>
+</html>

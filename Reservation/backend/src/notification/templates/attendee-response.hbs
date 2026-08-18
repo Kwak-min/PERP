@@ -1,0 +1,39 @@
+﻿<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<style>
+  body{margin:0;padding:24px;background:#f4f4f5;font-family:'Apple SD Gothic Neo',Arial,sans-serif}
+  .card{max-width:540px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.08)}
+  .header{padding:32px;color:#fff}
+  .header.accepted{background:linear-gradient(135deg,#10B981,#059669)}
+  .header.declined{background:linear-gradient(135deg,#EF4444,#DC2626)}
+  .header h1{margin:0;font-size:22px;font-weight:700}
+  .header p{margin:6px 0 0;opacity:.85;font-size:14px}
+  .body{padding:28px 32px}
+  .info{border-radius:10px;padding:16px 20px;margin:16px 0}
+  .info.accepted{background:#ECFDF5}
+  .info.declined{background:#FEF2F2}
+  .row{display:flex;margin-bottom:10px;font-size:14px;align-items:flex-start}
+  .label{color:#6B7280;width:72px;flex-shrink:0;padding-top:1px}
+  .value{color:#111827;font-weight:600}
+  .footer{background:#F9FAFB;padding:14px 32px;font-size:12px;color:#9CA3AF;text-align:center}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="header {{statusClass}}">
+    <h1>{{statusEmoji}} 참석 {{statusText}} 알림</h1>
+    <p>{{hostName}}님, {{attendeeName}}님이 미팅 초대에 응답했습니다.</p>
+  </div>
+  <div class="body">
+    <div class="info {{statusClass}}">
+      <div class="row"><span class="label">미팅</span><span class="value">{{title}}</span></div>
+      <div class="row"><span class="label">참석자</span><span class="value">{{attendeeName}}</span></div>
+      <div class="row"><span class="label">응답</span><span class="value">{{statusText}}</span></div>
+    </div>
+  </div>
+  <div class="footer">본 메일은 자동 발송된 메일입니다.</div>
+</div>
+</body>
+</html>
