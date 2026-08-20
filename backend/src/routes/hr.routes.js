@@ -16,6 +16,10 @@ hrRouter.post("/leaves/:leaveId/decide", asyncRoute(controller.decideLeave));
 hrRouter.get("/leave-balances", asyncRoute(controller.listBalances));
 hrRouter.post("/leave-balances", asyncRoute(controller.grantBalance));
 
+hrRouter.get("/leave-policies", asyncRoute(controller.listLeavePolicies));
+hrRouter.post("/leave-policies", asyncRoute(controller.upsertLeavePolicy));
+hrRouter.get("/leave-stats", asyncRoute(controller.leaveStats));
+
 hrRouter.post("/postings", asyncRoute(controller.createPosting));
 hrRouter.get("/postings", asyncRoute(controller.listPostings));
 hrRouter.post("/postings/:postingId/close", asyncRoute(controller.closePosting));
