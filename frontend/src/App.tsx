@@ -5,6 +5,7 @@ import { PublicLayout } from "./components/layout/PublicLayout";
 import { AppProvider } from "./context/AppContext";
 import { ChangePasswordPage } from "./pages/ChangePasswordPage";
 import { InvitationsPage } from "./pages/InvitationsPage";
+import { InviteRespondPage } from "./pages/InviteRespondPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { OnboardingPage } from "./pages/OnboardingPage";
@@ -27,6 +28,8 @@ export default function App() {
             <Route path="/invitations" element={<InvitationsPage />} />
             <Route path="/change-password" element={<ChangePasswordPage />} />
             <Route path="/onboarding/organization" element={<OnboardingPage />} />
+            {/* 예약 초대 응답 — 로그인 불필요 */}
+            <Route path="/reserve/invite/:token" element={<InviteRespondPage />} />
           </Route>
           <Route
             element={
