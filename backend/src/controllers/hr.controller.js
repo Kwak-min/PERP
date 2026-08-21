@@ -588,6 +588,18 @@ export function closePosting(req, res) {
   principal.require("recruitment.manage");
   const posting = getScoped("job_posting", principal, req.params.postingId, "job_posting");
   const updated = update("job_posting", posting.id, { status: "closed" }, principal.userId);
+
+  audit.record({
+    tenantId: principal.tenantId,
+    action: "posting.closed",
+    resourceType: "job_posting",
+    resourceId: posting.id,
+    actorId: principal.userId,
+    before: { status: posting.status },
+    after: { status: updated.status },
+    requestId: req.requestId,
+  });
+
   res.json({ id: updated.id, status: updated.status });
 }
 
@@ -618,7 +630,8 @@ export function apply(req, res) {
 export function listApplications(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("recruitment.manage");
-  const filters = [{ sql: "posting_id = ?", params: [req.params.postingId] }];
+  const filters = [];
+  if (req.params.postingId) filters.push({ sql: "posting_id = ?", params: [req.params.postingId] });
   if (req.query.stage) filters.push({ sql: "stage = ?", params: [req.query.stage] });
   const rows = listScoped("application", principal, filters, {
     limit: Number(req.query.limit ?? 200),
@@ -713,5 +726,17 @@ export function completeOnboardingItem(req, res) {
   const item = getScoped("onboarding_item", principal, req.params.itemId, "onboarding_item");
   if (item.member_id !== principal.userId) principal.require("member.write");
   const updated = update("onboarding_item", item.id, { done: 1 }, principal.userId);
+
+  audit.record({
+    tenantId: principal.tenantId,
+    action: "onboarding_item.completed",
+    resourceType: "onboarding_item",
+    resourceId: item.id,
+    actorId: principal.userId,
+    before: { done: Boolean(item.done) },
+    after: { done: true },
+    requestId: req.requestId,
+  });
+
   res.json({ id: updated.id, label: updated.label, done: Boolean(updated.done) });
 }
