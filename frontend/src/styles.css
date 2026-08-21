@@ -273,7 +273,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--of-primary); box
 .member-modal__list { min-height: 0; overflow-y: auto; margin: 0 -20px; padding: 0; list-style: none; }
 .member-modal__item { min-height: 64px; display: grid; grid-template-columns: 36px minmax(0, 1.4fr) minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 10px 20px; border-bottom: 1px solid var(--of-border); }
 .member-modal__item:hover { background: var(--of-surface-muted); }
-.member-modal__item:last-child { border-bottom: 0; }
+.member-modal__list li:last-child .member-modal__item { border-bottom: 0; }
+.member-modal__item--button { width: 100%; border: none; border-radius: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .member-modal__avatar { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid #c7d2fe; border-radius: var(--r-md); background: var(--of-primary-soft); color: var(--of-primary); font-size: 13px; font-weight: 800; }
 .member-modal__identity, .member-modal__assignment { min-width: 0; display: grid; gap: 3px; }
 .member-modal__identity strong, .member-modal__assignment strong { overflow: hidden; color: var(--of-text); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }

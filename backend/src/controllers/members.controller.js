@@ -101,6 +101,23 @@ export function listMembers(req, res) {
   res.json({ items, next_cursor: null });
 }
 
+/** 단건 구성원 프로필. HR-001 상세 화면의 헤더 정보로 쓰인다. memberId는 membership.id가 아니라 user_id다. */
+export function getMemberProfile(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("member.read");
+  const membership = db()
+    .prepare(
+      `SELECT * FROM membership
+       WHERE tenant_id = ? AND org_id = ? AND user_id = ? AND deleted_at IS NULL`,
+    )
+    .get(principal.tenantId, principal.orgId, req.params.memberId);
+  if (!membership) throw notFound("member");
+  const user = db().prepare("SELECT * FROM app_user WHERE id = ?").get(membership.user_id);
+  if (!user) throw notFound("member");
+
+  res.json({ ...memberView(principal, membership, user), joined_at: membership.joined_at });
+}
+
 export function simulatePermissions(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("role.assign");
@@ -525,13 +542,26 @@ export function activity(req, res) {
   principal.require("member.read");
   const limit = Math.min(Number(req.query.limit ?? 100), 500);
 
+  let memberFilter = "";
+  const memberParams = [];
+  if (req.query.member_id) {
+    const membership = db()
+      .prepare(
+        `SELECT id FROM membership
+         WHERE tenant_id = ? AND org_id = ? AND user_id = ? AND deleted_at IS NULL`,
+      )
+      .get(principal.tenantId, principal.orgId, req.query.member_id);
+    memberFilter = " AND (resource_id = ? OR actor_id = ?)";
+    memberParams.push(membership?.id ?? null, req.query.member_id);
+  }
+
   const rows = db()
     .prepare(
       `SELECT * FROM audit_event
-       WHERE tenant_id = ? AND resource_type IN ('membership','department','invitation')
+       WHERE tenant_id = ? AND resource_type IN ('membership','department','invitation')${memberFilter}
        ORDER BY seq DESC LIMIT ?`,
     )
-    .all(principal.tenantId, limit);
+    .all(principal.tenantId, ...memberParams, limit);
 
   const nameOf = (userId) => {
     if (!userId) return "시스템";

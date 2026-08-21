@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { z } from "zod";
 
 import { apiRequest, userMessageOf, type ApiSession } from "../../services/api";
@@ -8,6 +9,7 @@ import { Button } from "../ui/Button";
 
 export const memberSchema = z.object({
   membership_id: z.string(),
+  user_id: z.string().catch(""),
   email: z.string(),
   name: z.string(),
   roles: z.array(z.string()).catch([]),
@@ -28,6 +30,7 @@ type Props = Readonly<{
 function fallbackMembers(rows: readonly (readonly string[])[]): readonly Member[] {
   return rows.map((row, index) => ({
     membership_id: `demo-${index}`,
+    user_id: `demo-${index}`,
     name: row[0] ?? "이름 없음",
     email: row[1] ?? "",
     roles: row[2] ? [row[2]] : [],
@@ -38,6 +41,7 @@ function fallbackMembers(rows: readonly (readonly string[])[]): readonly Member[
 }
 
 export function MemberListModal({ session, fallback, onClose }: Props) {
+  const navigate = useNavigate();
   const searchRef = useRef<HTMLInputElement>(null);
   const dialogRef = useModalFocus<HTMLDivElement>(onClose);
   const [query, setQuery] = useState("");
@@ -125,17 +129,26 @@ export function MemberListModal({ session, fallback, onClose }: Props) {
         ) : (
           <ul className="member-modal__list" aria-label="구성원">
             {filtered.map((member) => (
-              <li key={member.membership_id} className="member-modal__item">
-                <span className="member-modal__avatar" aria-hidden="true">{member.name.slice(0, 1)}</span>
-                <span className="member-modal__identity">
-                  <strong>{member.name}</strong>
-                  <span>{member.email}</span>
-                </span>
-                <span className="member-modal__assignment">
-                  <strong>{member.title ?? member.department_id ?? "소속 미지정"}</strong>
-                  <span>{member.roles.join(" · ") || "역할 미지정"}</span>
-                </span>
-                <Badge tone={member.status === "active" ? "success" : "neutral"}>{member.status}</Badge>
+              <li key={member.membership_id}>
+                <button
+                  type="button"
+                  className="member-modal__item member-modal__item--button"
+                  onClick={() => {
+                    onClose();
+                    navigate(`/hr/members/${member.user_id}`);
+                  }}
+                >
+                  <span className="member-modal__avatar" aria-hidden="true">{member.name.slice(0, 1)}</span>
+                  <span className="member-modal__identity">
+                    <strong>{member.name}</strong>
+                    <span>{member.email}</span>
+                  </span>
+                  <span className="member-modal__assignment">
+                    <strong>{member.title ?? member.department_id ?? "소속 미지정"}</strong>
+                    <span>{member.roles.join(" · ") || "역할 미지정"}</span>
+                  </span>
+                  <Badge tone={member.status === "active" ? "success" : "neutral"}>{member.status}</Badge>
+                </button>
               </li>
             ))}
           </ul>

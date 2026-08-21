@@ -6,6 +6,7 @@ import { asyncRoute } from "../middleware/error.js";
 export const membersRouter = Router();
 
 membersRouter.get("", asyncRoute(controller.listMembers));
+membersRouter.get("/:memberId/profile", asyncRoute(controller.getMemberProfile));
 membersRouter.post("/invites", asyncRoute(controller.createInvite));
 membersRouter.post("/invites/:invitationId/revoke", asyncRoute(controller.revokeInvite));
 membersRouter.post("/provision", asyncRoute(controller.provision));

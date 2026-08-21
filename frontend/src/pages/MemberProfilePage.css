@@ -1,0 +1,12 @@
+/* 구성원 프로필(HR-001) 전용 스타일 */
+.member-profile-tabs { display: flex; gap: 6px; margin-bottom: 4px; flex-wrap: wrap; }
+.member-profile-tabs button { border: 1px solid var(--of-border); border-radius: var(--r-md); background: var(--of-surface); padding: 7px 14px; font-size: 12.5px; font-weight: 700; cursor: pointer; color: var(--of-text-muted); }
+.member-profile-tabs button[aria-pressed="true"] { background: var(--of-primary); border-color: var(--of-primary); color: #fff; }
+
+.member-profile-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 0; }
+.member-profile-facts div { border: 1px solid var(--of-border); border-radius: var(--r-md); padding: 10px 12px; }
+.member-profile-facts dt { margin: 0 0 4px; color: var(--of-text-muted); font-size: 11px; font-weight: 700; }
+.member-profile-facts dd { margin: 0; font-size: 13px; font-weight: 700; color: var(--of-text); }
+
+.member-profile-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.member-profile-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--of-border); border-radius: var(--r-md); padding: 10px 12px; font-size: 12.5px; }
