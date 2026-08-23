@@ -8,7 +8,3 @@
 .member-profile-facts dt { margin: 0 0 4px; color: var(--of-text-muted); font-size: 11px; font-weight: 700; }
 .member-profile-facts dd { margin: 0; font-size: 13px; font-weight: 700; color: var(--of-text); }
 
-.member-profile-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.member-profile-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--of-border); border-radius: var(--r-md); padding: 10px 12px; font-size: 12.5px; }
-
-.member-profile-subheading { margin: 4px 0 0; font-size: 11.5px; font-weight: 800; color: var(--of-text-muted); }

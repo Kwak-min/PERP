@@ -283,7 +283,7 @@ export function MemberProfilePage() {
           {documents.length === 0 ? (
             <p className="attendance-empty">문서가 없습니다.</p>
           ) : (
-            <ul className="member-profile-list">
+            <ul className="simple-list">
               {documents.map((document) => (
                 <li key={document.id}>
                   <span>{document.title}</span>
@@ -301,7 +301,7 @@ export function MemberProfilePage() {
           {assets.length === 0 ? (
             <p className="attendance-empty">보유 중인 장비가 없습니다.</p>
           ) : (
-            <ul className="member-profile-list">
+            <ul className="simple-list">
               {assets.map((asset) => (
                 <li key={asset.id}>
                   <span>{asset.name} ({asset.asset_no})</span>

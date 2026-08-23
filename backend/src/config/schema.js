@@ -238,7 +238,14 @@ export const TABLES = [
   `CREATE TABLE IF NOT EXISTS attendance (${COMMON},
     org_id TEXT NOT NULL, member_id TEXT NOT NULL, on_date TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'present', hours INTEGER NOT NULL DEFAULT 0,
-    source TEXT NOT NULL DEFAULT 'manual', note TEXT NOT NULL DEFAULT '')`,
+    source TEXT NOT NULL DEFAULT 'manual', note TEXT NOT NULL DEFAULT '',
+    check_in_at TEXT, check_out_at TEXT)`,
+
+  `CREATE TABLE IF NOT EXISTS attendance_correction_request (${COMMON},
+    org_id TEXT NOT NULL, member_id TEXT NOT NULL, on_date TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'present', hours INTEGER NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
+    comment TEXT NOT NULL DEFAULT '', decided_by TEXT, decided_at TEXT)`,
 
   `CREATE TABLE IF NOT EXISTS leave_request (${COMMON},
     org_id TEXT NOT NULL, member_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'annual',

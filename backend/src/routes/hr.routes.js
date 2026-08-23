@@ -7,6 +7,12 @@ export const hrRouter = Router();
 
 hrRouter.post("/attendance", asyncRoute(controller.checkAttendance));
 hrRouter.get("/attendance", asyncRoute(controller.listAttendance));
+hrRouter.post("/attendance/check-in", asyncRoute(controller.checkIn));
+hrRouter.post("/attendance/check-out", asyncRoute(controller.checkOut));
+hrRouter.post("/attendance/corrections", asyncRoute(controller.createAttendanceCorrection));
+hrRouter.get("/attendance/corrections", asyncRoute(controller.listMyAttendanceCorrections));
+hrRouter.get("/attendance/corrections/pending", asyncRoute(controller.listPendingAttendanceCorrections));
+hrRouter.post("/attendance/corrections/:correctionId/decide", asyncRoute(controller.decideAttendanceCorrection));
 
 hrRouter.post("/leaves", asyncRoute(controller.requestLeave));
 hrRouter.get("/leaves/calendar", asyncRoute(controller.leaveCalendar));

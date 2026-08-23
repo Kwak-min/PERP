@@ -5,26 +5,44 @@ import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { SectionCard } from "../components/ui/SectionCard";
 import { StatCard, type Stat } from "../components/ui/StatCard";
+import { useMembers } from "../hooks/useMembers";
 import type { ScreenDefinition } from "../routes/catalog";
 import { apiRequest, userMessageOf } from "../services/api";
 import { useSession } from "../store/session";
-import { KIND_LABELS, attendanceSchema, monthRange } from "./attendance/model";
+import { AttendanceCorrectionPanel } from "./attendance/AttendanceCorrectionPanel";
+import { KIND_LABELS, attendanceSchema, monthRange, type AttendanceRow } from "./attendance/model";
 
 import "./attendance.css";
+import "./leave/leave.css";
 
 type Attendance = z.infer<typeof attendanceSchema>;
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formatTime(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+}
 
 export function AttendanceScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const session = useSession();
   const now = new Date();
+  const [tab, setTab] = useState<"mine" | "manage">("mine");
   const [monthOffset, setMonthOffset] = useState(0);
   const [attendance, setAttendance] = useState<Attendance | null>(null);
+  const [today, setToday] = useState<AttendanceRow | null>(null);
+  const [canManage, setCanManage] = useState(false);
+  const [checkBusy, setCheckBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [correctionsReloadKey, setCorrectionsReloadKey] = useState(0);
 
   const apiSession = useMemo(
     () => (session?.orgId ? { token: session.token, orgId: session.orgId } : null),
     [session?.token, session?.orgId],
   );
+  const members = useMembers(apiSession);
 
   const shown = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
   const shownYear = shown.getFullYear();
@@ -45,9 +63,63 @@ export function AttendanceScreen({ screen }: Readonly<{ screen: ScreenDefinition
     }
   }, [apiSession, range.from, range.to]);
 
+  const reloadToday = useCallback(async (): Promise<void> => {
+    if (!apiSession) return;
+    try {
+      const day = todayIso();
+      const data = await apiRequest(`/hr/attendance?from=${day}&to=${day}`, { session: apiSession });
+      setToday(attendanceSchema.parse(data).items[0] ?? null);
+    } catch {
+      setToday(null);
+    }
+  }, [apiSession]);
+
+  const reloadManagePermission = useCallback(async (): Promise<void> => {
+    if (!apiSession) return;
+    try {
+      await apiRequest("/hr/attendance/corrections/pending", { session: apiSession });
+      setCanManage(true);
+    } catch {
+      setCanManage(false);
+    }
+  }, [apiSession]);
+
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    void reloadToday();
+    void reloadManagePermission();
+  }, [reloadToday, reloadManagePermission]);
+
+  async function checkIn(): Promise<void> {
+    if (!apiSession) return;
+    setCheckBusy(true);
+    setError(null);
+    try {
+      await apiRequest("/hr/attendance/check-in", { method: "POST", session: apiSession });
+      await Promise.all([reload(), reloadToday()]);
+    } catch (caught) {
+      setError(userMessageOf(caught));
+    } finally {
+      setCheckBusy(false);
+    }
+  }
+
+  async function checkOut(): Promise<void> {
+    if (!apiSession) return;
+    setCheckBusy(true);
+    setError(null);
+    try {
+      await apiRequest("/hr/attendance/check-out", { method: "POST", session: apiSession });
+      await Promise.all([reload(), reloadToday()]);
+    } catch (caught) {
+      setError(userMessageOf(caught));
+    } finally {
+      setCheckBusy(false);
+    }
+  }
 
   const byKind = attendance?.summary.by_kind ?? {};
   const lastRecord = attendance?.items[0] ?? null;
@@ -94,6 +166,22 @@ export function AttendanceScreen({ screen }: Readonly<{ screen: ScreenDefinition
           <p>{screen.description}</p>
         </div>
         <div className="screen-header__actions">
+          <Button
+            tone="neutral"
+            size="small"
+            disabled={checkBusy || Boolean(today?.check_in_at)}
+            onClick={() => void checkIn()}
+          >
+            {today?.check_in_at ? `출근 ${formatTime(today.check_in_at)}` : "출근"}
+          </Button>
+          <Button
+            tone="neutral"
+            size="small"
+            disabled={checkBusy || !today?.check_in_at || Boolean(today?.check_out_at)}
+            onClick={() => void checkOut()}
+          >
+            {today?.check_out_at ? `퇴근 ${formatTime(today.check_out_at)}` : "퇴근"}
+          </Button>
           <Button tone="neutral" size="small" onClick={() => void reload()}>
             새로 고침
           </Button>
@@ -102,54 +190,81 @@ export function AttendanceScreen({ screen }: Readonly<{ screen: ScreenDefinition
 
       {error && <div className="form-error" role="alert">{error}</div>}
 
-      <section className="stat-grid" aria-label="내 근태 요약">
-        {myStats.map((stat) => (
-          <StatCard key={stat.label} stat={stat} />
-        ))}
-      </section>
+      {canManage && (
+        <div className="leave-tabs" role="tablist" aria-label="근태 화면 전환">
+          <button type="button" role="tab" aria-pressed={tab === "mine"} onClick={() => setTab("mine")}>
+            내 근태
+          </button>
+          <button type="button" role="tab" aria-pressed={tab === "manage"} onClick={() => setTab("manage")}>
+            관리
+          </button>
+        </div>
+      )}
 
-      <SectionCard
-        title="내 근태 기록"
-        subtitle={`${shownYear}년 ${shownMonth + 1}월`}
-        action={
-          <div className="calendar-nav">
-            <Button tone="neutral" size="small" aria-label="이전 달" onClick={() => setMonthOffset((value) => value - 1)}>‹</Button>
-            <span className="calendar-nav__label">
-              {shownYear}. {String(shownMonth + 1).padStart(2, "0")}
-            </span>
-            <Button tone="neutral" size="small" aria-label="다음 달" onClick={() => setMonthOffset((value) => value + 1)}>›</Button>
-          </div>
-        }
-      >
-        {rows.length === 0 ? (
-          <p className="attendance-empty">이 달의 근태 기록이 없습니다.</p>
-        ) : (
-          <div className="table-wrap" role="region" aria-label="내 근태 기록" tabIndex={0}>
-            <table>
-              <thead>
-                <tr>
-                  <th>일자</th>
-                  <th>구분</th>
-                  <th className="num">시간</th>
-                  <th>출처</th>
-                  <th>비고</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={row.id}>
-                    <td>{row.on_date}</td>
-                    <td>{KIND_LABELS[row.kind] ?? row.kind}</td>
-                    <td className="num">{row.hours}</td>
-                    <td>{row.source}</td>
-                    <td>{row.note || "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </SectionCard>
+      {tab === "manage" && canManage ? (
+        apiSession && (
+          <AttendanceCorrectionPanel
+            apiSession={apiSession}
+            mode="manage"
+            members={members}
+            reloadKey={correctionsReloadKey}
+            onChanged={() => setCorrectionsReloadKey((value) => value + 1)}
+          />
+        )
+      ) : (
+        <>
+          <section className="stat-grid" aria-label="내 근태 요약">
+            {myStats.map((stat) => (
+              <StatCard key={stat.label} stat={stat} />
+            ))}
+          </section>
+
+          <SectionCard
+            title="내 근태 기록"
+            subtitle={`${shownYear}년 ${shownMonth + 1}월`}
+            action={
+              <div className="calendar-nav">
+                <Button tone="neutral" size="small" aria-label="이전 달" onClick={() => setMonthOffset((value) => value - 1)}>‹</Button>
+                <span className="calendar-nav__label">
+                  {shownYear}. {String(shownMonth + 1).padStart(2, "0")}
+                </span>
+                <Button tone="neutral" size="small" aria-label="다음 달" onClick={() => setMonthOffset((value) => value + 1)}>›</Button>
+              </div>
+            }
+          >
+            {rows.length === 0 ? (
+              <p className="attendance-empty">이 달의 근태 기록이 없습니다.</p>
+            ) : (
+              <div className="table-wrap" role="region" aria-label="내 근태 기록" tabIndex={0}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>일자</th>
+                      <th>구분</th>
+                      <th className="num">시간</th>
+                      <th>출처</th>
+                      <th>비고</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => (
+                      <tr key={row.id}>
+                        <td>{row.on_date}</td>
+                        <td>{KIND_LABELS[row.kind] ?? row.kind}</td>
+                        <td className="num">{row.hours}</td>
+                        <td>{row.source}</td>
+                        <td>{row.note || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </SectionCard>
+
+          {apiSession && <AttendanceCorrectionPanel apiSession={apiSession} mode="mine" onChanged={() => void reload()} />}
+        </>
+      )}
     </div>
   );
 }

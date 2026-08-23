@@ -9,7 +9,7 @@
 | 화면 | 내용 | 상태 | 상세 문서 |
 | --- | --- | --- | --- |
 | HR-001 | 구성원 프로필 | 완료 | [hr-profile-workflow.md](./hr-profile-workflow.md) |
-| HR-002 | 근태·활동 기록 | 완료(조장 MVP 그대로 사용, 이번 세션에서 휴가 섹션만 분리) | — |
+| HR-002 | 근태·활동 기록 | 완료 | [hr-attendance-workflow.md](./hr-attendance-workflow.md) |
 | HR-003 | 휴가·부재 | 완료 (1~6단계 전부) | [hr-leave-workflow.md](./hr-leave-workflow.md) |
 | HR-004 | 모집·온보딩 | 완료 | [hr-recruitment-workflow.md](./hr-recruitment-workflow.md) |
 
@@ -20,12 +20,14 @@
 3. HR-004(모집·온보딩) — `/hr/recruitment`에 "채용 파이프라인"/"온보딩 체크리스트" 탭 신설, 백엔드 버그 2건 수정(전체 지원자 조회 깨짐, 감사로그 누락 2곳), 계정초대는 기존 `POST /members/invites` 재사용.
 4. HR-001(구성원 프로필) 읽기 위주 — 새 상세 페이지(`/hr/members/:memberId`)에서 프로필·소속이력·활동·문서·장비를 전부 기존 데이터 재사용으로 구현. ORG-002 목록에서 클릭해 들어가는 연결도 이때 살림.
 5. HR-001(구성원 프로필) 역량 + 본인수정 승인 — `member_competency`/`member_field_request` 테이블 신규. 결재함을 거치지 않고 프로필 페이지 자체에서 신청→승인/반려가 완결되는 자체 워크플로우로 설계(휴가의 결재함 동기화 버그를 반복하지 않으려는 의도). HR-001 전체 완료.
+6. HR-002(근태) 출근·퇴근 체크인 + 수정요청·승인 — 과업지시서 초안(SFR-007 "출석 가능 여부")과 공식 요구사항정의서(HR-002 "수정요청, 승인")를 근거로 빠진 기능 확인 후 구현. `attendance`에 `check_in_at`/`check_out_at` 추가, `attendance_correction_request` 테이블 신규. 승인 워크플로우는 HR-001과 동일하게 결재함 미경유. HR-002 전체 완료.
 
-각 단위마다 백엔드 테스트, 프론트 `tsc -b`/route parity 테스트, 헤드리스 브라우저 실사용 흐름 검증을 거쳤다 (현재 백엔드 34/34, 프론트 59/59 통과).
+각 단위마다 백엔드 테스트, 프론트 `tsc -b`/route parity 테스트, 헤드리스 브라우저 실사용 흐름 검증을 거쳤다 (현재 백엔드 38/38, 프론트 59/59 통과).
 
 ## 남은 일
 
 HR-001~004 전체 완료. 남은 건 아래 크로스팀 이슈뿐:
+- **크로스팀 이슈**:
   - 결재함(`/approvals`)에서 승인해도 `leave_request` 상태·잔여일수가 갱신 안 되는 동기화 버그 — 전자결재(SFR-020) 담당자와 논의 필요. (`hr-leave-workflow.md` 참고)
   - 지원자 개인정보 자동 파기(6개월 보존기한 만료 시 삭제) — 스펙상 HR-004가 아니라 **ADM-004(데이터 보존·내보내기)** 담당 영역. 코드베이스에 스케줄러 인프라가 전무해 새로 만들어야 함. (`hr-recruitment-workflow.md` 참고)
 

@@ -98,7 +98,7 @@ export function FieldRequestPanel({ memberId, apiSession, requests, isSelf, canM
           </form>
 
           {requests.length > 0 && (
-            <ul className="member-profile-list">
+            <ul className="simple-list">
               {requests.map((request) => (
                 <li key={request.id}>
                   <span>{FIELD_LABELS[request.field] ?? request.field} → {request.new_value}</span>
@@ -112,8 +112,8 @@ export function FieldRequestPanel({ memberId, apiSession, requests, isSelf, canM
 
       {canManage && pending.length > 0 && (
         <>
-          <p className="member-profile-subheading">대기 중인 신청</p>
-          <ul className="member-profile-list">
+          <p className="simple-list__subheading">대기 중인 신청</p>
+          <ul className="simple-list">
             {pending.map((request) => (
               <li key={request.id}>
                 <span>{FIELD_LABELS[request.field] ?? request.field}: {request.old_value ?? "—"} → {request.new_value}</span>

@@ -57,7 +57,7 @@ export const screens: readonly ScreenDefinition[] = [
   { id: "AST-002", path: "/assets/:assetId", label: "자산 상세", description: "자산 이력, 대여와 점검 상태를 확인합니다.", section: "operations", endpoint: null, module: "assets" },
   { id: "AST-003", path: "/assets/reservations", label: "예약", description: "자산과 공간의 예약 일정을 관리합니다.", section: "operations", endpoint: "/assets/reservations", module: "assets" },
   { id: "HR-001", path: "/hr/members/:memberId", label: "인사 프로필", description: "구성원의 소속, 근태와 온보딩 상태를 확인합니다.", section: "people", endpoint: null, module: "hr" },
-  { id: "HR-002", path: "/hr/attendance", label: "근태", description: "출근, 지각, 원격과 휴가 기록을 관리합니다.", section: "people", endpoint: "/hr/attendance", module: "hr", nav: true },
+  { id: "HR-002", path: "/hr/attendance", label: "근태", description: "출근·지각·결근·원격 기록과 활동시간을 관리합니다.", section: "people", endpoint: "/hr/attendance", module: "hr", nav: true },
   { id: "HR-003", path: "/hr/leave", label: "휴가", description: "휴가 잔여일과 승인 요청을 관리합니다.", section: "people", endpoint: "/hr/leaves", module: "hr", nav: true },
   { id: "HR-004", path: "/hr/recruitment", label: "모집", description: "공고, 지원자 단계와 합격자 온보딩을 관리합니다.", section: "people", endpoint: "/hr/postings", module: "hr", nav: true },
   { id: "DOC-001", path: "/documents", label: "문서", description: "조직 문서와 위키를 공간별로 정리합니다.", section: "knowledge", endpoint: "/documents", module: "documents", nav: true },

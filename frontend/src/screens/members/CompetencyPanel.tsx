@@ -66,7 +66,7 @@ export function CompetencyPanel({ memberId, apiSession, competencies, isSelf, ca
       {competencies.length === 0 ? (
         <p className="attendance-empty">등록된 역량이 없습니다.</p>
       ) : (
-        <ul className="member-profile-list">
+        <ul className="simple-list">
           {competencies.map((competency) => (
             <li key={competency.id}>
               <span>

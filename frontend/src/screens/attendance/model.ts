@@ -10,7 +10,24 @@ export const attendanceRowSchema = z.object({
   hours: z.number().catch(0),
   source: z.string().catch("manual"),
   note: z.string().catch(""),
+  check_in_at: z.string().nullable().catch(null),
+  check_out_at: z.string().nullable().catch(null),
 });
+
+export const attendanceCorrectionSchema = z.object({
+  id: z.string(),
+  member_id: z.string(),
+  on_date: z.string(),
+  kind: z.string(),
+  hours: z.number().catch(0),
+  note: z.string().catch(""),
+  status: z.string().catch("pending"),
+  comment: z.string().catch(""),
+  created_at: z.string().catch(""),
+  decided_at: z.string().nullable().catch(null),
+});
+
+export const attendanceCorrectionListSchema = z.object({ items: z.array(attendanceCorrectionSchema) });
 
 export const attendanceSchema = z.object({
   items: z.array(attendanceRowSchema),
@@ -86,6 +103,7 @@ export const leaveStatsSchema = z.object({
 });
 
 export type AttendanceRow = z.infer<typeof attendanceRowSchema>;
+export type AttendanceCorrection = z.infer<typeof attendanceCorrectionSchema>;
 export type LeaveCalendarItem = z.infer<typeof leaveCalendarSchema>["items"][number];
 export type LeaveListItem = z.infer<typeof leaveListSchema>["items"][number];
 export type LeaveStats = z.infer<typeof leaveStatsSchema>;

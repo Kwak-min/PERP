@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "../config/db.js";
 import { permissionsFor } from "../config/rbac.js";
 import { resolvePrincipal } from "../middleware/auth.js";
-import { getScoped, insert, listScoped, update } from "../models/base.js";
+import { getScoped, insert, listScoped, nowIso, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
 import { createApproval } from "../services/approval.service.js";
 import { notify } from "../services/notification.service.js";
@@ -17,6 +17,13 @@ const attendanceSchema = z.object({
   kind: z.enum(["present", "late", "absent", "remote", "leave"]).default("present"),
   hours: z.number().int().min(0).max(24).default(8),
   source: z.enum(["manual", "qr", "import", "integration"]).default("manual"),
+  note: z.string().default(""),
+});
+
+const attendanceCorrectionSchema = z.object({
+  on_date: z.string().min(8),
+  kind: z.enum(["present", "late", "absent", "remote", "leave"]).default("present"),
+  hours: z.number().int().min(0).max(24).default(8),
   note: z.string().default(""),
 });
 
@@ -92,6 +99,21 @@ const attendanceView = (a) => ({
   hours: a.hours,
   source: a.source,
   note: a.note,
+  check_in_at: a.check_in_at,
+  check_out_at: a.check_out_at,
+});
+
+const attendanceCorrectionView = (c) => ({
+  id: c.id,
+  member_id: c.member_id,
+  on_date: c.on_date,
+  kind: c.kind,
+  hours: c.hours,
+  note: c.note,
+  status: c.status,
+  comment: c.comment,
+  created_at: c.created_at,
+  decided_at: c.decided_at,
 });
 
 const leaveView = (l) => ({
@@ -196,6 +218,217 @@ export function listAttendance(req, res) {
       by_kind: rows.reduce((acc, r) => ({ ...acc, [r.kind]: (acc[r.kind] ?? 0) + 1 }), {}),
     },
   });
+}
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function todaysAttendance(principal) {
+  return listScoped(
+    "attendance",
+    principal,
+    [
+      { sql: "member_id = ?", params: [principal.userId] },
+      { sql: "on_date = ?", params: [todayIso()] },
+    ],
+    { limit: 1 },
+  )[0];
+}
+
+/** 출근 버튼: 현재 시각을 check_in_at으로 저장한다(SFR-007 초안, HR-002 "출석"). */
+export function checkIn(req, res) {
+  const principal = resolvePrincipal(req);
+  const existing = todaysAttendance(principal);
+  if (existing?.check_in_at) {
+    throw new ApiError("CONFLICT", "이미 출근 처리되었습니다");
+  }
+  const now = nowIso();
+  const row = existing
+    ? update("attendance", existing.id, { check_in_at: now }, principal.userId)
+    : insert("attendance", {
+        tenant_id: principal.tenantId,
+        org_id: principal.orgId,
+        member_id: principal.userId,
+        on_date: todayIso(),
+        kind: "present",
+        hours: 0,
+        source: "manual",
+        check_in_at: now,
+        created_by: principal.userId,
+      });
+
+  audit.record({
+    tenantId: principal.tenantId,
+    action: "attendance.checked_in",
+    resourceType: "attendance",
+    resourceId: row.id,
+    actorId: principal.userId,
+    after: { check_in_at: row.check_in_at },
+    requestId: req.requestId,
+  });
+
+  res.status(existing ? 200 : 201).json(attendanceView(row));
+}
+
+/** 퇴근 버튼: check_out_at을 저장하고 출퇴근 시각 차이로 hours를 계산한다. */
+export function checkOut(req, res) {
+  const principal = resolvePrincipal(req);
+  const existing = todaysAttendance(principal);
+  if (!existing?.check_in_at) {
+    throw new ApiError("CONFLICT", "출근 기록이 없습니다");
+  }
+  if (existing.check_out_at) {
+    throw new ApiError("CONFLICT", "이미 퇴근 처리되었습니다");
+  }
+  const now = nowIso();
+  const hours = Math.max(0, Math.round((Date.parse(now) - Date.parse(existing.check_in_at)) / 3_600_000));
+  const row = update("attendance", existing.id, { check_out_at: now, hours }, principal.userId);
+
+  audit.record({
+    tenantId: principal.tenantId,
+    action: "attendance.checked_out",
+    resourceType: "attendance",
+    resourceId: row.id,
+    actorId: principal.userId,
+    after: { check_out_at: row.check_out_at, hours: row.hours },
+    requestId: req.requestId,
+  });
+
+  res.json(attendanceView(row));
+}
+
+/** 근태 수정요청 1단계: 신청. HR-001의 본인수정 승인과 동일 패턴 — 본인만 신청 가능. */
+export function createAttendanceCorrection(req, res) {
+  const principal = resolvePrincipal(req);
+  const payload = attendanceCorrectionSchema.parse(req.body);
+
+  const row = insert("attendance_correction_request", {
+    tenant_id: principal.tenantId,
+    org_id: principal.orgId,
+    member_id: principal.userId,
+    on_date: payload.on_date,
+    kind: payload.kind,
+    hours: payload.hours,
+    note: payload.note,
+    created_by: principal.userId,
+  });
+
+  audit.record({
+    tenantId: principal.tenantId,
+    action: "attendance_correction.created",
+    resourceType: "attendance_correction_request",
+    resourceId: row.id,
+    actorId: principal.userId,
+    after: { on_date: row.on_date, kind: row.kind, hours: row.hours },
+    requestId: req.requestId,
+  });
+
+  res.status(201).json(attendanceCorrectionView(row));
+}
+
+export function listMyAttendanceCorrections(req, res) {
+  const principal = resolvePrincipal(req);
+  const rows = listScoped(
+    "attendance_correction_request",
+    principal,
+    [{ sql: "member_id = ?", params: [principal.userId] }],
+    { limit: 100 },
+  );
+  res.json({ items: rows.map(attendanceCorrectionView) });
+}
+
+/** "관리" 탭 노출 여부는 프론트가 이 호출의 403 여부로 판단한다(HR-001/HR-003과 동일 관용구). */
+export function listPendingAttendanceCorrections(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("attendance.write");
+  const rows = listScoped(
+    "attendance_correction_request",
+    principal,
+    [{ sql: "status = ?", params: ["pending"] }],
+    { limit: 200 },
+  );
+  res.json({ items: rows.map(attendanceCorrectionView) });
+}
+
+/** 근태 수정요청 2단계: 승인/반려. 승인 시에만 실제 attendance 기록에 반영한다. */
+export function decideAttendanceCorrection(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("attendance.write");
+  const payload = decisionSchema.parse(req.body);
+  const correction = getScoped(
+    "attendance_correction_request",
+    principal,
+    req.params.correctionId,
+    "attendance_correction_request",
+  );
+  if (correction.status !== "pending") {
+    throw new ApiError("CONFLICT", `이미 처리된 요청입니다: ${correction.status}`);
+  }
+
+  const status = payload.decision === "approve" ? "approved" : "rejected";
+  const updated = update(
+    "attendance_correction_request",
+    correction.id,
+    { status, comment: payload.comment, decided_by: principal.userId, decided_at: nowIso() },
+    principal.userId,
+  );
+
+  if (status === "approved") {
+    const existing = listScoped(
+      "attendance",
+      principal,
+      [
+        { sql: "member_id = ?", params: [correction.member_id] },
+        { sql: "on_date = ?", params: [correction.on_date] },
+      ],
+      { limit: 1 },
+    )[0];
+    if (existing) {
+      update(
+        "attendance",
+        existing.id,
+        { kind: correction.kind, hours: correction.hours, note: correction.note },
+        principal.userId,
+      );
+    } else {
+      insert("attendance", {
+        tenant_id: principal.tenantId,
+        org_id: principal.orgId,
+        member_id: correction.member_id,
+        on_date: correction.on_date,
+        kind: correction.kind,
+        hours: correction.hours,
+        source: "manual",
+        note: correction.note,
+        created_by: principal.userId,
+      });
+    }
+  }
+
+  audit.record({
+    tenantId: principal.tenantId,
+    action: `attendance_correction.${status}`,
+    resourceType: "attendance_correction_request",
+    resourceId: correction.id,
+    actorId: principal.userId,
+    before: { status: correction.status },
+    after: { status },
+    requestId: req.requestId,
+  });
+
+  notify({
+    tenantId: principal.tenantId,
+    recipientId: correction.member_id,
+    type: `attendance_correction.${status}`,
+    title: status === "approved" ? "근태 수정요청이 승인되었습니다" : "근태 수정요청이 반려되었습니다",
+    body: payload.comment,
+    relatedType: "attendance_correction_request",
+    relatedId: correction.id,
+    dedupeKey: `attendance-correction-decision:${correction.id}`,
+  });
+
+  res.json(attendanceCorrectionView(updated));
 }
 
 
