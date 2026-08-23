@@ -47,9 +47,48 @@ export const memberAssetSchema = z.object({
 
 export const memberAssetListSchema = z.object({ items: z.array(memberAssetSchema) });
 
+export const memberCompetencySchema = z.object({
+  id: z.string(),
+  member_id: z.string(),
+  label: z.string(),
+  level: z.string().catch("intermediate"),
+  note: z.string().catch(""),
+});
+
+export const memberCompetencyListSchema = z.object({ items: z.array(memberCompetencySchema) });
+
+export const memberFieldRequestSchema = z.object({
+  id: z.string(),
+  member_id: z.string(),
+  field: z.string(),
+  old_value: z.string().nullable().catch(null),
+  new_value: z.string(),
+  status: z.string().catch("pending"),
+  comment: z.string().catch(""),
+  created_at: z.string().catch(""),
+  decided_at: z.string().nullable().catch(null),
+});
+
+export const memberFieldRequestListSchema = z.object({ items: z.array(memberFieldRequestSchema) });
+
 export type MemberProfile = z.infer<typeof memberProfileSchema>;
 export type MemberActivityItem = z.infer<typeof memberActivityItemSchema>;
 export type MemberDocument = z.infer<typeof memberDocumentSchema>;
 export type MemberAsset = z.infer<typeof memberAssetSchema>;
+export type MemberCompetency = z.infer<typeof memberCompetencySchema>;
+export type MemberFieldRequest = z.infer<typeof memberFieldRequestSchema>;
 
 export const ASSIGNMENT_ACTION = "member.assignment.changed";
+
+export const FIELD_LABELS: Readonly<Record<string, string>> = {
+  phone: "전화번호",
+  address: "주소",
+  birth_date: "생년월일",
+  emergency_contact: "비상연락처",
+};
+
+export const LEVEL_LABELS: Readonly<Record<string, string>> = {
+  beginner: "초급",
+  intermediate: "중급",
+  advanced: "고급",
+};

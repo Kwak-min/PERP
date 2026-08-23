@@ -7,6 +7,12 @@ export const membersRouter = Router();
 
 membersRouter.get("", asyncRoute(controller.listMembers));
 membersRouter.get("/:memberId/profile", asyncRoute(controller.getMemberProfile));
+membersRouter.get("/:memberId/competencies", asyncRoute(controller.listCompetencies));
+membersRouter.post("/:memberId/competencies", asyncRoute(controller.addCompetency));
+membersRouter.delete("/competencies/:competencyId", asyncRoute(controller.deleteCompetency));
+membersRouter.get("/:memberId/field-requests", asyncRoute(controller.listFieldRequests));
+membersRouter.post("/:memberId/field-requests", asyncRoute(controller.createFieldRequest));
+membersRouter.post("/field-requests/:requestId/decide", asyncRoute(controller.decideFieldRequest));
 membersRouter.post("/invites", asyncRoute(controller.createInvite));
 membersRouter.post("/invites/:invitationId/revoke", asyncRoute(controller.revokeInvite));
 membersRouter.post("/provision", asyncRoute(controller.provision));

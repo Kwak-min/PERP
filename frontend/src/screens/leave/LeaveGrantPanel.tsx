@@ -6,6 +6,7 @@ import type { LeavePolicy } from "../../hooks/useLeavePolicies";
 import type { OrgMember } from "../../hooks/useMembers";
 import { apiRequest, userMessageOf, type ApiSession } from "../../services/api";
 import { LEAVE_KIND_LABELS } from "../attendance/model";
+import { digitsOnly, toNonNegativeInt } from "../../utils/numberInput";
 
 type Props = Readonly<{
   members: readonly OrgMember[];
@@ -20,7 +21,7 @@ type GrantResult = Readonly<{ granted_days: number; used_days: number; remaining
 export function LeaveGrantPanel({ members, policies, apiSession, onGranted }: Props) {
   const [memberId, setMemberId] = useState("");
   const [kind, setKind] = useState("annual");
-  const [days, setDays] = useState<number>(() => policies.find((p) => p.kind === "annual")?.default_days ?? 0);
+  const [days, setDays] = useState<string>(() => String(policies.find((p) => p.kind === "annual")?.default_days ?? 0));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<GrantResult | null>(null);
@@ -28,7 +29,7 @@ export function LeaveGrantPanel({ members, policies, apiSession, onGranted }: Pr
   function onKindChange(nextKind: string): void {
     setKind(nextKind);
     const policyDefault = policies.find((p) => p.kind === nextKind)?.default_days;
-    if (policyDefault !== undefined) setDays(policyDefault);
+    if (policyDefault !== undefined) setDays(String(policyDefault));
   }
 
   async function submit(event: React.FormEvent): Promise<void> {
@@ -41,7 +42,7 @@ export function LeaveGrantPanel({ members, policies, apiSession, onGranted }: Pr
       const granted = (await apiRequest("/hr/leave-balances", {
         method: "POST",
         session: apiSession,
-        body: { member_id: memberId, kind, granted_days: days },
+        body: { member_id: memberId, kind, granted_days: toNonNegativeInt(days) },
       })) as GrantResult;
       setResult(granted);
       onGranted();
@@ -77,10 +78,11 @@ export function LeaveGrantPanel({ members, policies, apiSession, onGranted }: Pr
           <label>
             부여일수
             <input
-              type="number"
-              min={0}
+              type="text"
+              inputMode="numeric"
               value={days}
-              onChange={(event) => setDays(Number(event.target.value))}
+              onChange={(event) => setDays(digitsOnly(event.target.value))}
+              onBlur={() => { if (days === "") setDays("0"); }}
               required
             />
           </label>

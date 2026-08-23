@@ -8,8 +8,9 @@ import {
   widestScope,
 } from "../config/rbac.js";
 import { resolvePrincipal } from "../middleware/auth.js";
-import { bumpVersion, hardDelete, insert, listScoped, newId, nowIso, update } from "../models/base.js";
+import { bumpVersion, getScoped, hardDelete, insert, listScoped, newId, nowIso, softDelete, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
+import { notify } from "../services/notification.service.js";
 import { hashPassword, newToken, temporaryPassword } from "../utils/crypto.js";
 import { ApiError, notFound } from "../utils/errors.js";
 
@@ -48,6 +49,23 @@ const departmentPatchSchema = z.object({
 const assignmentSchema = z.object({
   department_id: z.string().nullable().optional(),
   title: z.string().max(120).nullable().optional(),
+});
+
+const competencySchema = z.object({
+  label: z.string().min(1).max(120),
+  level: z.enum(["beginner", "intermediate", "advanced"]).default("intermediate"),
+  note: z.string().default(""),
+});
+
+const FIELD_REQUEST_FIELDS = ["phone", "address", "birth_date", "emergency_contact"];
+const APP_USER_FIELDS = new Set(["phone", "address", "birth_date"]);
+const fieldRequestSchema = z.object({
+  field: z.enum(FIELD_REQUEST_FIELDS),
+  new_value: z.string().min(1).max(300),
+});
+const fieldDecisionSchema = z.object({
+  decision: z.enum(["approve", "reject"]),
+  comment: z.string().default(""),
 });
 
 function assertKnownRoles(roles) {
@@ -101,21 +119,187 @@ export function listMembers(req, res) {
   res.json({ items, next_cursor: null });
 }
 
-/** 단건 구성원 프로필. HR-001 상세 화면의 헤더 정보로 쓰인다. memberId는 membership.id가 아니라 user_id다. */
-export function getMemberProfile(req, res) {
-  const principal = resolvePrincipal(req);
-  principal.require("member.read");
-  const membership = db()
+function findMembershipByUserId(principal, userId) {
+  return db()
     .prepare(
       `SELECT * FROM membership
        WHERE tenant_id = ? AND org_id = ? AND user_id = ? AND deleted_at IS NULL`,
     )
-    .get(principal.tenantId, principal.orgId, req.params.memberId);
+    .get(principal.tenantId, principal.orgId, userId);
+}
+
+/** memberId(=user_id) 본인이거나 member.write가 있어야 통과한다. HR-001의 역량·수정신청류 엔드포인트가 공통으로 쓰는 관용구. */
+function requireSelfOrMemberWrite(principal, memberId) {
+  if (memberId !== principal.userId) principal.require("member.write");
+}
+
+/** 단건 구성원 프로필. HR-001 상세 화면의 헤더 정보로 쓰인다. memberId는 membership.id가 아니라 user_id다. */
+export function getMemberProfile(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("member.read");
+  const membership = findMembershipByUserId(principal, req.params.memberId);
   if (!membership) throw notFound("member");
   const user = db().prepare("SELECT * FROM app_user WHERE id = ?").get(membership.user_id);
   if (!user) throw notFound("member");
 
   res.json({ ...memberView(principal, membership, user), joined_at: membership.joined_at });
+}
+
+const competencyView = (c) => ({
+  id: c.id,
+  member_id: c.member_id,
+  label: c.label,
+  level: c.level,
+  note: c.note,
+});
+
+export function listCompetencies(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("member.read");
+  const rows = listScoped(
+    "member_competency",
+    principal,
+    [{ sql: "member_id = ?", params: [req.params.memberId] }],
+    { limit: 200, orderBy: "created_at ASC" },
+  );
+  res.json({ items: rows.map(competencyView) });
+}
+
+export function addCompetency(req, res) {
+  const principal = resolvePrincipal(req);
+  requireSelfOrMemberWrite(principal, req.params.memberId);
+  const payload = competencySchema.parse(req.body);
+  const row = insert("member_competency", {
+    tenant_id: principal.tenantId,
+    org_id: principal.orgId,
+    member_id: req.params.memberId,
+    label: payload.label,
+    level: payload.level,
+    note: payload.note,
+    created_by: principal.userId,
+  });
+  res.status(201).json(competencyView(row));
+}
+
+export function deleteCompetency(req, res) {
+  const principal = resolvePrincipal(req);
+  const competency = getScoped("member_competency", principal, req.params.competencyId, "competency");
+  requireSelfOrMemberWrite(principal, competency.member_id);
+  softDelete("member_competency", competency.id, principal.userId);
+  res.status(204).send();
+}
+
+const fieldRequestView = (r) => ({
+  id: r.id,
+  member_id: r.member_id,
+  field: r.field,
+  old_value: r.old_value,
+  new_value: r.new_value,
+  status: r.status,
+  comment: r.comment,
+  created_at: r.created_at,
+  decided_at: r.decided_at,
+});
+
+export function listFieldRequests(req, res) {
+  const principal = resolvePrincipal(req);
+  requireSelfOrMemberWrite(principal, req.params.memberId);
+  const rows = listScoped(
+    "member_field_request",
+    principal,
+    [{ sql: "member_id = ?", params: [req.params.memberId] }],
+    { limit: 100 },
+  );
+  res.json({ items: rows.map(fieldRequestView) });
+}
+
+/** 본인 수정 승인 워크플로우 1단계: 신청. HR-001 스펙상 본인만 신청할 수 있다(HR 대리 신청 없음). */
+export function createFieldRequest(req, res) {
+  const principal = resolvePrincipal(req);
+  if (req.params.memberId !== principal.userId) {
+    throw new ApiError("PERMISSION_DENIED", "본인만 수정 신청을 할 수 있습니다");
+  }
+  const payload = fieldRequestSchema.parse(req.body);
+  const membership = findMembershipByUserId(principal, principal.userId);
+  if (!membership) throw notFound("member");
+  const user = db().prepare("SELECT * FROM app_user WHERE id = ?").get(principal.userId);
+
+  const oldValue = APP_USER_FIELDS.has(payload.field) ? user[payload.field] : membership[payload.field];
+
+  const row = insert("member_field_request", {
+    tenant_id: principal.tenantId,
+    org_id: principal.orgId,
+    member_id: principal.userId,
+    field: payload.field,
+    old_value: oldValue ?? null,
+    new_value: payload.new_value,
+    created_by: principal.userId,
+  });
+
+  audit.record({
+    tenantId: principal.tenantId,
+    action: "member.field_request.created",
+    resourceType: "member_field_request",
+    resourceId: row.id,
+    actorId: principal.userId,
+    after: { field: row.field, new_value: row.new_value },
+    requestId: req.requestId,
+  });
+
+  res.status(201).json(fieldRequestView(row));
+}
+
+/** 본인 수정 승인 워크플로우 2단계: 승인/반려. 승인 시 실제로 app_user/membership에 반영한다. */
+export function decideFieldRequest(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("member.write");
+  const payload = fieldDecisionSchema.parse(req.body);
+  const fieldRequest = getScoped("member_field_request", principal, req.params.requestId, "member_field_request");
+  if (fieldRequest.status !== "pending") {
+    throw new ApiError("CONFLICT", `이미 처리된 요청입니다: ${fieldRequest.status}`);
+  }
+
+  const status = payload.decision === "approve" ? "approved" : "rejected";
+  const updated = update(
+    "member_field_request",
+    fieldRequest.id,
+    { status, comment: payload.comment, decided_by: principal.userId, decided_at: nowIso() },
+    principal.userId,
+  );
+
+  if (status === "approved") {
+    const membership = findMembershipByUserId(principal, fieldRequest.member_id);
+    if (!membership) throw notFound("member");
+    if (APP_USER_FIELDS.has(fieldRequest.field)) {
+      update("app_user", membership.user_id, { [fieldRequest.field]: fieldRequest.new_value }, principal.userId);
+    } else {
+      update("membership", membership.id, { [fieldRequest.field]: fieldRequest.new_value }, principal.userId);
+    }
+  }
+
+  audit.record({
+    tenantId: principal.tenantId,
+    action: `member.field_request.${status}`,
+    resourceType: "member_field_request",
+    resourceId: fieldRequest.id,
+    actorId: principal.userId,
+    before: { status: fieldRequest.status },
+    after: { status },
+    requestId: req.requestId,
+  });
+
+  notify({
+    tenantId: principal.tenantId,
+    recipientId: fieldRequest.member_id,
+    type: `member.field_request.${status}`,
+    title: status === "approved" ? "수정 신청이 승인되었습니다" : "수정 신청이 반려되었습니다",
+    body: payload.comment,
+    relatedType: "member_field_request",
+    relatedId: fieldRequest.id,
+    dedupeKey: `field-request-decision:${fieldRequest.id}`,
+  });
+
+  res.json(fieldRequestView(updated));
 }
 
 export function simulatePermissions(req, res) {

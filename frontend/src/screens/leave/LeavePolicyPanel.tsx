@@ -5,18 +5,19 @@ import { SectionCard } from "../../components/ui/SectionCard";
 import type { LeavePolicy } from "../../hooks/useLeavePolicies";
 import { apiRequest, userMessageOf, type ApiSession } from "../../services/api";
 import { LEAVE_KIND_LABELS } from "../attendance/model";
+import { digitsOnly, toNonNegativeInt } from "../../utils/numberInput";
 
 type DraftPolicy = Readonly<{
-  default_days: number;
+  default_days: string;
   carryover_enabled: boolean;
-  carryover_max_days: number;
+  carryover_max_days: string;
   expiry_note: string;
 }>;
 
 const EMPTY_DRAFT: DraftPolicy = {
-  default_days: 0,
+  default_days: "0",
   carryover_enabled: false,
-  carryover_max_days: 0,
+  carryover_max_days: "0",
   expiry_note: "",
 };
 
@@ -26,9 +27,9 @@ function draftsFrom(policies: readonly LeavePolicy[]): Record<string, DraftPolic
     const found = policies.find((policy) => policy.kind === kind);
     out[kind] = found
       ? {
-          default_days: found.default_days,
+          default_days: String(found.default_days),
           carryover_enabled: found.carryover_enabled,
-          carryover_max_days: found.carryover_max_days,
+          carryover_max_days: String(found.carryover_max_days),
           expiry_note: found.expiry_note,
         }
       : EMPTY_DRAFT;
@@ -61,7 +62,13 @@ export function LeavePolicyPanel({ policies, apiSession, onSaved }: Props) {
       await apiRequest("/hr/leave-policies", {
         method: "POST",
         session: apiSession,
-        body: { kind, ...draft },
+        body: {
+          kind,
+          default_days: toNonNegativeInt(draft.default_days),
+          carryover_enabled: draft.carryover_enabled,
+          carryover_max_days: toNonNegativeInt(draft.carryover_max_days),
+          expiry_note: draft.expiry_note,
+        },
       });
       onSaved();
     } catch (caught) {
@@ -88,10 +95,11 @@ export function LeavePolicyPanel({ policies, apiSession, onSaved }: Props) {
               <label>
                 기본 부여일수
                 <input
-                  type="number"
-                  min={0}
+                  type="text"
+                  inputMode="numeric"
                   value={draft.default_days}
-                  onChange={(event) => patch(kind, { default_days: Number(event.target.value) })}
+                  onChange={(event) => patch(kind, { default_days: digitsOnly(event.target.value) })}
+                  onBlur={() => { if (draft.default_days === "") patch(kind, { default_days: "0" }); }}
                 />
               </label>
               <label className="policy-row__checkbox">
@@ -105,11 +113,12 @@ export function LeavePolicyPanel({ policies, apiSession, onSaved }: Props) {
               <label>
                 이월 한도
                 <input
-                  type="number"
-                  min={0}
+                  type="text"
+                  inputMode="numeric"
                   disabled={!draft.carryover_enabled}
                   value={draft.carryover_max_days}
-                  onChange={(event) => patch(kind, { carryover_max_days: Number(event.target.value) })}
+                  onChange={(event) => patch(kind, { carryover_max_days: digitsOnly(event.target.value) })}
+                  onBlur={() => { if (draft.carryover_max_days === "") patch(kind, { carryover_max_days: "0" }); }}
                 />
               </label>
               <label className="policy-row__note">

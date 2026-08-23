@@ -10,22 +10,30 @@ import {
   ASSIGNMENT_ACTION,
   memberActivitySchema,
   memberAssetListSchema,
+  memberCompetencyListSchema,
   memberDocumentListSchema,
+  memberFieldRequestListSchema,
   memberProfileSchema,
   type MemberActivityItem,
   type MemberAsset,
+  type MemberCompetency,
   type MemberDocument,
+  type MemberFieldRequest,
   type MemberProfile,
 } from "../screens/members/model";
+import { CompetencyPanel } from "../screens/members/CompetencyPanel";
+import { FieldRequestPanel } from "../screens/members/FieldRequestPanel";
 
+import "../screens/attendance.css";
 import "./MemberProfilePage.css";
 
-type Tab = "profile" | "history" | "activity" | "documents" | "assets";
+type Tab = "profile" | "history" | "activity" | "documents" | "assets" | "competencies";
 
 const TABS: ReadonlyArray<{ key: Tab; label: string }> = [
   { key: "profile", label: "프로필" },
   { key: "history", label: "소속·직책 이력" },
   { key: "activity", label: "활동" },
+  { key: "competencies", label: "역량" },
   { key: "documents", label: "문서" },
   { key: "assets", label: "장비" },
 ];
@@ -45,6 +53,9 @@ export function MemberProfilePage() {
   const [activity, setActivity] = useState<readonly MemberActivityItem[]>([]);
   const [documents, setDocuments] = useState<readonly MemberDocument[]>([]);
   const [assets, setAssets] = useState<readonly MemberAsset[]>([]);
+  const [competencies, setCompetencies] = useState<readonly MemberCompetency[]>([]);
+  const [fieldRequests, setFieldRequests] = useState<readonly MemberFieldRequest[]>([]);
+  const [hasMemberWrite, setHasMemberWrite] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState<Readonly<Record<string, string>>>({});
@@ -63,8 +74,11 @@ export function MemberProfilePage() {
       apiRequest(`/members/activity?member_id=${memberId}`, { session: apiSession }),
       apiRequest(`/documents?owner_id=${memberId}`, { session: apiSession }),
       apiRequest(`/assets?custodian_id=${memberId}`, { session: apiSession }),
+      apiRequest(`/members/${memberId}/competencies`, { session: apiSession }),
+      apiRequest(`/members/${memberId}/field-requests`, { session: apiSession }),
     ]);
-    const [profileResult, activityResult, documentsResult, assetsResult] = results;
+    const [profileResult, activityResult, documentsResult, assetsResult, competenciesResult, fieldRequestsResult] =
+      results;
     const nextErrors: Record<string, string> = {};
 
     if (profileResult.status === "fulfilled") {
@@ -96,6 +110,21 @@ export function MemberProfilePage() {
       nextErrors.assets = userMessageOf(assetsResult.reason);
     }
 
+    if (competenciesResult.status === "fulfilled") {
+      setCompetencies(memberCompetencyListSchema.parse(competenciesResult.value).items);
+    } else {
+      setCompetencies([]);
+    }
+
+    // 이 요청은 본인이거나 member.write가 있어야 성공한다 — 성공 여부 자체가 "관리 가능" 판정 신호다.
+    if (fieldRequestsResult.status === "fulfilled") {
+      setFieldRequests(memberFieldRequestListSchema.parse(fieldRequestsResult.value).items);
+      setHasMemberWrite(true);
+    } else {
+      setFieldRequests([]);
+      setHasMemberWrite(false);
+    }
+
     setErrors(nextErrors);
     setLoading(false);
   }, [apiSession, memberId]);
@@ -106,6 +135,8 @@ export function MemberProfilePage() {
 
   const assignmentHistory = activity.filter((item) => item.action === ASSIGNMENT_ACTION);
   const otherActivity = activity.filter((item) => item.action !== ASSIGNMENT_ACTION);
+  const isSelf = Boolean(profile && session && profile.email === session.email);
+  const canManageOthers = hasMemberWrite && !isSelf;
 
   if (notFound) {
     return (
@@ -171,6 +202,17 @@ export function MemberProfilePage() {
         </SectionCard>
       )}
 
+      {tab === "profile" && apiSession && (isSelf || canManageOthers) && (
+        <FieldRequestPanel
+          memberId={memberId ?? ""}
+          apiSession={apiSession}
+          requests={fieldRequests}
+          isSelf={isSelf}
+          canManage={canManageOthers}
+          onChanged={() => void reload()}
+        />
+      )}
+
       {tab === "history" && (
         <SectionCard title="소속·직책 이력" subtitle="감사 로그에서 재구성한 변경 이력">
           {errors.activity && <div className="form-error" role="alert">{errors.activity}</div>}
@@ -222,6 +264,17 @@ export function MemberProfilePage() {
             </div>
           )}
         </SectionCard>
+      )}
+
+      {tab === "competencies" && apiSession && (
+        <CompetencyPanel
+          memberId={memberId ?? ""}
+          apiSession={apiSession}
+          competencies={competencies}
+          isSelf={isSelf}
+          canManage={canManageOthers}
+          onChanged={() => void reload()}
+        />
       )}
 
       {tab === "documents" && (

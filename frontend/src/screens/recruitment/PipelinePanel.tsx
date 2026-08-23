@@ -12,6 +12,7 @@ import {
   type Application,
   type Posting,
 } from "./model";
+import { digitsOnly, toNonNegativeInt } from "../../utils/numberInput";
 
 type Props = Readonly<{ apiSession: ApiSession }>;
 
@@ -36,6 +37,7 @@ export function PipelinePanel({ apiSession }: Props) {
   const [movingId, setMovingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [scoreDrafts, setScoreDrafts] = useState<Record<string, string>>({});
 
   const reload = useCallback(async (): Promise<void> => {
     try {
@@ -156,6 +158,24 @@ export function PipelinePanel({ apiSession }: Props) {
     }
   }
 
+  function scoreValue(application: Application): string {
+    const draft = scoreDrafts[application.id];
+    if (draft !== undefined) return draft;
+    return application.score === null ? "0" : String(application.score);
+  }
+
+  function commitScore(application: Application): void {
+    const draft = scoreDrafts[application.id];
+    if (draft === undefined) return;
+    const value = toNonNegativeInt(draft, 100);
+    setScoreDrafts((prev) => {
+      const next = { ...prev };
+      delete next[application.id];
+      return next;
+    });
+    if (value !== (application.score ?? 0)) void setScore(application, value);
+  }
+
   async function inviteApplicant(application: Application): Promise<void> {
     setMovingId(application.id);
     setError(null);
@@ -274,15 +294,14 @@ export function PipelinePanel({ apiSession }: Props) {
                         <label className="recruitment-card__score">
                           평가 점수
                           <input
-                            type="number"
-                            min={0}
-                            max={100}
-                            value={application.score ?? ""}
+                            type="text"
+                            inputMode="numeric"
+                            value={scoreValue(application)}
                             disabled={busyCard}
-                            onChange={(event) => {
-                              const value = Number(event.target.value);
-                              if (!Number.isNaN(value)) void setScore(application, value);
-                            }}
+                            onChange={(event) =>
+                              setScoreDrafts((prev) => ({ ...prev, [application.id]: digitsOnly(event.target.value) }))
+                            }
+                            onBlur={() => commitScore(application)}
                           />
                         </label>
                         <div className="recruitment-card__actions">
