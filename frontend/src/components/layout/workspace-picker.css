@@ -1,0 +1,19 @@
+/* 사이드바 회사 선택기의 브랜치 만들기·설정 영역 */
+.workspace-picker__group-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.workspace-picker__group-actions { display: flex; gap: 4px; padding-right: 4px; }
+.workspace-picker__icon { display: grid; min-width: 22px; height: 22px; place-items: center; border: 1px solid var(--of-border); border-radius: var(--r-sm); background: var(--of-card); color: var(--of-primary); font: inherit; font-size: 13px; font-weight: 800; line-height: 1; cursor: pointer; }
+.workspace-picker__icon--text { padding: 0 7px; font-size: 10.5px; }
+.workspace-picker__icon:hover { border-color: var(--of-primary); }
+.workspace-picker__item:disabled { opacity: .45; cursor: not-allowed; }
+
+.branch-create { display: grid; gap: 10px; margin: 6px; border: 1px solid var(--of-primary); border-radius: var(--r-md); padding: 10px; }
+.branch-create > label { display: flex; flex-direction: column; gap: 5px; font-size: 11px; font-weight: 800; }
+.branch-create__roles { display: grid; gap: 5px; border: 1px solid var(--of-border); border-radius: var(--r-sm); padding: 8px; }
+.branch-create__roles legend { padding: 0 4px; font-size: 10px; font-weight: 800; }
+.branch-create__roles label { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 500; }
+.branch-create__roles input { width: 14px; min-height: 14px; height: 14px; accent-color: var(--of-primary); }
+.branch-create__roles p { margin: 2px 0 0; color: var(--of-text-muted); font-size: 9.5px; line-height: 1.4; }
+.branch-create__error { margin: 0; color: var(--of-danger); font-size: 10.5px; font-weight: 700; }
+.branch-create__actions { display: flex; justify-content: flex-end; gap: 6px; }
+.branch-create__actions button { border: 1px solid var(--of-border); border-radius: var(--r-sm); background: var(--of-card); padding: 4px 9px; font: inherit; font-size: 10.5px; font-weight: 800; cursor: pointer; }
+.branch-create__submit { border-color: var(--of-primary); background: var(--of-primary); color: #fff; }

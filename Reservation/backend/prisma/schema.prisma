@@ -1,0 +1,118 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ──────────────────────────────────────────────
+// Enums
+// ──────────────────────────────────────────────
+
+enum ReservationStatus {
+  CONFIRMED
+  CANCELLED
+}
+
+enum RecurrenceFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum AttendeeStatus {
+  INVITED
+  ACCEPTED
+  DECLINED
+}
+
+// ──────────────────────────────────────────────
+// Models
+// ──────────────────────────────────────────────
+
+model Space {
+  id           Int           @id @default(autoincrement())
+  name         String
+  location     String
+  floor        String?
+  capacity     Int
+  amenities    Json?         // ["프로젝터", "화이트보드"]
+  isActive     Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  reservations Reservation[]
+  waitlists    Waitlist[]
+
+  @@map("spaces")
+}
+
+model RecurrenceRule {
+  id             Int                 @id @default(autoincrement())
+  frequency      RecurrenceFrequency
+  interval       Int                 @default(1)
+  daysOfWeek     Json?               // ["MON", "WED"]
+  endDate        DateTime?
+  maxOccurrences Int?
+  reservations   Reservation[]
+
+  @@map("recurrence_rules")
+}
+
+model Reservation {
+  id               Int               @id @default(autoincrement())
+  spaceId          Int
+  userId           Int               // 타팀 User 테이블 FK (JPA 관계 없이 ID만 참조)
+  title            String
+  description      String?
+  startTime        DateTime
+  endTime          DateTime
+  status           ReservationStatus @default(CONFIRMED)
+  recurrenceRuleId Int?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  space          Space           @relation(fields: [spaceId], references: [id])
+  recurrenceRule RecurrenceRule? @relation(fields: [recurrenceRuleId], references: [id])
+  attendees      Attendee[]
+
+  @@index([spaceId, startTime, endTime])
+  @@index([userId])
+  @@map("reservations")
+}
+
+model Attendee {
+  id            Int            @id @default(autoincrement())
+  reservationId Int
+  name          String
+  email         String
+  department    String?
+  status        AttendeeStatus @default(INVITED)
+  inviteToken   String         @unique @default(uuid())
+  createdAt     DateTime       @default(now())
+
+  reservation Reservation @relation(fields: [reservationId], references: [id])
+
+  @@index([reservationId])
+  @@map("attendees")
+}
+
+model Waitlist {
+  id          Int      @id @default(autoincrement())
+  spaceId     Int
+  userId      Int
+  title       String
+  description String?
+  startTime   DateTime
+  endTime     DateTime
+  createdAt   DateTime @default(now())
+
+  space Space @relation(fields: [spaceId], references: [id])
+
+  @@index([spaceId, startTime])
+  @@map("waitlists")
+}
