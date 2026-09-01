@@ -106,6 +106,13 @@ export const recurrenceInputSchema = z.object({
 });
 export type RecurrenceInput = z.infer<typeof recurrenceInputSchema>;
 
+export const createAttendeeItemSchema = z.object({
+  name: z.string().min(1, "이름은 필수입니다."),
+  email: z.string().email("유효한 이메일을 입력해주세요."),
+  department: z.string().optional(),
+});
+export type CreateAttendeeItem = z.infer<typeof createAttendeeItemSchema>;
+
 export const createReservationInputSchema = z.object({
   spaceId: z.number(),
   title: z.string().min(1, "제목은 필수입니다."),
@@ -113,6 +120,7 @@ export const createReservationInputSchema = z.object({
   startTime: z.string(),
   endTime: z.string(),
   recurrence: recurrenceInputSchema.optional(),
+  attendees: z.array(createAttendeeItemSchema).optional(),
 });
 export type CreateReservationInput = z.infer<typeof createReservationInputSchema>;
 
@@ -190,3 +198,11 @@ export const FREQUENCY_LABEL: Record<string, string> = {
   WEEKLY: "매주",
   MONTHLY: "매월",
 };
+
+export function formatRecurrenceRule(rule?: RecurrenceRule | null): string {
+  if (!rule) return "";
+  const freq = FREQUENCY_LABEL[rule.frequency] ?? rule.frequency;
+  const intervalStr = rule.interval > 1 ? `${rule.interval}회 주기` : "";
+  const endDateStr = rule.endDate ? `, ${formatDate(rule.endDate)}까지` : "";
+  return `${freq}${intervalStr ? ` (${intervalStr})` : ""}${endDateStr}`;
+}

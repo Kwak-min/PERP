@@ -3,6 +3,7 @@ import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { SectionCard } from "../components/ui/SectionCard";
 import type { ScreenDefinition } from "../routes/catalog";
+import { useSession } from "../store/session";
 import {
   addWaitlist,
   cancelReservation,
@@ -26,6 +27,7 @@ import {
   formatDate,
   formatDateRange,
   formatTime,
+  formatRecurrenceRule,
   reservationSchema,
   spaceSchema,
   STATUS_LABEL,
@@ -61,6 +63,13 @@ type SpaceAdminModalState =
   | { type: "edit"; space: Space };
 
 export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) {
+  const session = useSession();
+  const userRoles = session?.organizations?.flatMap((org) => org.roles) ?? [];
+  const isAdmin = Boolean(
+    userRoles.some((r: string) => ["admin", "owner", "ADMIN", "OWNER"].includes(r)) ||
+    session?.email?.toLowerCase().includes("admin")
+  );
+
   const [activeTab, setActiveTab] = useState<MainTab>("spaces");
 
   // ── Tab 1: 공간 검색 & 예약 상태 ──────────────────────────────────────
@@ -78,6 +87,7 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
   const [selectedSpaceId, setSelectedSpaceId] = useState<number | null>(null);
   const [selectedSpace, setSelectedSpace] = useState<Space | null>(null);
   const [timetableDate, setTimetableDate] = useState(todayStr);
+  const [slotMinutes, setSlotMinutes] = useState<number>(60);
   const [slots, setSlots] = useState<TimetableSlot[]>([]);
   const [timetableLoading, setTimetableLoading] = useState(false);
   const [timetableModal, setTimetableModal] = useState<TimetableModalState | null>(null);
@@ -128,13 +138,13 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
   }, [filterDate, startHour, endHour, minCapacity]);
 
   // ── 선택된 공간 타임테이블 불러오기 ────────────────────────────────────
-  const loadTimetable = useCallback(async (spaceId: number, date: string) => {
+  const loadTimetable = useCallback(async (spaceId: number, date: string, minutes: number = 60) => {
     try {
       setTimetableLoading(true);
       setSpacesError(null);
       const [spaceRaw, timetableRaw] = await Promise.all([
         getSpaceById(spaceId),
-        getTimetable(spaceId, date),
+        getTimetable(spaceId, date, minutes),
       ]);
       setSelectedSpace(spaceSchema.parse(spaceRaw));
       const timetable = timetableRaw as { slots?: unknown[] };
@@ -205,12 +215,12 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
     }
   }, [activeTab, selectedSpaceId, loadSpaces, loadMyReservations, loadWaitlist, loadAdminSpaces]);
 
-  // 타임테이블 날짜 변경 시 로드
+  // 타임테이블 날짜/슬롯단위 변경 시 로드
   useEffect(() => {
     if (selectedSpaceId !== null) {
-      void loadTimetable(selectedSpaceId, timetableDate);
+      void loadTimetable(selectedSpaceId, timetableDate, slotMinutes);
     }
-  }, [selectedSpaceId, timetableDate, loadTimetable]);
+  }, [selectedSpaceId, timetableDate, slotMinutes, loadTimetable]);
 
   const hours = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
 
@@ -224,14 +234,14 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
   const handleCreateReservation = async (dto: CreateReservationInput | UpdateReservationInput) => {
     await createReservation(dto as CreateReservationInput);
     if (selectedSpaceId !== null) {
-      await loadTimetable(selectedSpaceId, timetableDate);
+      await loadTimetable(selectedSpaceId, timetableDate, slotMinutes);
     }
   };
 
   const handleUpdateReservation = async (id: number, dto: CreateReservationInput | UpdateReservationInput) => {
     await updateReservation(id, dto as UpdateReservationInput);
     if (selectedSpaceId !== null) {
-      await loadTimetable(selectedSpaceId, timetableDate);
+      await loadTimetable(selectedSpaceId, timetableDate, slotMinutes);
     }
   };
 
@@ -241,7 +251,7 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
       await cancelReservation(r.id, scope);
       setTimetableModal(null);
       if (selectedSpaceId !== null) {
-        await loadTimetable(selectedSpaceId, timetableDate);
+        await loadTimetable(selectedSpaceId, timetableDate, slotMinutes);
       }
     } catch (e: unknown) {
       setSpacesError(e instanceof Error ? e.message : "취소에 실패했습니다.");
@@ -351,26 +361,28 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
             setSelectedSpaceId(null);
           }}
         >
-          🏢 공간 예약
+          공간 예약
         </button>
         <button
           className={`rsv-tab ${activeTab === "my" ? "active" : ""}`}
           onClick={() => setActiveTab("my")}
         >
-          📅 내 예약
+          내 예약
         </button>
         <button
           className={`rsv-tab ${activeTab === "waitlist" ? "active" : ""}`}
           onClick={() => setActiveTab("waitlist")}
         >
-          ⏳ 대기열
+          대기열
         </button>
-        <button
-          className={`rsv-tab ${activeTab === "admin" ? "active" : ""}`}
-          onClick={() => setActiveTab("admin")}
-        >
-          ⚙️ 공간 관리
-        </button>
+        {isAdmin && (
+          <button
+            className={`rsv-tab ${activeTab === "admin" ? "active" : ""}`}
+            onClick={() => setActiveTab("admin")}
+          >
+            공간 관리
+          </button>
+        )}
       </div>
 
       {/* ─────────────────────────────────────────────────────────────────── */}
@@ -505,6 +517,25 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
                     fontSize: "0.875rem",
                   }}
                 />
+
+                {/* 슬롯 단위 (15분 / 30분 / 60분) 선택기 */}
+                <div style={{ display: "flex", alignItems: "center", gap: "0.25rem", marginLeft: "0.5rem" }}>
+                  <span style={{ fontSize: "0.75rem", color: "var(--of-text-muted, #475569)", fontWeight: 600, marginRight: "0.15rem" }}>
+                    단위:
+                  </span>
+                  {[15, 30, 60].map((mins) => (
+                    <button
+                      key={mins}
+                      type="button"
+                      className={`btn ${slotMinutes === mins ? "btn-primary" : "btn-ghost"}`}
+                      style={{ fontSize: "0.75rem", padding: "0.2rem 0.55rem", minHeight: "26px" }}
+                      onClick={() => setSlotMinutes(mins)}
+                    >
+                      {mins}분
+                    </button>
+                  ))}
+                </div>
+
                 <div style={{ display: "flex", gap: "0.5rem", fontSize: "0.75rem", marginLeft: "auto" }}>
                   <span style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
                     <span style={{ width: 12, height: 12, borderRadius: 3, background: "var(--of-primary-soft, #eef2ff)", border: "1px solid #c7d2fe", display: "inline-block" }} /> 예약 가능
@@ -609,7 +640,22 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
                       <div className="rsv-card-meta">
                         <span>{r.space?.name ?? `공간 #${r.spaceId}`}</span>
                         <span>{formatDateRange(r.startTime, r.endTime)}</span>
-                        {r.recurrenceRuleId && <span>🔁 반복 예약</span>}
+                        {r.recurrenceRuleId && (
+                          <span style={{ color: "var(--of-primary, #4f46e5)", fontWeight: 500 }}>
+                            🔁 {formatRecurrenceRule(r.recurrenceRule) || "반복 예약"}
+                          </span>
+                        )}
+                        {r.attendees && r.attendees.length > 0 && (
+                          <span style={{ fontSize: "0.78rem", color: "var(--of-text-muted, #475569)", marginTop: "0.15rem" }}>
+                            👥 참석자 {r.attendees.length}명
+                            {" ("}
+                            수락 {r.attendees.filter((a) => a.status === "ACCEPTED").length}
+                            {" · "}
+                            대기 {r.attendees.filter((a) => a.status === "INVITED").length}
+                            {r.attendees.some((a) => a.status === "DECLINED") && ` · 거절 ${r.attendees.filter((a) => a.status === "DECLINED").length}`}
+                            {")"}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div className="rsv-card-actions">
@@ -652,7 +698,7 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
       {activeTab === "waitlist" && (
         <>
           <div className="rsv-success-banner" style={{ marginBottom: "1rem" }}>
-            💡 원하는 공간이 꽉 찬 경우 대기 등록을 하면, 앞 예약이 취소될 때 자동으로 승격됩니다.
+            원하는 공간이 꽉 찬 경우 대기 등록을 하면, 앞 예약이 취소될 때 자동으로 승격됩니다.
           </div>
 
           {waitlistError && <div className="rsv-error-banner">{waitlistError}</div>}
@@ -712,8 +758,9 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
       {/* TAB 4: 공간 관리 (관리자) 뷰                                        */}
       {/* ─────────────────────────────────────────────────────────────────── */}
       {activeTab === "admin" && (
-        <>
-          <div style={{ marginBottom: "1.25rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        isAdmin ? (
+          <>
+            <div style={{ marginBottom: "1.25rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={{ fontSize: "0.875rem", color: "var(--of-text-muted, #475569)" }}>
               공간을 등록하고 관리합니다.
             </span>
@@ -798,6 +845,17 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
             )}
           </SectionCard>
         </>
+        ) : (
+          <div className="rsv-empty" style={{ padding: "4rem 1rem" }}>
+            <div className="rsv-empty-icon">🔒</div>
+            <div className="rsv-empty-text" style={{ fontSize: "1rem", fontWeight: 600, marginTop: "0.5rem" }}>
+              공간 등록 및 관리는 관리자(Admin) 계정만 이용할 수 있습니다.
+            </div>
+            <p style={{ fontSize: "0.85rem", color: "var(--of-text-muted, #475569)", marginTop: "0.25rem" }}>
+              일반 사용자 계정은 회의실 검색, 예약, 내 예약 현황 및 대기열 기능을 이용하실 수 있습니다.
+            </p>
+          </div>
+        )
       )}
 
       {/* ─────────────────────────────────────────────────────────────────── */}
