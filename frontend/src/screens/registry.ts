@@ -8,6 +8,7 @@ import { OrgChartScreen } from "./OrgChartScreen";
 import { OrgLogScreen } from "./OrgLogScreen";
 import { RecruitmentScreen } from "./RecruitmentScreen";
 import { VaultScreen } from "./VaultScreen";
+import { ReservationScreen } from "./ReservationScreen";
 
 export type ScreenComponent = ComponentType<Readonly<{ screen: ScreenDefinition }>>;
 
@@ -22,4 +23,6 @@ export const screenOverrides: Readonly<Record<string, ScreenComponent>> = {
   "HR-003": LeaveScreen,
   "HR-004": RecruitmentScreen,
   "VLT-001": VaultScreen,
+  // ── 예약 시스템 (통합 화면) ──────────────────────────────────
+  "RSV-001": ReservationScreen,
 };

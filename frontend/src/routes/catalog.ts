@@ -83,6 +83,8 @@ export const screens: readonly ScreenDefinition[] = [
   { id: "ADM-003", path: "/admin/ai-policy", label: "AI 정책", description: "모델, 데이터 등급과 도구 실행 정책을 설정합니다.", section: "admin", endpoint: "/agent/profile", module: "agent" },
   { id: "ADM-004", path: "/admin/data", label: "데이터 관리", description: "가져오기, 내보내기와 보존 정책을 관리합니다.", section: "admin", endpoint: "/imports", module: null },
   { id: "ADM-005", path: "/admin/billing", label: "요금과 사용량", description: "플랜, AI 사용량과 비용을 확인합니다.", section: "admin", endpoint: "/agent/usage", module: "agent" },
+  // ── 예약 시스템 (업무 섹션 통합 페이지) ──────────────────────────────────
+  { id: "RSV-001", path: "/reserve", label: "예약", description: "공간 검색 및 예약, 내 예약 현황, 대기열 및 관리를 한곳에서 처리합니다.", section: "work", endpoint: null, module: "reservations", nav: true },
 ] as const;
 
 export const allRoutePaths = [...publicRoutes, ...screens.map((screen) => screen.path)];
