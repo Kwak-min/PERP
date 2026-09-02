@@ -86,6 +86,22 @@ export const reservationService = {
         include: { space: true },
       });
       emailService.sendReservationConfirmed(reservation).catch(console.error);
+
+      if (dto.attendees && dto.attendees.length > 0) {
+        for (const a of dto.attendees) {
+          const attendee = await prisma.attendee.create({
+            data: {
+              reservationId: reservation.id,
+              name: a.name,
+              email: a.email,
+              department: a.department,
+            },
+            include: { reservation: { include: { space: true } } },
+          });
+          emailService.sendAttendeeInvite(attendee).catch(console.error);
+        }
+      }
+
       return [reservation];
     }
 
