@@ -161,9 +161,9 @@ export function createDocument(req, res) {
 export function listDocuments(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("document.read");
-  const filters = req.query.doc_type
-    ? [{ sql: "doc_type = ?", params: [req.query.doc_type] }]
-    : [];
+  const filters = [];
+  if (req.query.doc_type) filters.push({ sql: "doc_type = ?", params: [req.query.doc_type] });
+  if (req.query.owner_id) filters.push({ sql: "owner_id = ?", params: [req.query.owner_id] });
   const rows = listScoped("document", principal, filters, {
     limit: Number(req.query.limit ?? 50),
     orderBy: "updated_at DESC",

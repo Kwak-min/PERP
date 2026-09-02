@@ -8,6 +8,12 @@ const recurrenceSchema = z.object({
   maxOccurrences: z.number().int().min(1).optional(),
 });
 
+const createAttendeeInputSchema = z.object({
+  name: z.string().min(1, '이름은 필수입니다.'),
+  email: z.string().email('유효한 이메일을 입력해주세요.'),
+  department: z.string().optional(),
+});
+
 export const createReservationSchema = z.object({
   spaceId: z.number().int().positive('공간 ID는 필수입니다.'),
   userId: z.number().int().positive('사용자 ID는 필수입니다.'),
@@ -16,6 +22,7 @@ export const createReservationSchema = z.object({
   startTime: z.coerce.date(),
   endTime: z.coerce.date(),
   recurrence: recurrenceSchema.optional(),
+  attendees: z.array(createAttendeeInputSchema).optional(),
 }).refine((d) => d.endTime > d.startTime, {
   message: '종료 시간은 시작 시간 이후여야 합니다.',
   path: ['endTime'],

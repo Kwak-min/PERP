@@ -57,9 +57,9 @@ export const screens: readonly ScreenDefinition[] = [
   { id: "AST-002", path: "/assets/:assetId", label: "자산 상세", description: "자산 이력, 대여와 점검 상태를 확인합니다.", section: "operations", endpoint: null, module: "assets" },
   { id: "AST-003", path: "/assets/reservations", label: "예약", description: "자산과 공간의 예약 일정을 관리합니다.", section: "operations", endpoint: "/assets/reservations", module: "assets" },
   { id: "HR-001", path: "/hr/members/:memberId", label: "인사 프로필", description: "구성원의 소속, 근태와 온보딩 상태를 확인합니다.", section: "people", endpoint: null, module: "hr" },
-  { id: "HR-002", path: "/hr/attendance", label: "근태", description: "출근, 지각, 원격과 휴가 기록을 관리합니다.", section: "people", endpoint: "/hr/attendance", module: "hr", nav: true },
-  { id: "HR-003", path: "/hr/leave", label: "휴가", description: "휴가 잔여일과 승인 요청을 관리합니다.", section: "people", endpoint: "/hr/leaves", module: "hr" },
-  { id: "HR-004", path: "/hr/recruitment", label: "모집", description: "공고, 지원자 단계와 합격자 온보딩을 관리합니다.", section: "people", endpoint: "/hr/postings", module: "hr" },
+  { id: "HR-002", path: "/hr/attendance", label: "근태", description: "출근·지각·결근·원격 기록과 활동시간을 관리합니다.", section: "people", endpoint: "/hr/attendance", module: "hr", nav: true },
+  { id: "HR-003", path: "/hr/leave", label: "휴가", description: "휴가 잔여일과 승인 요청을 관리합니다.", section: "people", endpoint: "/hr/leaves", module: "hr", nav: true },
+  { id: "HR-004", path: "/hr/recruitment", label: "모집", description: "공고, 지원자 단계와 합격자 온보딩을 관리합니다.", section: "people", endpoint: "/hr/postings", module: "hr", nav: true },
   { id: "DOC-001", path: "/documents", label: "문서", description: "조직 문서와 위키를 공간별로 정리합니다.", section: "knowledge", endpoint: "/documents", module: "documents", nav: true },
   { id: "DOC-002", path: "/documents/:documentId", label: "문서 편집", description: "문서 본문, 버전과 검토 상태를 관리합니다.", section: "knowledge", endpoint: null, module: "documents" },
   { id: "DOC-003", path: "/documents/meetings/:meetingId", label: "회의록", description: "회의 결정사항을 검토하고 후속 업무로 확정합니다.", section: "knowledge", endpoint: null, module: "documents" },
@@ -83,6 +83,8 @@ export const screens: readonly ScreenDefinition[] = [
   { id: "ADM-003", path: "/admin/ai-policy", label: "AI 정책", description: "모델, 데이터 등급과 도구 실행 정책을 설정합니다.", section: "admin", endpoint: "/agent/profile", module: "agent" },
   { id: "ADM-004", path: "/admin/data", label: "데이터 관리", description: "가져오기, 내보내기와 보존 정책을 관리합니다.", section: "admin", endpoint: "/imports", module: null },
   { id: "ADM-005", path: "/admin/billing", label: "요금과 사용량", description: "플랜, AI 사용량과 비용을 확인합니다.", section: "admin", endpoint: "/agent/usage", module: "agent" },
+  // ── 예약 시스템 (업무 섹션 통합 페이지) ──────────────────────────────────
+  { id: "RSV-001", path: "/reserve", label: "예약", description: "공간 검색 및 예약, 내 예약 현황, 대기열 및 관리를 한곳에서 처리합니다.", section: "work", endpoint: null, module: "reservations", nav: true },
 ] as const;
 
 export const allRoutePaths = [...publicRoutes, ...screens.map((screen) => screen.path)];

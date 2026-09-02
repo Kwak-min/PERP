@@ -1,48 +1,48 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import type { z } from "zod";
 
-import { MonthCalendar } from "../components/data/MonthCalendar";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { SectionCard } from "../components/ui/SectionCard";
 import { StatCard, type Stat } from "../components/ui/StatCard";
+import { useMembers } from "../hooks/useMembers";
 import type { ScreenDefinition } from "../routes/catalog";
 import { apiRequest, userMessageOf } from "../services/api";
 import { useSession } from "../store/session";
-import { LeaveRequestForm } from "./attendance/LeaveRequestForm";
-import {
-  KIND_LABELS,
-  LEAVE_KIND_LABELS,
-  attendanceSchema,
-  balanceSchema,
-  leaveCalendarSchema,
-  leaveEventsOf,
-  monthRange,
-} from "./attendance/model";
+import { AttendanceCorrectionPanel } from "./attendance/AttendanceCorrectionPanel";
+import { KIND_LABELS, attendanceSchema, monthRange, type AttendanceRow } from "./attendance/model";
 
 import "./attendance.css";
+import "./leave/leave.css";
 
 type Attendance = z.infer<typeof attendanceSchema>;
-type Balances = z.infer<typeof balanceSchema>["items"];
-type LeaveItems = z.infer<typeof leaveCalendarSchema>["items"];
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formatTime(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+}
 
 export function AttendanceScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const session = useSession();
   const now = new Date();
+  const [tab, setTab] = useState<"mine" | "manage">("mine");
   const [monthOffset, setMonthOffset] = useState(0);
   const [attendance, setAttendance] = useState<Attendance | null>(null);
-  const [balances, setBalances] = useState<Balances>([]);
-  const [leaves, setLeaves] = useState<LeaveItems>([]);
-  const [formOpen, setFormOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [today, setToday] = useState<AttendanceRow | null>(null);
+  const [canManage, setCanManage] = useState(false);
+  const [checkBusy, setCheckBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [correctionsReloadKey, setCorrectionsReloadKey] = useState(0);
 
   const apiSession = useMemo(
     () => (session?.orgId ? { token: session.token, orgId: session.orgId } : null),
     [session?.token, session?.orgId],
   );
+  const members = useMembers(apiSession);
 
   const shown = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
   const shownYear = shown.getFullYear();
@@ -51,31 +51,77 @@ export function AttendanceScreen({ screen }: Readonly<{ screen: ScreenDefinition
 
   const reload = useCallback(async (): Promise<void> => {
     if (!apiSession) return;
-    const results = await Promise.allSettled([
-      apiRequest(`/hr/attendance?from=${range.from}&to=${range.to}`, { session: apiSession }),
-      apiRequest("/hr/leave-balances", { session: apiSession }),
-      apiRequest(`/hr/leaves/calendar?from=${range.from}&to=${range.to}`, { session: apiSession }),
-    ]);
-    const [attendanceResult, balanceResult, leaveResult] = results;
-    setAttendance(
-      attendanceResult.status === "fulfilled" ? attendanceSchema.parse(attendanceResult.value) : null,
-    );
-    setBalances(
-      balanceResult.status === "fulfilled" ? balanceSchema.parse(balanceResult.value).items : [],
-    );
-    setLeaves(
-      leaveResult.status === "fulfilled" ? leaveCalendarSchema.parse(leaveResult.value).items : [],
-    );
-    const failure = results.find((result) => result.status === "rejected");
-    setError(failure && failure.status === "rejected" ? userMessageOf(failure.reason) : null);
+    try {
+      const data = await apiRequest(`/hr/attendance?from=${range.from}&to=${range.to}`, {
+        session: apiSession,
+      });
+      setAttendance(attendanceSchema.parse(data));
+      setError(null);
+    } catch (caught) {
+      setAttendance(null);
+      setError(userMessageOf(caught));
+    }
   }, [apiSession, range.from, range.to]);
+
+  const reloadToday = useCallback(async (): Promise<void> => {
+    if (!apiSession) return;
+    try {
+      const day = todayIso();
+      const data = await apiRequest(`/hr/attendance?from=${day}&to=${day}`, { session: apiSession });
+      setToday(attendanceSchema.parse(data).items[0] ?? null);
+    } catch {
+      setToday(null);
+    }
+  }, [apiSession]);
+
+  const reloadManagePermission = useCallback(async (): Promise<void> => {
+    if (!apiSession) return;
+    try {
+      await apiRequest("/hr/attendance/corrections/pending", { session: apiSession });
+      setCanManage(true);
+    } catch {
+      setCanManage(false);
+    }
+  }, [apiSession]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
 
+  useEffect(() => {
+    void reloadToday();
+    void reloadManagePermission();
+  }, [reloadToday, reloadManagePermission]);
+
+  async function checkIn(): Promise<void> {
+    if (!apiSession) return;
+    setCheckBusy(true);
+    setError(null);
+    try {
+      await apiRequest("/hr/attendance/check-in", { method: "POST", session: apiSession });
+      await Promise.all([reload(), reloadToday()]);
+    } catch (caught) {
+      setError(userMessageOf(caught));
+    } finally {
+      setCheckBusy(false);
+    }
+  }
+
+  async function checkOut(): Promise<void> {
+    if (!apiSession) return;
+    setCheckBusy(true);
+    setError(null);
+    try {
+      await apiRequest("/hr/attendance/check-out", { method: "POST", session: apiSession });
+      await Promise.all([reload(), reloadToday()]);
+    } catch (caught) {
+      setError(userMessageOf(caught));
+    } finally {
+      setCheckBusy(false);
+    }
+  }
+
   const byKind = attendance?.summary.by_kind ?? {};
-  const remaining = balances.reduce((sum, balance) => sum + balance.remaining_days, 0);
   const lastRecord = attendance?.items[0] ?? null;
 
   const myStats: readonly Stat[] = [
@@ -103,39 +149,7 @@ export function AttendanceScreen({ screen }: Readonly<{ screen: ScreenDefinition
       trend: "flat",
       foot: lastRecord ? `${KIND_LABELS[lastRecord.kind] ?? lastRecord.kind} ${lastRecord.hours}시간` : "—",
     },
-    {
-      label: "잔여 휴가",
-      value: String(remaining),
-      unit: "일",
-      delta: balances.length > 0 ? `${balances.length}종` : "부여 없음",
-      trend: remaining > 0 ? "up" : "flat",
-      foot: "승인된 휴가 차감 반영",
-    },
   ];
-
-  async function submitLeave(input: Readonly<{ kind: string; start_on: string; end_on: string; reason: string }>): Promise<void> {
-    if (!apiSession) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const created = (await apiRequest("/hr/leaves", {
-        method: "POST",
-        session: apiSession,
-        body: input,
-      })) as { approval_id?: string | null };
-      setFormOpen(false);
-      setNotice(
-        created.approval_id
-          ? "휴가 신청을 결재함으로 올렸습니다. 결재 화면에서 진행 상태를 확인하세요."
-          : "휴가 신청을 접수했습니다. 결재자가 지정되지 않아 승인 대기 상태로 남습니다.",
-      );
-      await reload();
-    } catch (caught) {
-      setError(userMessageOf(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
 
   const rows = attendance?.items ?? [];
 
@@ -152,117 +166,105 @@ export function AttendanceScreen({ screen }: Readonly<{ screen: ScreenDefinition
           <p>{screen.description}</p>
         </div>
         <div className="screen-header__actions">
-          <Button tone="neutral" size="small" disabled={busy} onClick={() => void reload()}>
-            새로 고침
+          <Button
+            tone="neutral"
+            size="small"
+            disabled={checkBusy || Boolean(today?.check_in_at)}
+            onClick={() => void checkIn()}
+          >
+            {today?.check_in_at ? `출근 ${formatTime(today.check_in_at)}` : "출근"}
           </Button>
-          <Button size="small" onClick={() => setFormOpen((value) => !value)}>
-            휴가 신청
+          <Button
+            tone="neutral"
+            size="small"
+            disabled={checkBusy || !today?.check_in_at || Boolean(today?.check_out_at)}
+            onClick={() => void checkOut()}
+          >
+            {today?.check_out_at ? `퇴근 ${formatTime(today.check_out_at)}` : "퇴근"}
+          </Button>
+          <Button tone="neutral" size="small" onClick={() => void reload()}>
+            새로 고침
           </Button>
         </div>
       </header>
 
       {error && <div className="form-error" role="alert">{error}</div>}
-      {notice && (
-        <div className="screen-notice" role="status">
-          <span>{notice}</span>
-          <Link className="button button--ghost button--small" to="/approvals">결재함 열기</Link>
-          <Button tone="ghost" size="small" onClick={() => setNotice(null)}>닫기</Button>
+
+      {canManage && (
+        <div className="leave-tabs" role="tablist" aria-label="근태 화면 전환">
+          <button type="button" role="tab" aria-pressed={tab === "mine"} onClick={() => setTab("mine")}>
+            내 근태
+          </button>
+          <button type="button" role="tab" aria-pressed={tab === "manage"} onClick={() => setTab("manage")}>
+            관리
+          </button>
         </div>
       )}
 
-      <section className="stat-grid" aria-label="내 근태 요약">
-        {myStats.map((stat) => (
-          <StatCard key={stat.label} stat={stat} />
-        ))}
-      </section>
-
-      {formOpen && (
-        <SectionCard padded title="휴가 신청" subtitle="사유만 적으면 결재로 넘어갑니다">
-          <LeaveRequestForm busy={busy} onCancel={() => setFormOpen(false)} onSubmit={(input) => void submitLeave(input)} />
-        </SectionCard>
-      )}
-
-      <div className="attendance-grid">
-        <SectionCard
-          padded
-          title="내 휴가 잔여"
-          subtitle="종류별 부여·사용·잔여"
-          foot="승인된 휴가만 사용일수에 반영됩니다"
-        >
-          {balances.length === 0 ? (
-            <p className="attendance-empty">부여된 휴가가 없습니다. 관리자에게 휴가 부여를 요청하세요.</p>
-          ) : (
-            <ul className="balance-list">
-              {balances.map((balance) => (
-                <li key={balance.id}>
-                  <span>
-                    <b>{LEAVE_KIND_LABELS[balance.kind] ?? balance.kind}</b>
-                    <small>부여 {balance.granted_days}일 · 사용 {balance.used_days}일</small>
-                  </span>
-                  <strong>{balance.remaining_days}일</strong>
-                </li>
-              ))}
-            </ul>
-          )}
-        </SectionCard>
-
-        <SectionCard title="내 근태 기록" subtitle={`${shownYear}년 ${shownMonth + 1}월`}>
-          {rows.length === 0 ? (
-            <p className="attendance-empty">이 달의 근태 기록이 없습니다.</p>
-          ) : (
-            <div className="table-wrap" role="region" aria-label="내 근태 기록" tabIndex={0}>
-              <table>
-                <thead>
-                  <tr>
-                    <th>일자</th>
-                    <th>구분</th>
-                    <th className="num">시간</th>
-                    <th>출처</th>
-                    <th>비고</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row) => (
-                    <tr key={row.id}>
-                      <td>{row.on_date}</td>
-                      <td>{KIND_LABELS[row.kind] ?? row.kind}</td>
-                      <td className="num">{row.hours}</td>
-                      <td>{row.source}</td>
-                      <td>{row.note || "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </SectionCard>
-      </div>
-
-      <SectionCard
-        title="전사 휴가 달력"
-        subtitle={`${shownYear}년 ${shownMonth + 1}월 · 구성원 ${new Set(leaves.map((leave) => leave.member_id)).size}명`}
-        action={
-          <div className="calendar-nav">
-            <Button tone="neutral" size="small" aria-label="이전 달" onClick={() => setMonthOffset((value) => value - 1)}>‹</Button>
-            <span className="calendar-nav__label">
-              {shownYear}. {String(shownMonth + 1).padStart(2, "0")}
-            </span>
-            <Button tone="neutral" size="small" aria-label="다음 달" onClick={() => setMonthOffset((value) => value + 1)}>›</Button>
-          </div>
-        }
-        foot="초록색은 승인된 휴가, 노란색은 결재 대기 중인 휴가입니다"
-      >
-        {leaves.length === 0 ? (
-          <p className="attendance-empty">이 달에 등록된 휴가가 없습니다.</p>
-        ) : (
-          <MonthCalendar
-            year={shownYear}
-            month={shownMonth}
-            {...(monthOffset === 0 ? { today: now.getDate() } : {})}
-            events={leaveEventsOf(leaves, shownYear, shownMonth)}
+      {tab === "manage" && canManage ? (
+        apiSession && (
+          <AttendanceCorrectionPanel
+            apiSession={apiSession}
+            mode="manage"
+            members={members}
+            reloadKey={correctionsReloadKey}
+            onChanged={() => setCorrectionsReloadKey((value) => value + 1)}
           />
-        )}
-      </SectionCard>
+        )
+      ) : (
+        <>
+          <section className="stat-grid" aria-label="내 근태 요약">
+            {myStats.map((stat) => (
+              <StatCard key={stat.label} stat={stat} />
+            ))}
+          </section>
+
+          <SectionCard
+            title="내 근태 기록"
+            subtitle={`${shownYear}년 ${shownMonth + 1}월`}
+            action={
+              <div className="calendar-nav">
+                <Button tone="neutral" size="small" aria-label="이전 달" onClick={() => setMonthOffset((value) => value - 1)}>‹</Button>
+                <span className="calendar-nav__label">
+                  {shownYear}. {String(shownMonth + 1).padStart(2, "0")}
+                </span>
+                <Button tone="neutral" size="small" aria-label="다음 달" onClick={() => setMonthOffset((value) => value + 1)}>›</Button>
+              </div>
+            }
+          >
+            {rows.length === 0 ? (
+              <p className="attendance-empty">이 달의 근태 기록이 없습니다.</p>
+            ) : (
+              <div className="table-wrap" role="region" aria-label="내 근태 기록" tabIndex={0}>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>일자</th>
+                      <th>구분</th>
+                      <th className="num">시간</th>
+                      <th>출처</th>
+                      <th>비고</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => (
+                      <tr key={row.id}>
+                        <td>{row.on_date}</td>
+                        <td>{KIND_LABELS[row.kind] ?? row.kind}</td>
+                        <td className="num">{row.hours}</td>
+                        <td>{row.source}</td>
+                        <td>{row.note || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </SectionCard>
+
+          {apiSession && <AttendanceCorrectionPanel apiSession={apiSession} mode="mine" onChanged={() => void reload()} />}
+        </>
+      )}
     </div>
   );
 }

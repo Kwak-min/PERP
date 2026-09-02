@@ -149,6 +149,7 @@ export const ROLE_TEMPLATES = {
       "analytics.read",
       "approval.decide",
       "approval.request",
+      "asset.read",
       "attendance.read",
       "attendance.write",
       "document.read",

@@ -238,7 +238,14 @@ export const TABLES = [
   `CREATE TABLE IF NOT EXISTS attendance (${COMMON},
     org_id TEXT NOT NULL, member_id TEXT NOT NULL, on_date TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'present', hours INTEGER NOT NULL DEFAULT 0,
-    source TEXT NOT NULL DEFAULT 'manual', note TEXT NOT NULL DEFAULT '')`,
+    source TEXT NOT NULL DEFAULT 'manual', note TEXT NOT NULL DEFAULT '',
+    check_in_at TEXT, check_out_at TEXT)`,
+
+  `CREATE TABLE IF NOT EXISTS attendance_correction_request (${COMMON},
+    org_id TEXT NOT NULL, member_id TEXT NOT NULL, on_date TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'present', hours INTEGER NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending',
+    comment TEXT NOT NULL DEFAULT '', decided_by TEXT, decided_at TEXT)`,
 
   `CREATE TABLE IF NOT EXISTS leave_request (${COMMON},
     org_id TEXT NOT NULL, member_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'annual',
@@ -248,6 +255,22 @@ export const TABLES = [
   `CREATE TABLE IF NOT EXISTS leave_balance (${COMMON},
     org_id TEXT NOT NULL, member_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'annual',
     granted_days INTEGER NOT NULL DEFAULT 0, used_days INTEGER NOT NULL DEFAULT 0)`,
+
+  `CREATE TABLE IF NOT EXISTS leave_policy (${COMMON},
+    org_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'annual',
+    default_days INTEGER NOT NULL DEFAULT 0,
+    carryover_enabled INTEGER NOT NULL DEFAULT 0,
+    carryover_max_days INTEGER NOT NULL DEFAULT 0,
+    expiry_note TEXT NOT NULL DEFAULT '')`,
+
+  `CREATE TABLE IF NOT EXISTS member_competency (${COMMON},
+    org_id TEXT NOT NULL, member_id TEXT NOT NULL,
+    label TEXT NOT NULL, level TEXT NOT NULL DEFAULT 'intermediate', note TEXT NOT NULL DEFAULT '')`,
+
+  `CREATE TABLE IF NOT EXISTS member_field_request (${COMMON},
+    org_id TEXT NOT NULL, member_id TEXT NOT NULL, field TEXT NOT NULL,
+    old_value TEXT, new_value TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+    comment TEXT NOT NULL DEFAULT '', decided_by TEXT, decided_at TEXT)`,
 
   `CREATE TABLE IF NOT EXISTS job_posting (${COMMON},
     org_id TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',

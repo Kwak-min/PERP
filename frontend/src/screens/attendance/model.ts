@@ -10,7 +10,24 @@ export const attendanceRowSchema = z.object({
   hours: z.number().catch(0),
   source: z.string().catch("manual"),
   note: z.string().catch(""),
+  check_in_at: z.string().nullable().catch(null),
+  check_out_at: z.string().nullable().catch(null),
 });
+
+export const attendanceCorrectionSchema = z.object({
+  id: z.string(),
+  member_id: z.string(),
+  on_date: z.string(),
+  kind: z.string(),
+  hours: z.number().catch(0),
+  note: z.string().catch(""),
+  status: z.string().catch("pending"),
+  comment: z.string().catch(""),
+  created_at: z.string().catch(""),
+  decided_at: z.string().nullable().catch(null),
+});
+
+export const attendanceCorrectionListSchema = z.object({ items: z.array(attendanceCorrectionSchema) });
 
 export const attendanceSchema = z.object({
   items: z.array(attendanceRowSchema),
@@ -49,8 +66,47 @@ export const leaveCalendarSchema = z.object({
   ),
 });
 
+export const leaveListSchema = z.object({
+  items: z.array(
+    z.object({
+      id: z.string(),
+      member_id: z.string(),
+      kind: z.string(),
+      start_on: z.string(),
+      end_on: z.string(),
+      days: z.number().catch(0),
+      reason: z.string().catch(""),
+      status: z.string(),
+      substitute_id: z.string().nullable().catch(null),
+    }),
+  ),
+});
+
+export const leaveStatsSchema = z.object({
+  items: z.array(
+    z.object({
+      member_id: z.string(),
+      kind: z.string(),
+      granted_days: z.number().catch(0),
+      used_days: z.number().catch(0),
+      remaining_days: z.number().catch(0),
+      usage_rate: z.number().catch(0),
+    }),
+  ),
+  totals: z.object({
+    granted_days: z.number().catch(0),
+    used_days: z.number().catch(0),
+    usage_rate: z.number().catch(0),
+  }),
+  formula: z.string().catch(""),
+  generated_at: z.string().catch(""),
+});
+
 export type AttendanceRow = z.infer<typeof attendanceRowSchema>;
+export type AttendanceCorrection = z.infer<typeof attendanceCorrectionSchema>;
 export type LeaveCalendarItem = z.infer<typeof leaveCalendarSchema>["items"][number];
+export type LeaveListItem = z.infer<typeof leaveListSchema>["items"][number];
+export type LeaveStats = z.infer<typeof leaveStatsSchema>;
 
 export const KIND_LABELS: Readonly<Record<string, string>> = {
   present: "출근",

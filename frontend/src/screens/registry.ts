@@ -3,10 +3,13 @@ import type { ComponentType } from "react";
 import type { ScreenDefinition } from "../routes/catalog";
 import { AttendanceScreen } from "./AttendanceScreen";
 import { BranchSettingsScreen } from "./BranchSettingsScreen";
+import { LeaveScreen } from "./LeaveScreen";
 import { OrgChartScreen } from "./OrgChartScreen";
 import { OrgLogScreen } from "./OrgLogScreen";
+import { RecruitmentScreen } from "./RecruitmentScreen";
 import { VaultScreen } from "./VaultScreen";
 import { HomeBuilderScreen } from "./HomeBuilderScreen";
+import { ReservationScreen } from "./ReservationScreen";
 
 export type ScreenComponent = ComponentType<Readonly<{ screen: ScreenDefinition }>>;
 
@@ -18,7 +21,11 @@ export const screenOverrides: Readonly<Record<string, ScreenComponent>> = {
   "ORG-005": BranchSettingsScreen,
   "ORG-006": OrgLogScreen,
   "HR-002": AttendanceScreen,
+  "HR-003": LeaveScreen,
+  "HR-004": RecruitmentScreen,
   "VLT-001": VaultScreen,
   "DASH-001": HomeBuilderScreen,
   "DASH-002": HomeBuilderScreen,
+  // ── 예약 시스템 (통합 화면) ──────────────────────────────────
+  "RSV-001": ReservationScreen,
 };
