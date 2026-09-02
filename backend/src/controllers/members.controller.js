@@ -26,6 +26,14 @@ const provisionSchema = z.object({
   roles: z.array(z.string()).default(["member"]),
   department_id: z.string().nullable().optional(),
   title: z.string().nullable().optional(),
+  phone: z.string().max(40).nullable().optional(),
+  employee_number: z.string().max(80).nullable().optional(),
+  employment_type: z.enum(["full_time", "part_time", "contractor", "intern", "other"]).nullable().optional(),
+  hire_date: z.string().date().nullable().optional(),
+  workplace: z.string().max(160).nullable().optional(),
+  birth_date: z.string().date().nullable().optional(),
+  address: z.string().max(500).nullable().optional(),
+  emergency_contact: z.string().max(240).nullable().optional(),
 });
 
 const rolesSchema = z.object({ roles: z.array(z.string()) });
@@ -49,6 +57,11 @@ const departmentPatchSchema = z.object({
 const assignmentSchema = z.object({
   department_id: z.string().nullable().optional(),
   title: z.string().max(120).nullable().optional(),
+});
+const homeLayoutSchema = z.object({
+  department_id: z.string().nullable().optional(),
+  project_id: z.string().nullable().optional(),
+  blocks: z.array(z.enum(["welcome", "tasks", "projects", "calendar", "members", "documents"])).min(1),
 });
 
 const competencySchema = z.object({
@@ -974,4 +987,50 @@ export function setAssignment(req, res) {
     department_id: updated.department_id,
     title: updated.title,
   });
+}
+
+export function getHomeLayout(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("member.read");
+  const departmentId = req.query.department_id ?? null;
+  const projectId = req.query.project_id ?? null;
+  const row = db()
+    .prepare(
+      `SELECT * FROM home_layout WHERE tenant_id = ? AND org_id = ?
+       AND ifnull(department_id, '') = ifnull(?, '')
+       AND ifnull(project_id, '') = ifnull(?, '') AND deleted_at IS NULL`,
+    )
+    .get(principal.tenantId, principal.orgId, departmentId, projectId);
+  res.json({
+    department_id: departmentId,
+    project_id: projectId,
+    blocks: row ? JSON.parse(row.blocks_json) : ["welcome", "tasks", "calendar"],
+  });
+}
+
+export function putHomeLayout(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("organization.settings");
+  const payload = homeLayoutSchema.parse(req.body);
+  const existing = db()
+    .prepare(
+      `SELECT * FROM home_layout WHERE tenant_id = ? AND org_id = ?
+       AND ifnull(department_id, '') = ifnull(?, '')
+       AND ifnull(project_id, '') = ifnull(?, '') AND deleted_at IS NULL`,
+    )
+    .get(principal.tenantId, principal.orgId, payload.department_id ?? null, payload.project_id ?? null);
+  const values = {
+    department_id: payload.department_id ?? null,
+    project_id: payload.project_id ?? null,
+    blocks_json: JSON.stringify(payload.blocks),
+  };
+  const row = existing
+    ? update("home_layout", existing.id, values, principal.userId)
+    : insert("home_layout", {
+        tenant_id: principal.tenantId,
+        org_id: principal.orgId,
+        ...values,
+        created_by: principal.userId,
+      });
+  res.json({ id: row.id, ...values, blocks: payload.blocks });
 }

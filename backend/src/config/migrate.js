@@ -1,4 +1,5 @@
 import { db, transaction } from "./db.js";
+import { applyMigrations } from "./migrations.js";
 import { INDEXES, TABLES } from "./schema.js";
 
 export function migrate() {
@@ -6,6 +7,7 @@ export function migrate() {
   const run = transaction(() => {
     for (const statement of TABLES) conn.exec(statement);
     for (const statement of INDEXES) conn.exec(statement);
+    applyMigrations(conn);
   });
   run();
   return { tables: TABLES.length, indexes: INDEXES.length };
