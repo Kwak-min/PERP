@@ -8,6 +8,7 @@ import { asyncRoute } from "../middleware/error.js";
 export const pgRouter = Router();
 
 pgRouter.get("/health", asyncRoute(controller.health));
+pgRouter.post("/auth/signup", asyncRoute(controller.signup));
 pgRouter.post("/auth/login", asyncRoute(controller.login));
 pgRouter.get("/auth/me", asyncRoute(controller.me));
 pgRouter.post("/auth/logout", asyncRoute(controller.logout));

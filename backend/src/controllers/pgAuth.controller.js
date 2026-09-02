@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { pgQuery } from "../config/pg.js";
-import { verifyPassword } from "../utils/crypto.js";
+import { hashPassword, verifyPassword } from "../utils/crypto.js";
 import { ApiError } from "../utils/errors.js";
 
 // perp_db (PostgreSQL) 인증 슬라이스.
@@ -62,6 +62,72 @@ function serializeUser(row) {
       ? { id: String(row.position_id), name: row.position_name }
       : null,
   };
+}
+
+const signupSchema = z.object({
+  email: z.string().trim().min(1).email(),
+  name: z.string().trim().min(1),
+  password: z.string().min(8, "비밀번호는 8자 이상이어야 합니다"),
+  phone: z.string().trim().optional(),
+});
+
+// POST /api/v1/pg/auth/signup
+// 신규 계정을 auth.users 에 저장한다. (즉시 승인 정책: approval_status='approved')
+// 로그인과 동일하게 세션을 생성해 토큰을 반환 → 가입 직후 자동 로그인.
+export async function signup(req, res) {
+  const parsed = signupSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    throw new ApiError("VALIDATION_ERROR", "입력값을 확인하세요", {
+      issues: parsed.error.issues,
+    });
+  }
+  const { email, name, password, phone } = parsed.data;
+  const ip = clientIp(req);
+  const userAgent = req.get("user-agent") ?? null;
+
+  // 이메일 중복 확인 (lower(email) unique index 와 일치)
+  const { rows: existing } = await pgQuery(
+    `SELECT 1 FROM auth.users WHERE lower(email) = lower($1)`,
+    [email],
+  );
+  if (existing.length > 0) {
+    throw new ApiError("CONFLICT", "이미 가입된 이메일입니다");
+  }
+
+  const passwordHash = hashPassword(password);
+
+  // 즉시 승인: approval_status='approved', approved_at=now(), account_status 기본 active
+  const { rows: inserted } = await pgQuery(
+    `INSERT INTO auth.users (email, name, phone, password_hash, approval_status, approved_at)
+     VALUES ($1, $2, $3, $4, 'approved', now())
+     RETURNING id`,
+    [email, name, phone ?? null, passwordHash],
+  );
+  const userId = inserted[0].id;
+
+  // 세션 생성 → session_token(UUID) 을 액세스 토큰으로 반환
+  const { rows: sessionRows } = await pgQuery(
+    `INSERT INTO auth.sessions (user_id, ip_address, user_agent)
+     VALUES ($1, $2, $3)
+     RETURNING session_token, login_at`,
+    [userId, ip, userAgent],
+  );
+  const session = sessionRows[0];
+
+  await pgQuery(
+    `INSERT INTO auth.login_logs (user_id, email_tried, success, reason, ip_address)
+     VALUES ($1, $2, true, 'signup', $3)`,
+    [userId, email, ip],
+  );
+
+  const summary = await loadUserSummary(userId);
+
+  res.status(201).json({
+    token: session.session_token,
+    token_type: "Bearer",
+    login_at: session.login_at,
+    user: serializeUser(summary),
+  });
 }
 
 // POST /api/v1/pg/auth/login
