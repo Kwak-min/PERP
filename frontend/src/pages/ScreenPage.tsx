@@ -361,6 +361,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const serverEmpty = !demoMode && resource.status === "empty";
   const serverFacts = serverAnswered && !demoMode ? liveFacts(resource.data) : null;
   const usingDemo = demoMode || !screen.endpoint || (!serverAnswered && !blocked);
+  const progress = screen.id === "DASH-001" && serverAnswered ? undefined : fixture.progress;
   const passedFacts = !demoMode ? passedDetailFacts(location.state) : null;
   const passedStats = !demoMode ? passedDetailStats(location.state) : null;
   const detailFacts = passedFacts ?? serverFacts ?? (usingDemo ? fixture.facts ?? [] : []);
@@ -714,7 +715,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             </div>
           )}
           {fixture.rows && (
-            <div className={fixture.progress ? "col-8" : "col-12"}>
+            <div className={progress ? "col-8" : "col-12"}>
               <SectionCard
                 title={fixture.rowsTitle ?? "최근 항목"}
                 subtitle="권한 범위 안의 항목"
@@ -741,10 +742,10 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
               </SectionCard>
             </div>
           )}
-          {fixture.progress && (
+          {progress && (
             <div className="col-4">
               <SectionCard title={fixture.progressTitle ?? "진행률"} subtitle="목표 대비" action={<DetailAction />}>
-                <ProgressList items={fixture.progress} />
+                <ProgressList items={progress} />
               </SectionCard>
             </div>
           )}

@@ -24,7 +24,6 @@ export const screenOverrides: Readonly<Record<string, ScreenComponent>> = {
   "HR-003": LeaveScreen,
   "HR-004": RecruitmentScreen,
   "VLT-001": VaultScreen,
-  "DASH-001": HomeBuilderScreen,
   "DASH-002": HomeBuilderScreen,
   // ── 예약 시스템 (통합 화면) ──────────────────────────────────
   "RSV-001": ReservationScreen,
