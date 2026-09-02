@@ -6,6 +6,7 @@ import { BranchSettingsScreen } from "./BranchSettingsScreen";
 import { OrgChartScreen } from "./OrgChartScreen";
 import { OrgLogScreen } from "./OrgLogScreen";
 import { VaultScreen } from "./VaultScreen";
+import { HomeBuilderScreen } from "./HomeBuilderScreen";
 
 export type ScreenComponent = ComponentType<Readonly<{ screen: ScreenDefinition }>>;
 
@@ -18,4 +19,6 @@ export const screenOverrides: Readonly<Record<string, ScreenComponent>> = {
   "ORG-006": OrgLogScreen,
   "HR-002": AttendanceScreen,
   "VLT-001": VaultScreen,
+  "DASH-001": HomeBuilderScreen,
+  "DASH-002": HomeBuilderScreen,
 };

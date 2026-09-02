@@ -17,6 +17,8 @@ membersRouter.patch("/departments/:departmentId", asyncRoute(controller.updateDe
 membersRouter.get("/growth", asyncRoute(controller.growth));
 membersRouter.get("/activity", asyncRoute(controller.activity));
 membersRouter.get("/org-chart", asyncRoute(controller.orgChart));
+membersRouter.get("/home-layout", asyncRoute(controller.getHomeLayout));
+membersRouter.put("/home-layout", asyncRoute(controller.putHomeLayout));
 membersRouter.post("/permissions/simulate", asyncRoute(controller.simulatePermissions));
 membersRouter.post("/:membershipId/reset-password", asyncRoute(controller.resetPassword));
 membersRouter.patch("/:membershipId/roles", asyncRoute(controller.setRoles));
