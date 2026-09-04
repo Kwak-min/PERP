@@ -707,3 +707,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* 조직 선택 카드: 링크와 같은 모양의 버튼 변형 */
+.choice-card--button { width: 100%; font: inherit; text-align: left; cursor: pointer; }

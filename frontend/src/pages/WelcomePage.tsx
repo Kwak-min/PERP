@@ -1,19 +1,79 @@
-import { Link, Navigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 
-import { useSession } from "../store/session";
+import { organizationsOf } from "../services/auth";
+import { sessionStore, useSession, type Organization } from "../store/session";
 
 export function WelcomePage() {
   const session = useSession();
+  const navigate = useNavigate();
+  const [organizations, setOrganizations] = useState<readonly Organization[]>(
+    session?.organizations ?? [],
+  );
+  const token = session?.token ?? null;
+
+  // 로그인 이후에 만들어졌거나 초대를 수락한 조직도 여기서 다시 확인한다.
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    void organizationsOf(token).then((found) => {
+      if (cancelled || found.length === 0) return;
+      setOrganizations((current) => {
+        const merged = [...current];
+        for (const org of found) {
+          if (!merged.some((item) => item.org_id === org.org_id)) merged.push(org);
+        }
+        return merged;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
   if (!session) return <Navigate to="/login" replace />;
   if (session.mustChangePassword) return <Navigate to="/change-password" replace />;
   if (session.orgId) return <Navigate to="/" replace />;
+
+  function enter(orgId: string): void {
+    sessionStore.patch({ orgId });
+    navigate("/", { replace: true });
+  }
+
+  const hasOrganizations = organizations.length > 0;
+
   return (
     <section className="auth-card auth-card--wide">
       <span className="eyebrow">WELCOME, {session.name.toUpperCase()}</span>
-      <h2>어떤 방식으로 시작할까요?</h2>
-      <p className="auth-card__intro">새 조직을 만들거나 받은 초대 링크로 기존 조직에 참여하세요.</p>
+      <h2>{hasOrganizations ? "어디로 들어갈까요?" : "어떤 방식으로 시작할까요?"}</h2>
+      <p className="auth-card__intro">
+        {hasOrganizations
+          ? "이미 속한 조직으로 바로 들어가거나, 새 조직을 만들고 초대를 받을 수 있습니다."
+          : "새 조직을 만들거나 받은 초대 링크로 기존 조직에 참여하세요."}
+      </p>
+
+      {hasOrganizations && (
+        <div className="choice-grid">
+          {organizations.map((org) => (
+            <button
+              key={org.org_id}
+              type="button"
+              className="choice-card choice-card--primary choice-card--button"
+              onClick={() => enter(org.org_id)}
+            >
+              <strong>{org.org_name}</strong>
+              <span>{org.roles.length > 0 ? org.roles.join(", ") : "이미 속해 있는 조직"}</span>
+              <em>이 조직으로 들어가기 →</em>
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="choice-grid">
-        <Link className="choice-card choice-card--primary" to="/onboarding/organization">
+        <Link
+          className={hasOrganizations ? "choice-card" : "choice-card choice-card--primary"}
+          to="/onboarding/organization"
+        >
           <strong>새 조직 만들기</strong>
           <span>조직 유형과 필요한 모듈을 직접 선택합니다.</span>
           <em>설정 시작 →</em>
