@@ -25,6 +25,7 @@ const expected = [
   "/dashboard/org",
   "/documents",
   "/documents/:documentId",
+  "/documents/graph",
   "/documents/meetings/:meetingId",
   "/finance",
   "/finance/budgets",

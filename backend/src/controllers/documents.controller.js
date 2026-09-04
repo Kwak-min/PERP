@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SENSITIVITY_RANK, allowedSensitivity } from "../services/rag.service.js";
 
 import { resolvePrincipal } from "../middleware/auth.js";
 import {
@@ -427,4 +428,96 @@ export function searchDocuments(req, res) {
       d.title.toLowerCase().includes(needle) || (d.content ?? "").toLowerCase().includes(needle),
   );
   res.json({ query: req.query.q ?? "", items: rows.slice(0, 20).map(view) });
+}
+
+// GET /documents/graph
+// 조직 지식(RAG)을 옵시디언식 그래프로 준다.
+// - 공간(space)은 허브 노드, 문서는 그 주위 노드
+// - 문서 본문의 [[제목]] 위키링크가 문서 사이 간선
+// - 노출 범위는 RAG 검색(searchChunks)과 같은 민감도 상한을 따른다.
+export function graph(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("document.read");
+  const ceiling = allowedSensitivity(principal);
+
+  const spaces = listScoped("space", principal, [], { limit: 200 });
+  const spaceName = new Map(spaces.map((s) => [s.id, s.name]));
+
+  const all = listScoped("document", principal, [], { limit: 1000 });
+  const documents = all.filter(
+    (d) => !d.archived && (SENSITIVITY_RANK[d.sensitivity] ?? 1) <= ceiling,
+  );
+  const restricted = all.length - documents.length;
+
+  const chunkCount = new Map();
+  for (const chunk of listScoped("document_chunk", principal, [], { limit: 5000 })) {
+    chunkCount.set(chunk.document_id, (chunkCount.get(chunk.document_id) ?? 0) + 1);
+  }
+
+  const byTitle = new Map();
+  for (const document of documents) {
+    if (!byTitle.has(document.title)) byTitle.set(document.title, document.id);
+  }
+
+  const nodes = [
+    ...spaces.map((space) => ({
+      id: space.id,
+      kind: "space",
+      title: space.name,
+      folder: space.name,
+      sensitivity: space.visibility,
+      chunks: 0,
+      tags: [],
+      updated_at: space.updated_at,
+    })),
+    ...documents.map((document) => ({
+      id: document.id,
+      kind: "document",
+      title: document.title,
+      folder: spaceName.get(document.space_id) ?? "미분류",
+      sensitivity: document.sensitivity,
+      chunks: chunkCount.get(document.id) ?? 0,
+      tags: (document.tags ?? "").split(",").filter(Boolean),
+      updated_at: document.updated_at,
+    })),
+  ];
+
+  const edges = [];
+  for (const document of documents) {
+    if (document.space_id && spaceName.has(document.space_id)) {
+      edges.push({
+        source: document.id,
+        target_id: document.space_id,
+        target_title: spaceName.get(document.space_id),
+        kind: "space",
+      });
+    }
+    const seen = new Set();
+    for (const match of (document.content ?? "").matchAll(/\[\[([^\]]+)\]\]/g)) {
+      const title = match[1].trim();
+      if (!title || seen.has(title)) continue;
+      seen.add(title);
+      const targetId = byTitle.get(title) ?? null;
+      if (targetId === document.id) continue;
+      edges.push({ source: document.id, target_id: targetId, target_title: title, kind: "link" });
+    }
+  }
+
+  const linked = new Set();
+  for (const edge of edges) {
+    linked.add(edge.source);
+    if (edge.target_id) linked.add(edge.target_id);
+  }
+
+  res.json({
+    nodes,
+    edges,
+    orphans: documents.filter((d) => !linked.has(d.id)).map((d) => d.id),
+    stats: {
+      documents: documents.length,
+      spaces: spaces.length,
+      chunks: [...chunkCount.values()].reduce((sum, n) => sum + n, 0),
+      restricted,
+    },
+  });
 }

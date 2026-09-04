@@ -63,6 +63,7 @@ export const screens: readonly ScreenDefinition[] = [
   { id: "DOC-001", path: "/documents", label: "문서", description: "조직 문서와 위키를 공간별로 정리합니다.", section: "knowledge", endpoint: "/documents", module: "documents", nav: true },
   { id: "DOC-002", path: "/documents/:documentId", label: "문서 편집", description: "문서 본문, 버전과 검토 상태를 관리합니다.", section: "knowledge", endpoint: null, module: "documents" },
   { id: "DOC-003", path: "/documents/meetings/:meetingId", label: "회의록", description: "회의 결정사항을 검토하고 후속 업무로 확정합니다.", section: "knowledge", endpoint: null, module: "documents" },
+  { id: "DOC-004", path: "/documents/graph", label: "조직 지식 그래프", description: "AI Agent 가 근거로 쓰는 조직 문서를 공간·링크 관계로 묶어 3D 로 탐색합니다.", section: "knowledge", endpoint: "/documents/graph", module: "documents", nav: true },
   { id: "VLT-001", path: "/vault", label: "개인 노트", description: "개인 파일과 노트를 작성하고 폴더·태그로 관리합니다. 소유자만 볼 수 있습니다.", section: "personal", endpoint: "/vault/notes", module: "agent", nav: true },
   { id: "VLT-002", path: "/vault/graph", label: "Vault 그래프", description: "내 노트의 위키링크와 백링크 관계를 그래프로 탐색합니다.", section: "personal", endpoint: "/vault/graph", module: "agent", nav: true },
   { id: "APR-001", path: "/approvals", label: "결재", description: "내 결재함과 요청 진행 상태를 확인합니다.", section: "operations", endpoint: "/approvals/requests", module: "approvals", nav: true },

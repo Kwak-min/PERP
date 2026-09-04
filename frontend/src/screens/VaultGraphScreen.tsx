@@ -36,7 +36,7 @@ import {
 } from "./vault/model";
 
 import "./vault.css";
-import "./vault-graph.css";
+import "./graph-stage.css";
 
 type Pointer = { down: boolean; x: number; y: number; moved: number };
 
@@ -401,17 +401,17 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
         </div>
       )}
 
-      <div className="vault-graph">
+      <div className="graph-layout">
         <SectionCard
           padded={false}
           title="지식 그래프"
           subtitle={`노드 ${stats.nodes} · 연결 ${stats.links} · 고립 ${stats.orphans}${stats.unresolved > 0 ? ` · 끊어진 링크 ${stats.unresolved}` : ""}`}
           foot="드래그: 회전 · 휠: 확대 · 클릭: 노트 열기"
         >
-          <div className="vault-graph__stage">
+          <div className="graph-stage">
             <canvas
               ref={canvasRef}
-              className="vault-graph__canvas"
+              className="graph-stage__canvas"
               role="application"
               aria-label="개인 노트 3D 그래프"
               onPointerDown={(event) => {
@@ -462,7 +462,7 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
               }}
             />
             {stats.nodes === 0 && (
-              <p className="vault-graph__empty">
+              <p className="graph-stage__empty">
                 아직 노트가 없습니다. 개인 노트 화면에서 노트를 만들고 <code>[[다른 노트 제목]]</code> 으로 연결하면
                 여기에 3D 로 나타납니다.
               </p>
