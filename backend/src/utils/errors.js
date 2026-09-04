@@ -13,6 +13,7 @@ export const CODE_STATUS = {
   APPROVAL_REQUIRED: 409,
   RATE_LIMITED: 429,
   INTERNAL: 500,
+  SERVICE_UNAVAILABLE: 503,
 };
 
 export class ApiError extends Error {
