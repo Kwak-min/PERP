@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import * as controller from "../controllers/pgAuth.controller.js";
+import * as members from "../controllers/pgMembers.controller.js";
 import { asyncRoute } from "../middleware/error.js";
 
 // perp_db (PostgreSQL) 슬라이스 라우터. strangler-fig: 기존 SQLite 라우트와 분리.
@@ -12,3 +13,8 @@ pgRouter.post("/auth/signup", asyncRoute(controller.signup));
 pgRouter.post("/auth/login", asyncRoute(controller.login));
 pgRouter.get("/auth/me", asyncRoute(controller.me));
 pgRouter.post("/auth/logout", asyncRoute(controller.logout));
+
+// 구성원(members) 슬라이스 — 회사(company_id) 스코프
+pgRouter.get("/members", asyncRoute(members.listMembers));
+pgRouter.get("/members/departments", asyncRoute(members.listDepartments));
+pgRouter.get("/members/roles", asyncRoute(members.listRoles));

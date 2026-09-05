@@ -351,16 +351,20 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   // 서버가 응답했으면(빈 결과 포함) 서버가 진실이다. 데모는 서버가 없을 때만 쓴다.
   const serverAnswered = resource.status === "ready" || resource.status === "empty";
   const blocked = !demoMode && (resource.status === "forbidden" || resource.status === "error");
-  const serverStats = serverAnswered && !demoMode ? liveStats(resource.data) : null;
+  const serverStats = serverAnswered ? liveStats(resource.data) : null;
   const serverTable =
-    serverAnswered && !demoMode
+    serverAnswered
       ? screen.path === "/members"
         ? membersTable(resource.data, departments, roles)
         : liveTable(resource.data)
       : null;
-  const serverEmpty = !demoMode && resource.status === "empty";
-  const serverFacts = serverAnswered && !demoMode ? liveFacts(resource.data) : null;
-  const usingDemo = demoMode || !screen.endpoint || (!serverAnswered && !blocked);
+  const serverFacts = serverAnswered ? liveFacts(resource.data) : null;
+  // 서버가 실데이터를 주면 데모보다 우선한다. (점진 이관: perp_db 로 옮긴 모듈만
+  // 자동으로 실데이터로 전환되고, 아직 안 옮긴 화면은 데모 fixture 로 남는다.)
+  const hasServerContent = Boolean(serverStats || serverTable || serverFacts);
+  const serverEmpty = resource.status === "empty" && !hasServerContent;
+  const usingDemo =
+    !hasServerContent && (demoMode || !screen.endpoint || (!serverAnswered && !blocked));
   const progress = screen.id === "DASH-001" && serverAnswered ? undefined : fixture.progress;
   const passedFacts = !demoMode ? passedDetailFacts(location.state) : null;
   const passedStats = !demoMode ? passedDetailStats(location.state) : null;

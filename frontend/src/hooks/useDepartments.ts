@@ -33,7 +33,7 @@ function loadDepartments(
     pending.delete(key);
   };
   signal?.addEventListener("abort", abortCleanup, { once: true });
-  const request = apiRequest("/members/departments", {
+  const request = apiRequest("/pg/members/departments", {
     session: { token, orgId },
     ...(signal ? { signal } : {}),
   })

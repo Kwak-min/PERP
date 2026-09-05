@@ -30,7 +30,7 @@ function loadRoles(
     pending.delete(key);
   };
   signal?.addEventListener("abort", abortCleanup, { once: true });
-  const request = apiRequest("/members/roles", {
+  const request = apiRequest("/pg/members/roles", {
     session: { token, orgId },
     ...(signal ? { signal } : {}),
   })
