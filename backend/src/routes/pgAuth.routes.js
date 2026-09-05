@@ -24,6 +24,7 @@ pgRouter.get("/members/roles", asyncRoute(members.listRoles));
 pgRouter.get("/usage", asyncRoute(mod.usage));
 pgRouter.get("/projects", asyncRoute(mod.projects));
 pgRouter.get("/calendar", asyncRoute(mod.calendar));
+pgRouter.post("/calendar", asyncRoute(mod.createCalendarEvent));
 pgRouter.get("/finance/summary", asyncRoute(mod.financeSummary));
 pgRouter.get("/finance/transactions", asyncRoute(mod.financeTransactions));
 pgRouter.get("/hr/attendance", asyncRoute(mod.hrAttendance));

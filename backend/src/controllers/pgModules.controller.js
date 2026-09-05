@@ -14,13 +14,13 @@ function bearerToken(req) {
   return match ? match[1].trim() : null;
 }
 
-async function resolveCompanyId(req) {
+async function resolveUser(req) {
   const token = bearerToken(req);
   if (!token || !UUID_RE.test(token)) {
     throw new ApiError("UNAUTHENTICATED", "인증 토큰이 필요합니다");
   }
   const { rows } = await pgQuery(
-    `SELECT u.company_id
+    `SELECT u.id, u.company_id
        FROM auth.sessions s
        JOIN auth.users u ON u.id = s.user_id
       WHERE s.session_token = $1 AND s.is_active = true`,
@@ -29,7 +29,37 @@ async function resolveCompanyId(req) {
   if (!rows[0]) {
     throw new ApiError("UNAUTHENTICATED", "세션이 만료되었거나 유효하지 않습니다");
   }
-  return rows[0].company_id;
+  return { userId: rows[0].id, companyId: rows[0].company_id };
+}
+
+async function resolveCompanyId(req) {
+  return (await resolveUser(req)).companyId;
+}
+
+// POST /api/v1/pg/calendar — 일정 생성
+export async function createCalendarEvent(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) {
+    throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 일정을 만들 수 있습니다");
+  }
+  const body = req.body ?? {};
+  const title = String(body.title ?? "").trim();
+  const startsAt = body.starts_at;
+  const endsAt = body.ends_at;
+  const location = String(body.location ?? "").trim() || null;
+  if (!title || !startsAt || !endsAt) {
+    throw new ApiError("VALIDATION_ERROR", "제목·시작·종료는 필수입니다");
+  }
+  if (new Date(endsAt) < new Date(startsAt)) {
+    throw new ApiError("VALIDATION_ERROR", "종료가 시작보다 빠를 수 없습니다");
+  }
+  const { rows } = await pgQuery(
+    `INSERT INTO calendar.events (company_id, owner_id, title, location, starts_at, ends_at, scope)
+     VALUES ($1, $2, $3, $4, $5, $6, 'company')
+     RETURNING id`,
+    [companyId, userId, title, location, startsAt, endsAt],
+  );
+  res.status(201).json({ id: String(rows[0].id) });
 }
 
 // GET /api/v1/pg/usage — 홈/조직 대시보드 집계

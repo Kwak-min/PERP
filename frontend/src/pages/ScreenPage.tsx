@@ -10,6 +10,7 @@ import { FlowCanvas, NodeGraph } from "../components/data/Graphs";
 import { PermissionMatrix, WorkloadHeatmap } from "../components/data/Matrix";
 import { StateBoundary } from "../components/common/StateBoundary";
 import { QuickCreateModal } from "../components/common/QuickCreateModal";
+import { CreateFormModal } from "../components/common/CreateFormModal";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { ListRow } from "../components/ui/ListRow";
@@ -325,7 +326,8 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
     const separator = screen.endpoint.includes("?") ? "&" : "?";
     return `${screen.endpoint}${separator}department_id=${encodeURIComponent(branchId)}`;
   }, [screen.endpoint, branchScoped, branchId]);
-  const resource = useResource(endpoint, apiSession);
+  const [reloadKey, setReloadKey] = useState(0);
+  const resource = useResource(endpoint, apiSession, reloadKey);
   const fixture: ScreenFixture = useMemo(
     () => fixtureFor(screen.id, isDetail),
     [screen.id, isDetail],
@@ -846,7 +848,19 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
           </StateBoundary>
         </SectionCard>
       )}
-      {quickModal && (
+      {quickModal && screen.create && quickModal === "create" && (
+        <CreateFormModal
+          entityLabel={screen.label}
+          config={screen.create}
+          session={apiSession}
+          onClose={() => setQuickModal(null)}
+          onCreated={() => {
+            setReloadKey((key) => key + 1);
+            setNotice(`${screen.label} 항목을 저장했습니다.`);
+          }}
+        />
+      )}
+      {quickModal && !(screen.create && quickModal === "create") && (
         <QuickCreateModal
           entityLabel={screen.label}
           mode={quickModal}

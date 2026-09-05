@@ -8,6 +8,20 @@ export type ScreenSection =
   | "ai"
   | "admin";
 
+export type CreateFieldType = "text" | "textarea" | "datetime-local" | "date";
+
+export type CreateField = Readonly<{
+  name: string;
+  label: string;
+  type: CreateFieldType;
+  required?: boolean;
+}>;
+
+export type CreateConfig = Readonly<{
+  endpoint: string;
+  fields: readonly CreateField[];
+}>;
+
 export type ScreenDefinition = Readonly<{
   id: string;
   path: string;
@@ -18,6 +32,7 @@ export type ScreenDefinition = Readonly<{
   module: string | null;
   nav?: boolean;
   ai?: boolean;
+  create?: CreateConfig;
 }>;
 
 export const publicRoutes = [
@@ -45,7 +60,7 @@ export const screens: readonly ScreenDefinition[] = [
   { id: "TSK-001", path: "/tasks", label: "업무", description: "내 업무와 팀 업무를 우선순위별로 정리합니다.", section: "work", endpoint: "/tasks", module: "tasks", nav: true },
   { id: "TSK-003", path: "/tasks/:taskId", label: "업무 상세", description: "담당자, 체크리스트, 댓글과 의존성을 관리합니다.", section: "work", endpoint: null, module: "tasks" },
   { id: "TSK-005", path: "/workload", label: "업무량", description: "구성원별 업무량과 병목을 비교합니다.", section: "work", endpoint: "/tasks/workload/summary", module: "tasks" },
-  { id: "CAL-001", path: "/calendar", label: "캘린더", description: "개인·조직 일정과 행사를 통합해 봅니다.", section: "work", endpoint: "/pg/calendar", module: "calendar", nav: true },
+  { id: "CAL-001", path: "/calendar", label: "캘린더", description: "개인·조직 일정과 행사를 통합해 봅니다.", section: "work", endpoint: "/pg/calendar", module: "calendar", nav: true, create: { endpoint: "/pg/calendar", fields: [{ name: "title", label: "제목", type: "text", required: true }, { name: "starts_at", label: "시작", type: "datetime-local", required: true }, { name: "ends_at", label: "종료", type: "datetime-local", required: true }, { name: "location", label: "장소", type: "text" }] } },
   { id: "CAL-002", path: "/calendar/:eventId", label: "일정 상세", description: "참석자, 장소와 행사 체크리스트를 확인합니다.", section: "work", endpoint: null, module: "calendar" },
   { id: "FIN-001", path: "/finance", label: "재무 홈", description: "수입, 지출, 잔액과 예산 집행률을 요약합니다.", section: "operations", endpoint: "/pg/finance/summary", module: "finance", nav: true },
   { id: "FIN-002", path: "/finance/transactions", label: "거래", description: "수입·지출 거래를 작성하고 확정합니다.", section: "operations", endpoint: "/pg/finance/transactions", module: "finance" },
