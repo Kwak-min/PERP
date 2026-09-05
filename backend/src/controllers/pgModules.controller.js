@@ -357,6 +357,164 @@ export async function createDocument(req, res) {
   res.status(201).json({ id: String(rows[0].id) });
 }
 
+// GET /api/v1/pg/members/options — 구성원 선택지 { value, label }
+export async function memberOptions(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT id, name FROM auth.users WHERE company_id = $1 ORDER BY name`,
+    [companyId],
+  );
+  res.json({ items: rows.map((r) => ({ value: String(r.id), label: r.name })) });
+}
+
+// ── 자산 ─────────────────────────────────────────────────────────
+// GET /api/v1/pg/assets
+export async function assets(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT a.name AS 이름, a.category AS 분류, a.status AS status,
+            u.name AS 담당, a.location AS 위치, a.acquired_on AS 취득일
+       FROM asset.assets a
+       LEFT JOIN auth.users u ON u.id = a.assignee_id
+      WHERE a.company_id = $1
+      ORDER BY a.id DESC`,
+    [companyId],
+  );
+  res.json({ items: rows });
+}
+
+// POST /api/v1/pg/assets
+export async function createAsset(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 자산을 만들 수 있습니다");
+  const body = req.body ?? {};
+  const name = String(body.name ?? "").trim();
+  if (!name) throw new ApiError("VALIDATION_ERROR", "이름은 필수입니다");
+  const category = String(body.category ?? "").trim() || null;
+  const location = String(body.location ?? "").trim() || null;
+  const { rows } = await pgQuery(
+    `INSERT INTO asset.assets (company_id, name, category, location) VALUES ($1, $2, $3, $4) RETURNING id`,
+    [companyId, name, category, location],
+  );
+  await pgQuery(
+    `INSERT INTO asset.history (asset_id, event_type, actor_id, note) VALUES ($1, 'created', $2, '생성')`,
+    [rows[0].id, userId],
+  );
+  res.status(201).json({ id: String(rows[0].id) });
+}
+
+// GET /api/v1/pg/assets/reservations
+export async function assetReservations(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT a.name AS 자산, u.name AS 예약자, r.starts_at AS 시작, r.ends_at AS 종료, r.status AS status
+       FROM asset.reservations r
+       JOIN asset.assets a ON a.id = r.asset_id
+       LEFT JOIN auth.users u ON u.id = r.reserved_by
+      WHERE a.company_id = $1
+      ORDER BY r.starts_at DESC`,
+    [companyId],
+  );
+  res.json({ items: rows });
+}
+
+// ── 예산 ─────────────────────────────────────────────────────────
+// GET /api/v1/pg/finance/budgets
+export async function budgets(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT b.name AS 이름, b.amount AS 편성액, b.spent AS 집행액, b.status AS status
+       FROM accounting.budgets b WHERE b.company_id = $1 ORDER BY b.id DESC`,
+    [companyId],
+  );
+  res.json({ items: rows });
+}
+
+// POST /api/v1/pg/finance/budgets
+export async function createBudget(req, res) {
+  const { companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 예산을 만들 수 있습니다");
+  const body = req.body ?? {};
+  const name = String(body.name ?? "").trim();
+  const amount = Number(body.amount);
+  if (!name) throw new ApiError("VALIDATION_ERROR", "이름은 필수입니다");
+  if (!Number.isFinite(amount) || amount < 0) throw new ApiError("VALIDATION_ERROR", "편성액은 0 이상 숫자여야 합니다");
+  const { rows } = await pgQuery(
+    `INSERT INTO accounting.budgets (company_id, name, amount, status) VALUES ($1, $2, $3, 'active') RETURNING id`,
+    [companyId, name, amount],
+  );
+  res.status(201).json({ id: String(rows[0].id) });
+}
+
+// ── 회비 ─────────────────────────────────────────────────────────
+// GET /api/v1/pg/finance/dues
+export async function dues(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT u.name AS 대상, c.amount AS 금액, c.due_date AS 기한, c.status AS status
+       FROM accounting.dues_charges c
+       LEFT JOIN auth.users u ON u.id = c.target_user_id
+      WHERE c.company_id = $1 ORDER BY c.id DESC`,
+    [companyId],
+  );
+  res.json({ items: rows });
+}
+
+// POST /api/v1/pg/finance/dues — 회비 청구 생성
+export async function createDuesCharge(req, res) {
+  const { companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 회비를 청구할 수 있습니다");
+  const body = req.body ?? {};
+  const target = body.target_user_id;
+  const amount = Number(body.amount);
+  const dueDate = body.due_date || null;
+  if (!target) throw new ApiError("VALIDATION_ERROR", "대상자를 선택하세요");
+  if (!Number.isFinite(amount) || amount <= 0) throw new ApiError("VALIDATION_ERROR", "금액은 0보다 큰 숫자여야 합니다");
+  const { rows: ok } = await pgQuery(`SELECT 1 FROM auth.users WHERE id = $1 AND company_id = $2`, [target, companyId]);
+  if (!ok[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 대상자입니다");
+  const { rows } = await pgQuery(
+    `INSERT INTO accounting.dues_charges (company_id, target_user_id, amount, due_date) VALUES ($1, $2, $3, $4) RETURNING id`,
+    [companyId, target, amount, dueDate],
+  );
+  res.status(201).json({ id: String(rows[0].id) });
+}
+
+// ── 정산 ─────────────────────────────────────────────────────────
+// GET /api/v1/pg/finance/settlements
+export async function settlements(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT s.title AS 제목, u.name AS 신청자, s.amount AS 금액, s.status AS status, s.created_at AS 신청일
+       FROM accounting.settlements s
+       LEFT JOIN auth.users u ON u.id = s.requester_id
+      WHERE s.company_id = $1 ORDER BY s.id DESC`,
+    [companyId],
+  );
+  res.json({ items: rows });
+}
+
+// POST /api/v1/pg/finance/settlements
+export async function createSettlement(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 정산을 신청할 수 있습니다");
+  const body = req.body ?? {};
+  const title = String(body.title ?? "").trim();
+  const amount = Number(body.amount);
+  if (!title) throw new ApiError("VALIDATION_ERROR", "제목은 필수입니다");
+  if (!Number.isFinite(amount) || amount <= 0) throw new ApiError("VALIDATION_ERROR", "금액은 0보다 큰 숫자여야 합니다");
+  const { rows } = await pgQuery(
+    `INSERT INTO accounting.settlements (company_id, requester_id, title, amount) VALUES ($1, $2, $3, $4) RETURNING id`,
+    [companyId, userId, title, amount],
+  );
+  res.status(201).json({ id: String(rows[0].id) });
+}
+
 // GET /api/v1/pg/hr/attendance
 export async function hrAttendance(req, res) {
   const companyId = await resolveCompanyId(req);
