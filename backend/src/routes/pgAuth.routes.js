@@ -23,6 +23,7 @@ pgRouter.get("/members/roles", asyncRoute(members.listRoles));
 // 모듈 read 슬라이스 (1단계) — 회사(company_id) 스코프
 pgRouter.get("/usage", asyncRoute(mod.usage));
 pgRouter.get("/projects", asyncRoute(mod.projects));
+pgRouter.post("/projects", asyncRoute(mod.createProject));
 pgRouter.get("/calendar", asyncRoute(mod.calendar));
 pgRouter.post("/calendar", asyncRoute(mod.createCalendarEvent));
 pgRouter.get("/finance/summary", asyncRoute(mod.financeSummary));

@@ -89,6 +89,32 @@ export async function usage(req, res) {
   });
 }
 
+// POST /api/v1/pg/projects — 프로젝트 생성
+export async function createProject(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) {
+    throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 프로젝트를 만들 수 있습니다");
+  }
+  const body = req.body ?? {};
+  const name = String(body.name ?? "").trim();
+  const startsOn = body.starts_on || null;
+  const endsOn = body.ends_on || null;
+  const description = String(body.description ?? "").trim() || null;
+  if (!name) {
+    throw new ApiError("VALIDATION_ERROR", "이름은 필수입니다");
+  }
+  if (startsOn && endsOn && new Date(endsOn) < new Date(startsOn)) {
+    throw new ApiError("VALIDATION_ERROR", "종료가 시작보다 빠를 수 없습니다");
+  }
+  const { rows } = await pgQuery(
+    `INSERT INTO project.projects (company_id, name, description, status, starts_on, ends_on, lead_id)
+     VALUES ($1, $2, $3, 'active', $4, $5, $6)
+     RETURNING id`,
+    [companyId, name, description, startsOn, endsOn, userId],
+  );
+  res.status(201).json({ id: String(rows[0].id) });
+}
+
 // GET /api/v1/pg/projects
 export async function projects(req, res) {
   const companyId = await resolveCompanyId(req);

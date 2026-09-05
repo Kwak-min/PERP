@@ -53,7 +53,7 @@ export const screens: readonly ScreenDefinition[] = [
   { id: "ORG-001", path: "/settings/organization", label: "조직 설정", description: "조직 정보, 용어와 활성 모듈을 설정합니다.", section: "admin", endpoint: "/tenants/current", module: null },
   { id: "ORG-005", path: "/settings/branches", label: "브랜치 설정", description: "부서 브랜치와 들어갈 수 있는 그룹을 설정합니다.", section: "admin", endpoint: "/pg/members/departments", module: null },
   { id: "ORG-004", path: "/settings/roles", label: "역할과 권한", description: "역할별 권한 범위와 접근 결과를 점검합니다.", section: "admin", endpoint: "/pg/members", module: null },
-  { id: "PRJ-001", path: "/projects", label: "프로젝트", description: "목표, 일정과 책임자를 중심으로 프로젝트를 운영합니다.", section: "work", endpoint: "/pg/projects", module: "projects", nav: true },
+  { id: "PRJ-001", path: "/projects", label: "프로젝트", description: "목표, 일정과 책임자를 중심으로 프로젝트를 운영합니다.", section: "work", endpoint: "/pg/projects", module: "projects", nav: true, create: { endpoint: "/pg/projects", fields: [{ name: "name", label: "이름", type: "text", required: true }, { name: "starts_on", label: "시작", type: "date" }, { name: "ends_on", label: "종료", type: "date" }, { name: "description", label: "설명", type: "textarea" }] } },
   { id: "PRJ-002", path: "/projects/:projectId", label: "프로젝트 상세", description: "프로젝트 진행률과 참여자, 최근 활동을 확인합니다.", section: "work", endpoint: null, module: "projects" },
   { id: "TSK-002", path: "/projects/:projectId/board", label: "프로젝트 보드", description: "업무 단계를 칸반 보드로 관리합니다.", section: "work", endpoint: "/tasks/board", module: "tasks" },
   { id: "TSK-004", path: "/projects/:projectId/timeline", label: "프로젝트 타임라인", description: "마일스톤과 의존 관계를 시간축으로 봅니다.", section: "work", endpoint: "/tasks", module: "tasks" },
