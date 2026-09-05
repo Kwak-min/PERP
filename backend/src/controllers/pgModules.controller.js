@@ -269,6 +269,94 @@ export async function financeTransactions(req, res) {
   res.json({ items: rows });
 }
 
+// GET /api/v1/pg/approvals — 결재(승인요청)
+export async function approvals(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT ar.request_type AS 유형, r.name AS 신청자, t.name AS 대상,
+            ar.status AS status, ar.created_at AS 신청일
+       FROM org.approval_requests ar
+       LEFT JOIN auth.users r ON r.id = ar.requester_id
+       LEFT JOIN auth.users t ON t.id = ar.target_user_id
+      WHERE ar.company_id = $1
+      ORDER BY ar.created_at DESC`,
+    [companyId],
+  );
+  res.json({ items: rows });
+}
+
+// GET /api/v1/pg/tasks — 업무(프로젝트 배정)
+export async function tasks(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT p.name AS 프로젝트, u.name AS 담당, a.role AS 역할,
+            a.started_on AS 시작, a.ended_on AS 종료,
+            CASE WHEN a.ended_on IS NULL THEN 'active' ELSE 'done' END AS status
+       FROM project.assignments a
+       JOIN project.projects p ON p.id = a.project_id
+       JOIN auth.users u ON u.id = a.user_id
+      WHERE p.company_id = $1
+      ORDER BY a.started_on DESC`,
+    [companyId],
+  );
+  res.json({ items: rows });
+}
+
+// GET /api/v1/pg/documents — 문서
+export async function documents(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT d.title AS 제목, p.name AS 프로젝트, u.name AS 작성자,
+            d.version AS 버전, d.updated_at AS 수정일
+       FROM project.documents d
+       JOIN project.projects p ON p.id = d.project_id
+       LEFT JOIN auth.users u ON u.id = d.author_id
+      WHERE p.company_id = $1
+      ORDER BY d.updated_at DESC`,
+    [companyId],
+  );
+  res.json({ items: rows });
+}
+
+// GET /api/v1/pg/projects/options — 선택지(프로젝트) { value, label }
+export async function projectOptions(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT id, name FROM project.projects WHERE company_id = $1 ORDER BY name`,
+    [companyId],
+  );
+  res.json({ items: rows.map((r) => ({ value: String(r.id), label: r.name })) });
+}
+
+// POST /api/v1/pg/documents — 문서 생성
+export async function createDocument(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) {
+    throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 문서를 만들 수 있습니다");
+  }
+  const body = req.body ?? {};
+  const projectId = body.project_id;
+  const title = String(body.title ?? "").trim();
+  const contentMd = String(body.content_md ?? "").trim() || null;
+  if (!projectId) throw new ApiError("VALIDATION_ERROR", "프로젝트를 선택하세요");
+  if (!title) throw new ApiError("VALIDATION_ERROR", "제목은 필수입니다");
+  const { rows: ok } = await pgQuery(
+    `SELECT 1 FROM project.projects WHERE id = $1 AND company_id = $2`,
+    [projectId, companyId],
+  );
+  if (!ok[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 프로젝트입니다");
+  const { rows } = await pgQuery(
+    `INSERT INTO project.documents (project_id, title, content_md, author_id)
+     VALUES ($1, $2, $3, $4) RETURNING id`,
+    [projectId, title, contentMd, userId],
+  );
+  res.status(201).json({ id: String(rows[0].id) });
+}
+
 // GET /api/v1/pg/hr/attendance
 export async function hrAttendance(req, res) {
   const companyId = await resolveCompanyId(req);
