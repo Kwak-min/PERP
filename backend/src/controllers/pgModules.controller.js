@@ -45,7 +45,9 @@ export async function usage(req, res) {
        (SELECT count(*) FROM project.assignments a
           JOIN project.projects p ON p.id = a.project_id
          WHERE p.company_id = $1) AS tasks,
-       (SELECT count(*) FROM project.documents WHERE company_id = $1) AS documents`,
+       (SELECT count(*) FROM project.documents d
+          JOIN project.projects p ON p.id = d.project_id
+         WHERE p.company_id = $1) AS documents`,
     [companyId],
   );
   const r = rows[0];
