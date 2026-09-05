@@ -515,6 +515,92 @@ export async function createSettlement(req, res) {
   res.status(201).json({ id: String(rows[0].id) });
 }
 
+// ── 알림 ─────────────────────────────────────────────────────────
+// GET /api/v1/pg/notifications — 내 알림
+export async function notifications(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT kind AS 유형, title AS 제목, body AS 내용,
+            CASE WHEN is_read THEN 'done' ELSE 'pending' END AS status, created_at AS 시각
+       FROM notice.notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200`,
+    [userId],
+  );
+  res.json({ items: rows });
+}
+
+// ── AI 템플릿 / 기억 ─────────────────────────────────────────────
+// GET /api/v1/pg/agent/templates
+export async function agentTemplates(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT t.name AS 이름, t.prompt AS 프롬프트, u.name AS 생성자
+       FROM ai.agent_templates t LEFT JOIN auth.users u ON u.id = t.created_by
+      WHERE t.company_id = $1 ORDER BY t.id DESC`,
+    [companyId],
+  );
+  res.json({ items: rows });
+}
+
+// POST /api/v1/pg/agent/templates
+export async function createAgentTemplate(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 템플릿을 만들 수 있습니다");
+  const body = req.body ?? {};
+  const name = String(body.name ?? "").trim();
+  const prompt = String(body.prompt ?? "").trim();
+  if (!name) throw new ApiError("VALIDATION_ERROR", "이름은 필수입니다");
+  if (!prompt) throw new ApiError("VALIDATION_ERROR", "프롬프트는 필수입니다");
+  const { rows } = await pgQuery(
+    `INSERT INTO ai.agent_templates (company_id, name, prompt, created_by) VALUES ($1, $2, $3, $4) RETURNING id`,
+    [companyId, name, prompt, userId],
+  );
+  res.status(201).json({ id: String(rows[0].id) });
+}
+
+// GET /api/v1/pg/agent/memory — 내 기억
+export async function agentMemory(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT key AS 키, value AS 값 FROM ai.agent_memory WHERE user_id = $1 ORDER BY id DESC`,
+    [userId],
+  );
+  res.json({ items: rows });
+}
+
+// POST /api/v1/pg/agent/memory (upsert)
+export async function createAgentMemory(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 기억을 저장할 수 있습니다");
+  const body = req.body ?? {};
+  const key = String(body.key ?? "").trim();
+  const value = String(body.value ?? "").trim() || null;
+  if (!key) throw new ApiError("VALIDATION_ERROR", "키는 필수입니다");
+  const { rows } = await pgQuery(
+    `INSERT INTO ai.agent_memory (company_id, user_id, key, value) VALUES ($1, $2, $3, $4)
+     ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+     RETURNING id`,
+    [companyId, userId, key, value],
+  );
+  res.status(201).json({ id: String(rows[0].id) });
+}
+
+// ── 자동화 실행기록 ──────────────────────────────────────────────
+// GET /api/v1/pg/automation/runs
+export async function automationRuns(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT w.name AS 워크플로, r.status AS status, r.started_at AS 시작, r.ended_at AS 종료
+       FROM automation.workflow_runs r JOIN automation.workflows w ON w.id = r.workflow_id
+      WHERE w.company_id = $1 ORDER BY r.started_at DESC LIMIT 200`,
+    [companyId],
+  );
+  res.json({ items: rows });
+}
+
 // GET /api/v1/pg/hr/attendance
 export async function hrAttendance(req, res) {
   const companyId = await resolveCompanyId(req);
