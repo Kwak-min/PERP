@@ -365,8 +365,10 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   // 자동으로 실데이터로 전환되고, 아직 안 옮긴 화면은 데모 fixture 로 남는다.)
   const hasServerContent = Boolean(serverStats || serverTable || serverFacts);
   const serverEmpty = resource.status === "empty" && !hasServerContent;
-  const usingDemo =
-    !hasServerContent && (demoMode || !screen.endpoint || (!serverAnswered && !blocked));
+  // 데모(fixture) 더미는 데모 모드가 켜져 있을 때만 보인다. 데모 OFF면
+  // 실데이터가 있으면 실데이터, 없으면 빈 상태로 — 어떤 화면도 가짜를 만들지 않는다.
+  // (endpoint 가 없는 상세 화면도 데모 OFF 면 fixture 를 띄우지 않음)
+  const usingDemo = demoMode && !hasServerContent;
   const progress = screen.id === "DASH-001" && serverAnswered ? undefined : fixture.progress;
   const passedFacts = !demoMode ? passedDetailFacts(location.state) : null;
   const passedStats = !demoMode ? passedDetailStats(location.state) : null;
