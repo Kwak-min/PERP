@@ -34,11 +34,18 @@ export function SignupPage() {
     setBusy(true);
     setError(null);
     try {
+      const companyName = String(form.get("company_name") ?? "").trim();
+      if (!invitation && !companyName) {
+        setError("회사명을 입력해 주세요.");
+        setBusy(false);
+        return;
+      }
       const session = await signup(
         String(form.get("email")),
         name,
         String(form.get("password")),
         invitation ?? undefined,
+        companyName || undefined,
       );
       sessionStore.set(session);
       navigate(session.orgId ? "/" : "/welcome", { replace: true });
@@ -57,6 +64,9 @@ export function SignupPage() {
       {error && <div className="form-error" role="alert">{error}</div>}
       <form className="form-stack" onSubmit={submit}>
         <label>이름<input name="name" required autoComplete="name" /></label>
+        {!invitation && (
+          <label>회사명<input name="company_name" required autoComplete="organization" placeholder="예: 마이컴퍼니" /></label>
+        )}
         <label>이메일<input name="email" type="email" required autoComplete="email" /></label>
         <label>
           비밀번호

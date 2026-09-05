@@ -448,13 +448,15 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
           >
             내보내기
           </Button>
-          <Button
-            tone={screen.ai ? "ai" : "primary"}
-            size="small"
-            onClick={() => setQuickModal(isDetail ? "edit" : "create")}
-          >
-            {isDetail ? "편집" : "새로 만들기"}
-          </Button>
+          {!isDetail && screen.create && (
+            <Button
+              tone={screen.ai ? "ai" : "primary"}
+              size="small"
+              onClick={() => setQuickModal("create")}
+            >
+              새로 만들기
+            </Button>
+          )}
         </div>
       </header>
 
@@ -616,8 +618,8 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
               <MonthCalendar
                 year={shownYear}
                 month={shownMonth}
-                {...(monthOffset === 0 ? { today: fixture.calendar.today } : {})}
-                events={monthOffset === 0 ? fixture.calendar.events : []}
+                {...(usingDemo && monthOffset === 0 ? { today: fixture.calendar.today } : {})}
+                events={usingDemo && monthOffset === 0 ? fixture.calendar.events : []}
               />
             </SectionCard>
           </div>

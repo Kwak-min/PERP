@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { pgQuery } from "../config/pg.js";
+import { pgQuery, pgTransaction } from "../config/pg.js";
 import { hashPassword, verifyPassword } from "../utils/crypto.js";
 import { ApiError } from "../utils/errors.js";
 
@@ -69,10 +69,12 @@ const signupSchema = z.object({
   name: z.string().trim().min(1),
   password: z.string().min(8, "비밀번호는 8자 이상이어야 합니다"),
   phone: z.string().trim().optional(),
+  company_name: z.string().trim().min(1, "회사명을 입력하세요"),
 });
 
 // POST /api/v1/pg/auth/signup
 // 신규 계정을 auth.users 에 저장한다. (즉시 승인 정책: approval_status='approved')
+// 가입 시 그 사람의 회사(작업공간) + 기본 부서·직급을 함께 만들고 관리자(대표)로 지정한다.
 // 로그인과 동일하게 세션을 생성해 토큰을 반환 → 가입 직후 자동 로그인.
 export async function signup(req, res) {
   const parsed = signupSchema.safeParse(req.body ?? {});
@@ -81,7 +83,7 @@ export async function signup(req, res) {
       issues: parsed.error.issues,
     });
   }
-  const { email, name, password, phone } = parsed.data;
+  const { email, name, password, phone, company_name } = parsed.data;
   const ip = clientIp(req);
   const userAgent = req.get("user-agent") ?? null;
 
@@ -96,14 +98,40 @@ export async function signup(req, res) {
 
   const passwordHash = hashPassword(password);
 
-  // 즉시 승인: approval_status='approved', approved_at=now(), account_status 기본 active
-  const { rows: inserted } = await pgQuery(
-    `INSERT INTO auth.users (email, name, phone, password_hash, approval_status, approved_at)
-     VALUES ($1, $2, $3, $4, 'approved', now())
-     RETURNING id`,
-    [email, name, phone ?? null, passwordHash],
-  );
-  const userId = inserted[0].id;
+  // 회사 + 기본 부서·직급 + 관리자 사용자를 원자적으로 생성한다.
+  const userId = await pgTransaction(async (client) => {
+    const { rows: comp } = await client.query(
+      `INSERT INTO org.companies (name, ceo_name) VALUES ($1, $2) RETURNING id`,
+      [company_name, name],
+    );
+    const companyId = comp[0].id;
+
+    const { rows: pos } = await client.query(
+      `INSERT INTO org.positions (company_id, name, rank_level) VALUES
+         ($1, '대표', 50), ($1, '이사', 40), ($1, '팀장', 20), ($1, '사원', 10)
+       RETURNING id, name`,
+      [companyId],
+    );
+    const ceoPositionId = pos.find((p) => p.name === "대표")?.id ?? pos[0].id;
+
+    const { rows: dep } = await client.query(
+      `INSERT INTO org.departments (company_id, name, code) VALUES ($1, '경영지원팀', 'MGMT')
+       RETURNING id`,
+      [companyId],
+    );
+    const deptId = dep[0].id;
+
+    // 즉시 승인 + 관리자(대표)
+    const { rows: u } = await client.query(
+      `INSERT INTO auth.users
+         (company_id, department_id, position_id, email, name, phone,
+          password_hash, approval_status, is_admin, approved_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'approved', true, now())
+       RETURNING id`,
+      [companyId, deptId, ceoPositionId, email, name, phone ?? null, passwordHash],
+    );
+    return u[0].id;
+  });
 
   // 세션 생성 → session_token(UUID) 을 액세스 토큰으로 반환
   const { rows: sessionRows } = await pgQuery(
