@@ -8,13 +8,21 @@ export type ScreenSection =
   | "ai"
   | "admin";
 
-export type CreateFieldType = "text" | "textarea" | "datetime-local" | "date";
+export type CreateFieldType =
+  | "text"
+  | "textarea"
+  | "datetime-local"
+  | "date"
+  | "number"
+  | "select";
 
 export type CreateField = Readonly<{
   name: string;
   label: string;
   type: CreateFieldType;
   required?: boolean;
+  // type === "select" 일 때: 옵션을 가져올 엔드포인트({ items: [{ value, label }] } 응답)
+  optionsEndpoint?: string;
 }>;
 
 export type CreateConfig = Readonly<{
@@ -63,7 +71,7 @@ export const screens: readonly ScreenDefinition[] = [
   { id: "CAL-001", path: "/calendar", label: "캘린더", description: "개인·조직 일정과 행사를 통합해 봅니다.", section: "work", endpoint: "/pg/calendar", module: "calendar", nav: true, create: { endpoint: "/pg/calendar", fields: [{ name: "title", label: "제목", type: "text", required: true }, { name: "starts_at", label: "시작", type: "datetime-local", required: true }, { name: "ends_at", label: "종료", type: "datetime-local", required: true }, { name: "location", label: "장소", type: "text" }] } },
   { id: "CAL-002", path: "/calendar/:eventId", label: "일정 상세", description: "참석자, 장소와 행사 체크리스트를 확인합니다.", section: "work", endpoint: null, module: "calendar" },
   { id: "FIN-001", path: "/finance", label: "재무 홈", description: "수입, 지출, 잔액과 예산 집행률을 요약합니다.", section: "operations", endpoint: "/pg/finance/summary", module: "finance", nav: true },
-  { id: "FIN-002", path: "/finance/transactions", label: "거래", description: "수입·지출 거래를 작성하고 확정합니다.", section: "operations", endpoint: "/pg/finance/transactions", module: "finance" },
+  { id: "FIN-002", path: "/finance/transactions", label: "거래", description: "수입·지출 거래를 작성하고 확정합니다.", section: "operations", endpoint: "/pg/finance/transactions", module: "finance", create: { endpoint: "/pg/finance/transactions", fields: [{ name: "account_id", label: "계정(수입/지출)", type: "select", required: true, optionsEndpoint: "/pg/finance/accounts" }, { name: "amount", label: "금액", type: "number", required: true }, { name: "entry_date", label: "일자", type: "date", required: true }, { name: "memo", label: "내용", type: "text" }] } },
   { id: "FIN-003", path: "/finance/budgets", label: "예산", description: "예산 편성과 집행률을 관리합니다.", section: "operations", endpoint: "/finance/budgets", module: "finance" },
   { id: "FIN-004", path: "/finance/dues", label: "회비", description: "회비 규칙, 청구와 납부 상태를 관리합니다.", section: "operations", endpoint: "/finance/dues/charges", module: "finance" },
   { id: "FIN-005", path: "/finance/settlements", label: "정산", description: "비용 정산을 검토하고 승인 후 전표로 반영합니다.", section: "operations", endpoint: null, module: "finance" },

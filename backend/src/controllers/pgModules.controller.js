@@ -166,6 +166,90 @@ export async function financeSummary(req, res) {
   res.json({ 수입: revenue, 지출: expense, 잔액: revenue - expense });
 }
 
+// GET /api/v1/pg/finance/accounts — 거래 입력용 계정 선택지(수입·지출 계정)
+export async function financeAccounts(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT id, code, name, account_type
+       FROM accounting.accounts
+      WHERE company_id = $1 AND is_active = true
+        AND account_type IN ('revenue', 'expense')
+      ORDER BY account_type, code`,
+    [companyId],
+  );
+  const typeLabel = { revenue: "수입", expense: "지출" };
+  const items = rows.map((r) => ({
+    value: String(r.id),
+    label: `[${typeLabel[r.account_type] ?? r.account_type}] ${r.code} ${r.name}`,
+  }));
+  res.json({ items });
+}
+
+// POST /api/v1/pg/finance/transactions — 거래 생성(복식부기 2줄 자동 생성)
+// 선택한 계정이 수입이면 (현금 차변 / 수입 대변), 지출이면 (지출 차변 / 현금 대변).
+export async function createTransaction(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) {
+    throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 거래를 만들 수 있습니다");
+  }
+  const body = req.body ?? {};
+  const accountId = body.account_id;
+  const amount = Number(body.amount);
+  const entryDate = body.entry_date || new Date().toISOString().slice(0, 10);
+  const memo = String(body.memo ?? "").trim() || null;
+  if (!accountId) throw new ApiError("VALIDATION_ERROR", "계정을 선택하세요");
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new ApiError("VALIDATION_ERROR", "금액은 0보다 큰 숫자여야 합니다");
+  }
+
+  // 선택 계정(회사 소유·수입/지출) 확인
+  const { rows: accRows } = await pgQuery(
+    `SELECT id, account_type FROM accounting.accounts
+      WHERE id = $1 AND company_id = $2 AND account_type IN ('revenue','expense')`,
+    [accountId, companyId],
+  );
+  const account = accRows[0];
+  if (!account) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 계정입니다");
+
+  // 상대 계정 = 회사의 자산(현금) 계정 중 코드 최소값
+  const { rows: cashRows } = await pgQuery(
+    `SELECT id FROM accounting.accounts
+      WHERE company_id = $1 AND account_type = 'asset' AND is_active = true
+      ORDER BY code LIMIT 1`,
+    [companyId],
+  );
+  const cash = cashRows[0];
+  if (!cash) throw new ApiError("VALIDATION_ERROR", "현금(자산) 계정이 없어 거래를 만들 수 없습니다");
+
+  const { rows: entryRows } = await pgQuery(
+    `INSERT INTO accounting.journal_entries (company_id, entry_date, memo, created_by, posted)
+     VALUES ($1, $2, $3, $4, true) RETURNING id`,
+    [companyId, entryDate, memo, userId],
+  );
+  const entryId = entryRows[0].id;
+
+  // 수입: 현금 차변 / 수입 대변 · 지출: 지출 차변 / 현금 대변
+  const lines =
+    account.account_type === "revenue"
+      ? [
+          { accountId: cash.id, debit: amount, credit: 0 },
+          { accountId: account.id, debit: 0, credit: amount },
+        ]
+      : [
+          { accountId: account.id, debit: amount, credit: 0 },
+          { accountId: cash.id, debit: 0, credit: amount },
+        ];
+  for (const l of lines) {
+    await pgQuery(
+      `INSERT INTO accounting.journal_lines (entry_id, account_id, debit, credit)
+       VALUES ($1, $2, $3, $4)`,
+      [entryId, l.accountId, l.debit, l.credit],
+    );
+  }
+  res.status(201).json({ id: String(entryId) });
+}
+
 // GET /api/v1/pg/finance/transactions
 export async function financeTransactions(req, res) {
   const companyId = await resolveCompanyId(req);

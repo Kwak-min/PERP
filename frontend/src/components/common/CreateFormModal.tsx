@@ -18,12 +18,33 @@ export function CreateFormModal({ entityLabel, config, session, onClose, onCreat
   const dialogRef = useModalFocus<HTMLFormElement>(onClose);
   const firstRef = useRef<HTMLInputElement>(null);
   const [values, setValues] = useState<Record<string, string>>({});
+  const [options, setOptions] = useState<Record<string, readonly { value: string; label: string }[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     firstRef.current?.focus();
   }, []);
+
+  // select 필드의 옵션을 엔드포인트에서 가져온다.
+  useEffect(() => {
+    let alive = true;
+    for (const field of config.fields) {
+      if (field.type !== "select" || !field.optionsEndpoint) continue;
+      apiRequest(field.optionsEndpoint, { ...(session ? { session } : {}) })
+        .then((data) => {
+          if (!alive) return;
+          const items = (data as { items?: readonly { value: string; label: string }[] }).items ?? [];
+          setOptions((prev) => ({ ...prev, [field.name]: items }));
+        })
+        .catch(() => {
+          if (alive) setOptions((prev) => ({ ...prev, [field.name]: [] }));
+        });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [config.fields, session]);
 
   const dirty = Object.values(values).some((v) => v.trim() !== "");
 
@@ -88,6 +109,16 @@ export function CreateFormModal({ entityLabel, config, session, onClose, onCreat
                   value={values[field.name] ?? ""}
                   onChange={(event) => set(field.name, event.target.value)}
                 />
+              ) : field.type === "select" ? (
+                <select
+                  value={values[field.name] ?? ""}
+                  onChange={(event) => set(field.name, event.target.value)}
+                >
+                  <option value="">선택하세요</option>
+                  {(options[field.name] ?? []).map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
               ) : (
                 <input
                   ref={index === 0 ? firstRef : undefined}
