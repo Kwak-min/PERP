@@ -17,8 +17,11 @@ pgRouter.post("/auth/logout", asyncRoute(controller.logout));
 
 // 구성원(members) 슬라이스 — 회사(company_id) 스코프
 pgRouter.get("/members", asyncRoute(members.listMembers));
+pgRouter.post("/members", asyncRoute(mod.createMember));
 pgRouter.get("/members/departments", asyncRoute(members.listDepartments));
 pgRouter.get("/members/roles", asyncRoute(members.listRoles));
+pgRouter.get("/departments/options", asyncRoute(mod.departmentOptions));
+pgRouter.get("/positions/options", asyncRoute(mod.positionOptions));
 
 // 모듈 read 슬라이스 (1단계) — 회사(company_id) 스코프
 pgRouter.get("/usage", asyncRoute(mod.usage));
@@ -26,7 +29,9 @@ pgRouter.get("/projects", asyncRoute(mod.projects));
 pgRouter.post("/projects", asyncRoute(mod.createProject));
 pgRouter.get("/projects/options", asyncRoute(mod.projectOptions));
 pgRouter.get("/tasks", asyncRoute(mod.tasks));
+pgRouter.post("/tasks", asyncRoute(mod.createTask));
 pgRouter.get("/approvals", asyncRoute(mod.approvals));
+pgRouter.post("/approvals", asyncRoute(mod.createApproval));
 pgRouter.get("/documents", asyncRoute(mod.documents));
 pgRouter.post("/documents", asyncRoute(mod.createDocument));
 pgRouter.get("/calendar", asyncRoute(mod.calendar));

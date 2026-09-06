@@ -1,4 +1,5 @@
 import { pgQuery } from "../config/pg.js";
+import { hashPassword } from "../utils/crypto.js";
 import { ApiError } from "../utils/errors.js";
 
 // perp_db(PostgreSQL) 모듈 read 슬라이스.
@@ -286,19 +287,18 @@ export async function approvals(req, res) {
   res.json({ items: rows });
 }
 
-// GET /api/v1/pg/tasks — 업무(프로젝트 배정)
+// GET /api/v1/pg/tasks — 업무 (project.tasks)
 export async function tasks(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT p.name AS 프로젝트, u.name AS 담당, a.role AS 역할,
-            a.started_on AS 시작, a.ended_on AS 종료,
-            CASE WHEN a.ended_on IS NULL THEN 'active' ELSE 'done' END AS status
-       FROM project.assignments a
-       JOIN project.projects p ON p.id = a.project_id
-       JOIN auth.users u ON u.id = a.user_id
+    `SELECT t.title AS 업무, p.name AS 프로젝트, u.name AS 담당,
+            t.status AS status, t.due_on AS 기한
+       FROM project.tasks t
+       JOIN project.projects p ON p.id = t.project_id
+       LEFT JOIN auth.users u ON u.id = t.assignee_id
       WHERE p.company_id = $1
-      ORDER BY a.started_on DESC`,
+      ORDER BY t.sort_order, t.id DESC`,
     [companyId],
   );
   res.json({ items: rows });
@@ -366,6 +366,98 @@ export async function memberOptions(req, res) {
     [companyId],
   );
   res.json({ items: rows.map((r) => ({ value: String(r.id), label: r.name })) });
+}
+
+// GET /api/v1/pg/departments/options
+export async function departmentOptions(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT id, name FROM org.departments WHERE company_id = $1 ORDER BY name`,
+    [companyId],
+  );
+  res.json({ items: rows.map((r) => ({ value: String(r.id), label: r.name })) });
+}
+
+// GET /api/v1/pg/positions/options
+export async function positionOptions(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT id, name FROM org.positions WHERE company_id = $1 ORDER BY rank_level DESC`,
+    [companyId],
+  );
+  res.json({ items: rows.map((r) => ({ value: String(r.id), label: r.name })) });
+}
+
+// POST /api/v1/pg/members — 구성원 추가(회사에 사용자 생성)
+export async function createMember(req, res) {
+  const { companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 구성원을 추가할 수 있습니다");
+  const body = req.body ?? {};
+  const email = String(body.email ?? "").trim();
+  const name = String(body.name ?? "").trim();
+  const password = String(body.password ?? "");
+  const departmentId = body.department_id || null;
+  const positionId = body.position_id || null;
+  if (!email || !email.includes("@")) throw new ApiError("VALIDATION_ERROR", "올바른 이메일을 입력하세요");
+  if (!name) throw new ApiError("VALIDATION_ERROR", "이름은 필수입니다");
+  if (password.length < 8) throw new ApiError("VALIDATION_ERROR", "초기 비밀번호는 8자 이상이어야 합니다");
+  const { rows: dup } = await pgQuery(`SELECT 1 FROM auth.users WHERE lower(email) = lower($1)`, [email]);
+  if (dup.length > 0) throw new ApiError("CONFLICT", "이미 가입된 이메일입니다");
+  // 부서·직급이 지정되면 회사 소속인지 검증
+  if (departmentId) {
+    const { rows } = await pgQuery(`SELECT 1 FROM org.departments WHERE id=$1 AND company_id=$2`, [departmentId, companyId]);
+    if (!rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 부서입니다");
+  }
+  if (positionId) {
+    const { rows } = await pgQuery(`SELECT 1 FROM org.positions WHERE id=$1 AND company_id=$2`, [positionId, companyId]);
+    if (!rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 직급입니다");
+  }
+  const { rows } = await pgQuery(
+    `INSERT INTO auth.users (company_id, department_id, position_id, email, name, password_hash, approval_status, approved_at)
+     VALUES ($1, $2, $3, $4, $5, $6, 'approved', now()) RETURNING id`,
+    [companyId, departmentId, positionId, email, name, hashPassword(password)],
+  );
+  res.status(201).json({ id: String(rows[0].id) });
+}
+
+// POST /api/v1/pg/tasks — 업무 생성 (project.tasks)
+export async function createTask(req, res) {
+  const { companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 업무를 만들 수 있습니다");
+  const body = req.body ?? {};
+  const projectId = body.project_id;
+  const title = String(body.title ?? "").trim();
+  const assignee = body.assignee_id || null;
+  const dueOn = body.due_on || null;
+  if (!projectId) throw new ApiError("VALIDATION_ERROR", "프로젝트를 선택하세요");
+  if (!title) throw new ApiError("VALIDATION_ERROR", "제목은 필수입니다");
+  const { rows: ok } = await pgQuery(`SELECT 1 FROM project.projects WHERE id=$1 AND company_id=$2`, [projectId, companyId]);
+  if (!ok[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 프로젝트입니다");
+  const { rows } = await pgQuery(
+    `INSERT INTO project.tasks (project_id, assignee_id, title, due_on, status)
+     VALUES ($1, $2, $3, $4, 'todo') RETURNING id`,
+    [projectId, assignee, title, dueOn],
+  );
+  res.status(201).json({ id: String(rows[0].id) });
+}
+
+// POST /api/v1/pg/approvals — 결재(승인요청) 생성
+export async function createApproval(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 결재를 올릴 수 있습니다");
+  const body = req.body ?? {};
+  const requestType = String(body.request_type ?? "").trim();
+  const target = body.target_user_id || null;
+  const note = String(body.note ?? "").trim();
+  if (!requestType) throw new ApiError("VALIDATION_ERROR", "유형은 필수입니다");
+  const { rows } = await pgQuery(
+    `INSERT INTO org.approval_requests (company_id, request_type, requester_id, target_user_id, payload, status)
+     VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING id`,
+    [companyId, requestType, userId, target, JSON.stringify({ note })],
+  );
+  res.status(201).json({ id: String(rows[0].id) });
 }
 
 // ── 자산 ─────────────────────────────────────────────────────────
