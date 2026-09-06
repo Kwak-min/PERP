@@ -487,6 +487,13 @@ export async function membersActivity(_req, res) {
 export async function departmentAccess(_req, res) {
   res.json({ ok: true });
 }
+// 홈 레이아웃 — perp_db 테이블 없음 → 빈 블록(저장 no-op)
+export async function homeLayoutGet(_req, res) {
+  res.json({ blocks: [] });
+}
+export async function homeLayoutSave(_req, res) {
+  res.json({ ok: true });
+}
 
 // ── 개인 노트(Vault) : notes.vaults / notes.notes ────────────────
 async function ensureVault(userId) {

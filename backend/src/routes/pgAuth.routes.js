@@ -25,6 +25,8 @@ pgRouter.get("/members/roles", asyncRoute(members.listRoles));
 pgRouter.get("/members/org-chart", asyncRoute(members.orgChart));
 pgRouter.get("/members/activity", asyncRoute(mod.membersActivity));
 pgRouter.put("/members/departments/:id/access", asyncRoute(mod.departmentAccess));
+pgRouter.get("/members/home-layout", asyncRoute(mod.homeLayoutGet));
+pgRouter.put("/members/home-layout", asyncRoute(mod.homeLayoutSave));
 pgRouter.patch("/members/:membershipId/assignment", asyncRoute(members.assignMember));
 pgRouter.get("/vault/notes", asyncRoute(mod.vaultNotes));
 pgRouter.get("/vault/notes/:id", asyncRoute(mod.vaultNote));
