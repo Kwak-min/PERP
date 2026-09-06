@@ -56,6 +56,7 @@ pgRouter.post("/agent/templates", asyncRoute(mod.createAgentTemplate));
 pgRouter.get("/agent/memory", asyncRoute(mod.agentMemory));
 pgRouter.post("/agent/memory", asyncRoute(mod.createAgentMemory));
 pgRouter.get("/automation/runs", asyncRoute(mod.automationRuns));
+pgRouter.delete("/records/:resource/:id", asyncRoute(mod.deleteRecord));
 pgRouter.get("/hr/attendance", asyncRoute(mod.hrAttendance));
 pgRouter.get("/hr/leaves", asyncRoute(mod.hrLeaves));
 pgRouter.get("/hr/postings", asyncRoute(mod.hrPostings));

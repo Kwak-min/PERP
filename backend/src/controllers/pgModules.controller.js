@@ -121,7 +121,7 @@ export async function projects(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT p.name AS 프로젝트, p.status AS status,
+    `SELECT p.id AS __id, p.name AS 프로젝트, p.status AS status,
             u.name AS 책임자, p.starts_on AS 시작, p.ends_on AS 종료
        FROM project.projects p
        LEFT JOIN auth.users u ON u.id = p.lead_id
@@ -137,7 +137,7 @@ export async function calendar(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT title AS 일정, starts_at AS 시작, ends_at AS 종료,
+    `SELECT id AS __id, title AS 일정, starts_at AS 시작, ends_at AS 종료,
             location AS 장소, scope AS status
        FROM calendar.events
       WHERE company_id = $1
@@ -256,7 +256,7 @@ export async function financeTransactions(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT e.entry_date AS 일자, e.memo AS 내용,
+    `SELECT e.id AS __id, e.entry_date AS 일자, e.memo AS 내용,
             COALESCE(SUM(l.debit), 0) AS 차변,
             COALESCE(SUM(l.credit), 0) AS 대변,
             CASE WHEN e.posted THEN 'confirmed' ELSE 'pending' END AS status
@@ -275,7 +275,7 @@ export async function approvals(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT ar.request_type AS 유형, r.name AS 신청자, t.name AS 대상,
+    `SELECT ar.id AS __id, ar.request_type AS 유형, r.name AS 신청자, t.name AS 대상,
             ar.status AS status, ar.created_at AS 신청일
        FROM org.approval_requests ar
        LEFT JOIN auth.users r ON r.id = ar.requester_id
@@ -292,7 +292,7 @@ export async function tasks(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT t.title AS 업무, p.name AS 프로젝트, u.name AS 담당,
+    `SELECT t.id AS __id, t.title AS 업무, p.name AS 프로젝트, u.name AS 담당,
             t.status AS status, t.due_on AS 기한
        FROM project.tasks t
        JOIN project.projects p ON p.id = t.project_id
@@ -309,7 +309,7 @@ export async function documents(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT d.title AS 제목, p.name AS 프로젝트, u.name AS 작성자,
+    `SELECT d.id AS __id, d.title AS 제목, p.name AS 프로젝트, u.name AS 작성자,
             d.version AS 버전, d.updated_at AS 수정일
        FROM project.documents d
        JOIN project.projects p ON p.id = d.project_id
@@ -366,6 +366,34 @@ export async function memberOptions(req, res) {
     [companyId],
   );
   res.json({ items: rows.map((r) => ({ value: String(r.id), label: r.name })) });
+}
+
+// DELETE /api/v1/pg/records/:resource/:id — 회사 소유 검증 후 삭제(화이트리스트)
+const DELETABLE = {
+  calendar: `DELETE FROM calendar.events WHERE id = $1 AND company_id = $2`,
+  projects: `DELETE FROM project.projects WHERE id = $1 AND company_id = $2`,
+  assets: `DELETE FROM asset.assets WHERE id = $1 AND company_id = $2`,
+  budgets: `DELETE FROM accounting.budgets WHERE id = $1 AND company_id = $2`,
+  settlements: `DELETE FROM accounting.settlements WHERE id = $1 AND company_id = $2`,
+  dues: `DELETE FROM accounting.dues_charges WHERE id = $1 AND company_id = $2`,
+  transactions: `DELETE FROM accounting.journal_entries WHERE id = $1 AND company_id = $2`,
+  approvals: `DELETE FROM org.approval_requests WHERE id = $1 AND company_id = $2`,
+  documents: `DELETE FROM project.documents d USING project.projects p
+              WHERE d.id = $1 AND d.project_id = p.id AND p.company_id = $2`,
+  tasks: `DELETE FROM project.tasks t USING project.projects p
+          WHERE t.id = $1 AND t.project_id = p.id AND p.company_id = $2`,
+};
+
+export async function deleteRecord(req, res) {
+  const { companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 삭제할 수 있습니다");
+  const { resource, id } = req.params;
+  const sql = DELETABLE[resource];
+  if (!sql) throw new ApiError("VALIDATION_ERROR", "삭제할 수 없는 항목입니다");
+  if (!/^\d+$/.test(String(id))) throw new ApiError("VALIDATION_ERROR", "잘못된 id");
+  const result = await pgQuery(sql, [id, companyId]);
+  if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
+  res.json({ ok: true });
 }
 
 // GET /api/v1/pg/departments/options
@@ -466,7 +494,7 @@ export async function assets(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT a.name AS 이름, a.category AS 분류, a.status AS status,
+    `SELECT a.id AS __id, a.name AS 이름, a.category AS 분류, a.status AS status,
             u.name AS 담당, a.location AS 위치, a.acquired_on AS 취득일
        FROM asset.assets a
        LEFT JOIN auth.users u ON u.id = a.assignee_id
@@ -519,7 +547,7 @@ export async function budgets(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT b.name AS 이름, b.amount AS 편성액, b.spent AS 집행액, b.status AS status
+    `SELECT b.id AS __id, b.name AS 이름, b.amount AS 편성액, b.spent AS 집행액, b.status AS status
        FROM accounting.budgets b WHERE b.company_id = $1 ORDER BY b.id DESC`,
     [companyId],
   );
@@ -548,7 +576,7 @@ export async function dues(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT u.name AS 대상, c.amount AS 금액, c.due_date AS 기한, c.status AS status
+    `SELECT c.id AS __id, u.name AS 대상, c.amount AS 금액, c.due_date AS 기한, c.status AS status
        FROM accounting.dues_charges c
        LEFT JOIN auth.users u ON u.id = c.target_user_id
       WHERE c.company_id = $1 ORDER BY c.id DESC`,
@@ -582,7 +610,7 @@ export async function settlements(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT s.title AS 제목, u.name AS 신청자, s.amount AS 금액, s.status AS status, s.created_at AS 신청일
+    `SELECT s.id AS __id, s.title AS 제목, u.name AS 신청자, s.amount AS 금액, s.status AS status, s.created_at AS 신청일
        FROM accounting.settlements s
        LEFT JOIN auth.users u ON u.id = s.requester_id
       WHERE s.company_id = $1 ORDER BY s.id DESC`,

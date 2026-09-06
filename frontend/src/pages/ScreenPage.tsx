@@ -19,6 +19,7 @@ import { StatCard, type Stat } from "../components/ui/StatCard";
 import { StatTrendModal, metricKeyOf, type MetricKey } from "../components/data/StatTrendModal";
 import { MemberListModal, membersSchema, type Member } from "../components/data/MemberListModal";
 import { fixtureFor, type ScreenFixture, type TableFixture } from "../fixtures/screens";
+import { apiRequest, userMessageOf } from "../services/api";
 import { useDepartments } from "../hooks/useDepartments";
 import { useResource } from "../hooks/useResource";
 import { useRoles } from "../hooks/useRoles";
@@ -104,10 +105,13 @@ function liveTable(data: unknown): TableFixture | null {
     (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object",
   );
   if (records.length === 0) return null;
-  const columns = Object.keys(records[0] ?? {}).slice(0, 6);
+  // __id 는 삭제/식별용 숨은 필드 → 표 컬럼에서는 제외.
+  const columns = Object.keys(records[0] ?? {}).filter((k) => k !== "__id").slice(0, 6);
+  const shown = records.slice(0, 8);
   return {
     columns,
-    rows: records.slice(0, 8).map((record) =>
+    ids: shown.map((record) => (record.__id != null ? String(record.__id) : null)),
+    rows: shown.map((record) =>
       columns.map((column) => {
         const value = record[column];
         if (value === null || value === undefined) return "—";
@@ -235,7 +239,13 @@ function passedDetailStats(state: unknown): readonly Stat[] | null {
 function DataTable({
   table,
   onRowClick,
-}: Readonly<{ table: TableFixture; onRowClick?: (row: readonly string[], index: number) => void }>) {
+  onDelete,
+}: Readonly<{
+  table: TableFixture;
+  onRowClick?: (row: readonly string[], index: number) => void;
+  onDelete?: (id: string) => void;
+}>) {
+  const canDelete = Boolean(onDelete && table.ids);
   return (
     <div className="table-wrap" role="region" aria-label="데이터 표" tabIndex={0}>
       <p className="table-scroll-hint">표를 좌우로 스크롤해 모든 열을 확인할 수 있습니다.</p>
@@ -247,6 +257,7 @@ function DataTable({
                 {column.replaceAll("_", " ")}
               </th>
             ))}
+            {canDelete && <th aria-label="작업" />}
           </tr>
         </thead>
         <tbody>
@@ -265,6 +276,23 @@ function DataTable({
                   {cell}
                 </td>
               ))}
+              {canDelete && (
+                <td>
+                  {table.ids?.[index] ? (
+                    <Button
+                      tone="ghost"
+                      size="small"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        const id = table.ids?.[index];
+                        if (id && window.confirm("이 항목을 삭제할까요?")) onDelete?.(id);
+                      }}
+                    >
+                      삭제
+                    </Button>
+                  ) : null}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -369,6 +397,22 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   // 실데이터가 있으면 실데이터, 없으면 빈 상태로 — 어떤 화면도 가짜를 만들지 않는다.
   // (endpoint 가 없는 상세 화면도 데모 OFF 면 fixture 를 띄우지 않음)
   const usingDemo = demoMode && !hasServerContent;
+
+  const deleteResource = screen.deleteResource;
+  const handleDelete = deleteResource
+    ? async (id: string) => {
+        try {
+          await apiRequest(`/pg/records/${deleteResource}/${id}`, {
+            method: "DELETE",
+            ...(apiSession ? { session: apiSession } : {}),
+          });
+          setReloadKey((key) => key + 1);
+          setNotice("삭제했습니다.");
+        } catch (error) {
+          setNotice(userMessageOf(error));
+        }
+      }
+    : undefined;
   const progress = screen.id === "DASH-001" && serverAnswered ? undefined : fixture.progress;
   const passedFacts = !demoMode ? passedDetailFacts(location.state) : null;
   const passedStats = !demoMode ? passedDetailStats(location.state) : null;
@@ -769,7 +813,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
           {table && (
             <div className="col-12">
               <SectionCard title="상세 목록" subtitle="상위 8건" action={<DetailAction />}>
-                <DataTable table={table} />
+                <DataTable table={table} {...(handleDelete ? { onDelete: handleDelete } : {})} />
               </SectionCard>
             </div>
           )}
@@ -827,12 +871,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             {table ? (
               <DataTable
                 table={table}
-                {...(screen.path === "/assets"
-                  ? { onRowClick: (row: readonly string[]) =>
-                      navigate(`/assets/${encodeURIComponent(row[0] ?? "")}`, {
-                        state: { columns: table.columns, row },
-                      }) }
-                  : {})}
+                {...(handleDelete ? { onDelete: handleDelete } : {})}
               />
             ) : visibleRows.length > 0 ? (
               <div className="list-rows">

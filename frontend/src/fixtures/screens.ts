@@ -21,6 +21,7 @@ export type TableFixture = Readonly<{
   columns: readonly string[];
   rows: readonly (readonly string[])[];
   numeric?: readonly number[];
+  ids?: readonly (string | null)[];
 }>;
 
 export type ScreenFixture = Readonly<{
