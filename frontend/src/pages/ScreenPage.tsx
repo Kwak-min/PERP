@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 
 import { BarChart, DonutChart, ProgressList, Timeline } from "../components/data/Charts";
 import { MonthCalendar } from "../components/data/MonthCalendar";
@@ -337,7 +337,6 @@ function downloadCsv(name: string, table: TableFixture): void {
 
 export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const session = useSession();
-  const navigate = useNavigate();
   const location = useLocation();
   const params = useParams();
   const isDetail = Object.keys(params).length > 0;
