@@ -52,7 +52,7 @@ export function AttendanceScreen({ screen }: Readonly<{ screen: ScreenDefinition
   const reload = useCallback(async (): Promise<void> => {
     if (!apiSession) return;
     try {
-      const data = await apiRequest(`/hr/attendance?from=${range.from}&to=${range.to}`, {
+      const data = await apiRequest(`/pg/hr/attendance?from=${range.from}&to=${range.to}`, {
         session: apiSession,
       });
       setAttendance(attendanceSchema.parse(data));
@@ -67,7 +67,7 @@ export function AttendanceScreen({ screen }: Readonly<{ screen: ScreenDefinition
     if (!apiSession) return;
     try {
       const day = todayIso();
-      const data = await apiRequest(`/hr/attendance?from=${day}&to=${day}`, { session: apiSession });
+      const data = await apiRequest(`/pg/hr/attendance?from=${day}&to=${day}`, { session: apiSession });
       setToday(attendanceSchema.parse(data).items[0] ?? null);
     } catch {
       setToday(null);
@@ -77,7 +77,7 @@ export function AttendanceScreen({ screen }: Readonly<{ screen: ScreenDefinition
   const reloadManagePermission = useCallback(async (): Promise<void> => {
     if (!apiSession) return;
     try {
-      await apiRequest("/hr/attendance/corrections/pending", { session: apiSession });
+      await apiRequest("/pg/hr/attendance/corrections/pending", { session: apiSession });
       setCanManage(true);
     } catch {
       setCanManage(false);
@@ -98,7 +98,7 @@ export function AttendanceScreen({ screen }: Readonly<{ screen: ScreenDefinition
     setCheckBusy(true);
     setError(null);
     try {
-      await apiRequest("/hr/attendance/check-in", { method: "POST", session: apiSession });
+      await apiRequest("/pg/hr/attendance/check-in", { method: "POST", session: apiSession });
       await Promise.all([reload(), reloadToday()]);
     } catch (caught) {
       setError(userMessageOf(caught));
@@ -112,7 +112,7 @@ export function AttendanceScreen({ screen }: Readonly<{ screen: ScreenDefinition
     setCheckBusy(true);
     setError(null);
     try {
-      await apiRequest("/hr/attendance/check-out", { method: "POST", session: apiSession });
+      await apiRequest("/pg/hr/attendance/check-out", { method: "POST", session: apiSession });
       await Promise.all([reload(), reloadToday()]);
     } catch (caught) {
       setError(userMessageOf(caught));

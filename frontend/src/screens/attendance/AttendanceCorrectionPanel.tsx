@@ -39,7 +39,7 @@ export function AttendanceCorrectionPanel({ apiSession, mode, members = [], relo
 
   const reload = useCallback(async (): Promise<void> => {
     try {
-      const path = mode === "manage" ? "/hr/attendance/corrections/pending" : "/hr/attendance/corrections";
+      const path = mode === "manage" ? "/pg/hr/attendance/corrections/pending" : "/pg/hr/attendance/corrections";
       const result = attendanceCorrectionListSchema.parse(await apiRequest(path, { session: apiSession }));
       setItems(result.items);
     } catch (caught) {
@@ -56,7 +56,7 @@ export function AttendanceCorrectionPanel({ apiSession, mode, members = [], relo
     setBusy(true);
     setError(null);
     try {
-      await apiRequest("/hr/attendance/corrections", {
+      await apiRequest("/pg/hr/attendance/corrections", {
         method: "POST",
         session: apiSession,
         body: { on_date: onDate, kind, hours: toNonNegativeInt(hours, 24), note },
@@ -75,7 +75,7 @@ export function AttendanceCorrectionPanel({ apiSession, mode, members = [], relo
     setDecidingId(id);
     setError(null);
     try {
-      await apiRequest(`/hr/attendance/corrections/${id}/decide`, {
+      await apiRequest(`/pg/hr/attendance/corrections/${id}/decide`, {
         method: "POST",
         session: apiSession,
         body: { decision },

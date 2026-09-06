@@ -842,21 +842,83 @@ export async function automationRuns(req, res) {
   res.json({ items: rows });
 }
 
-// GET /api/v1/pg/hr/attendance
+// GET /api/v1/pg/hr/attendance?from=&to= — 내 근태 (AttendanceScreen 계약)
 export async function hrAttendance(req, res) {
-  const companyId = await resolveCompanyId(req);
-  if (!companyId) return res.json({ items: [] });
+  const { userId, companyId } = await resolveUser(req);
+  const empty = { items: [], summary: { total_days: 0, total_hours: 0, by_kind: {} } };
+  if (!companyId) return res.json(empty);
+  const params = [userId];
+  let dateFilter = "";
+  if (req.query.from && req.query.to) {
+    params.push(req.query.from, req.query.to);
+    dateFilter = "AND at.work_date BETWEEN $2 AND $3";
+  }
   const { rows } = await pgQuery(
-    `SELECT u.name AS 이름, at.work_date AS 근무일,
-            at.check_in_at AS 출근, at.check_out_at AS 퇴근, at.source AS status
+    `SELECT at.id, at.user_id, to_char(at.work_date,'YYYY-MM-DD') AS work_date,
+            at.check_in_at, at.check_out_at, at.source, at.note
        FROM hr.attendances at
-       JOIN auth.users u ON u.id = at.user_id
-      WHERE at.company_id = $1
-      ORDER BY at.work_date DESC, u.name
-      LIMIT 200`,
-    [companyId],
+      WHERE at.user_id = $1 ${dateFilter}
+      ORDER BY at.work_date DESC`,
+    params,
   );
-  res.json({ items: rows });
+  const items = rows.map((r) => {
+    const hours = r.check_in_at && r.check_out_at
+      ? Math.round(((new Date(r.check_out_at) - new Date(r.check_in_at)) / 3.6e6) * 10) / 10
+      : 0;
+    return {
+      id: String(r.id),
+      member_id: String(r.user_id),
+      on_date: r.work_date,
+      kind: r.check_in_at ? "present" : "absent",
+      hours,
+      source: r.source ?? "manual",
+      note: r.note ?? "",
+      check_in_at: r.check_in_at,
+      check_out_at: r.check_out_at,
+    };
+  });
+  const by_kind = {};
+  for (const i of items) by_kind[i.kind] = (by_kind[i.kind] ?? 0) + 1;
+  const total_hours = Math.round(items.reduce((s, i) => s + i.hours, 0) * 10) / 10;
+  res.json({ items, summary: { total_days: items.length, total_hours, by_kind } });
+}
+
+// POST /api/v1/pg/hr/attendance/check-in
+export async function hrCheckIn(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 출근할 수 있습니다");
+  await pgQuery(
+    `INSERT INTO hr.attendances (company_id, user_id, work_date, check_in_at, source)
+     VALUES ($1, $2, CURRENT_DATE, now(), 'button')
+     ON CONFLICT (user_id, work_date)
+       DO UPDATE SET check_in_at = COALESCE(hr.attendances.check_in_at, now())`,
+    [companyId, userId],
+  );
+  res.json({ ok: true });
+}
+
+// POST /api/v1/pg/hr/attendance/check-out
+export async function hrCheckOut(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 퇴근할 수 있습니다");
+  const result = await pgQuery(
+    `UPDATE hr.attendances SET check_out_at = now()
+      WHERE user_id = $1 AND work_date = CURRENT_DATE AND check_in_at IS NOT NULL`,
+    [userId],
+  );
+  if (result.rowCount === 0) throw new ApiError("VALIDATION_ERROR", "먼저 출근을 기록하세요");
+  res.json({ ok: true });
+}
+
+// 근태 수정요청(corrections) — perp_db 테이블 미구현. 화면이 깨지지 않게 빈/준비중 처리.
+export async function hrCorrections(_req, res) {
+  res.json({ items: [] });
+}
+export async function hrCorrectionSubmit(_req, res) {
+  throw new ApiError("VALIDATION_ERROR", "근태 수정요청 기능은 준비 중입니다");
+}
+export async function hrCorrectionDecide(_req, res) {
+  throw new ApiError("VALIDATION_ERROR", "근태 수정요청 기능은 준비 중입니다");
 }
 
 // GET /api/v1/pg/hr/leaves
