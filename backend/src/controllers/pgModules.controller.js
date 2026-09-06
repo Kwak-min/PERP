@@ -921,22 +921,128 @@ export async function hrCorrectionDecide(_req, res) {
   throw new ApiError("VALIDATION_ERROR", "근태 수정요청 기능은 준비 중입니다");
 }
 
-// GET /api/v1/pg/hr/leaves
+// GET /api/v1/pg/hr/leaves — 휴가 목록 (LeaveScreen 계약; 관리자는 전체)
 export async function hrLeaves(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT u.name AS 이름, lr.leave_type AS 종류,
-            lr.starts_on AS 시작, lr.ends_on AS 종료,
-            lr.days AS 일수, lr.status AS status
+    `SELECT lr.id, lr.user_id, lr.leave_type,
+            to_char(lr.starts_on,'YYYY-MM-DD') AS start_on,
+            to_char(lr.ends_on,'YYYY-MM-DD') AS end_on,
+            lr.days, lr.reason, lr.status
        FROM hr.leave_requests lr
-       JOIN auth.users u ON u.id = lr.user_id
       WHERE lr.company_id = $1
-      ORDER BY lr.created_at DESC
-      LIMIT 200`,
+      ORDER BY lr.created_at DESC`,
     [companyId],
   );
-  res.json({ items: rows });
+  const items = rows.map((r) => ({
+    id: String(r.id),
+    member_id: String(r.user_id),
+    kind: r.leave_type,
+    start_on: r.start_on,
+    end_on: r.end_on,
+    days: Number(r.days),
+    reason: r.reason ?? "",
+    status: r.status,
+    substitute_id: null,
+  }));
+  res.json({ items });
+}
+
+// POST /api/v1/pg/hr/leaves — 휴가 신청
+export async function hrLeaveApply(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 휴가를 신청할 수 있습니다");
+  const b = req.body ?? {};
+  const kind = String(b.kind ?? "").trim() || "annual";
+  const startOn = b.start_on;
+  const endOn = b.end_on;
+  const reason = String(b.reason ?? "").trim() || null;
+  if (!startOn || !endOn) throw new ApiError("VALIDATION_ERROR", "시작·종료일은 필수입니다");
+  if (new Date(endOn) < new Date(startOn)) throw new ApiError("VALIDATION_ERROR", "종료가 시작보다 빠를 수 없습니다");
+  const days = Math.round((new Date(endOn) - new Date(startOn)) / 8.64e7) + 1;
+  const { rows } = await pgQuery(
+    `INSERT INTO hr.leave_requests (company_id, user_id, leave_type, starts_on, ends_on, days, reason, status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending') RETURNING id`,
+    [companyId, userId, kind, startOn, endOn, days, reason],
+  );
+  res.status(201).json({ id: String(rows[0].id) });
+}
+
+// POST /api/v1/pg/hr/leaves/:id/decide — 승인/반려
+export async function hrLeaveDecide(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "권한이 없습니다");
+  const decision = (req.body ?? {}).decision;
+  const status = decision === "approve" ? "approved" : decision === "reject" ? "rejected" : null;
+  if (!status) throw new ApiError("VALIDATION_ERROR", "decision 은 approve/reject 여야 합니다");
+  const result = await pgQuery(
+    `UPDATE hr.leave_requests SET status = $3, approver_id = $4, decided_at = now()
+      WHERE id = $1 AND company_id = $2`,
+    [req.params.id, companyId, status, userId],
+  );
+  if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
+  res.json({ ok: true });
+}
+
+// GET /api/v1/pg/hr/leaves/calendar?from=&to=
+export async function hrLeaveCalendar(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const from = req.query.from ?? "1900-01-01";
+  const to = req.query.to ?? "2999-12-31";
+  const { rows } = await pgQuery(
+    `SELECT lr.id, lr.user_id, u.name, lr.leave_type,
+            to_char(lr.starts_on,'YYYY-MM-DD') AS start_on,
+            to_char(lr.ends_on,'YYYY-MM-DD') AS end_on, lr.status
+       FROM hr.leave_requests lr JOIN auth.users u ON u.id = lr.user_id
+      WHERE lr.company_id = $1 AND lr.starts_on <= $3 AND lr.ends_on >= $2
+      ORDER BY lr.starts_on`,
+    [companyId, from, to],
+  );
+  const items = rows.map((r) => ({
+    leave_id: String(r.id),
+    member_id: String(r.user_id),
+    member_name: r.name,
+    kind: r.leave_type,
+    start_on: r.start_on,
+    end_on: r.end_on,
+    status: r.status,
+  }));
+  res.json({ items });
+}
+
+// GET /api/v1/pg/hr/leave-balances — 내 잔여
+export async function hrLeaveBalances(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT year, total_days, used_days FROM hr.leave_balances WHERE user_id = $1 ORDER BY year DESC`,
+    [userId],
+  );
+  const items = rows.map((r) => ({
+    id: `${userId}-${r.year}`,
+    kind: "annual",
+    granted_days: Number(r.total_days),
+    used_days: Number(r.used_days),
+    remaining_days: Number(r.total_days) - Number(r.used_days),
+  }));
+  res.json({ items });
+}
+
+// GET /api/v1/pg/hr/leave-policies — perp_db 미구현 → 빈 목록
+export async function hrLeavePolicies(_req, res) {
+  res.json({ items: [] });
+}
+
+// GET /api/v1/pg/hr/leave-stats — 요약(잔여 기반 최소 집계)
+export async function hrLeaveStats(req, res) {
+  res.json({
+    items: [],
+    totals: { granted_days: 0, used_days: 0, usage_rate: 0 },
+    formula: "",
+    generated_at: new Date().toISOString(),
+  });
 }
 
 // GET /api/v1/pg/hr/postings

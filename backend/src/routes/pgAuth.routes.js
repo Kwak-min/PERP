@@ -69,4 +69,10 @@ pgRouter.get("/hr/attendance/corrections/pending", asyncRoute(mod.hrCorrections)
 pgRouter.post("/hr/attendance/corrections", asyncRoute(mod.hrCorrectionSubmit));
 pgRouter.post("/hr/attendance/corrections/:id/decide", asyncRoute(mod.hrCorrectionDecide));
 pgRouter.get("/hr/leaves", asyncRoute(mod.hrLeaves));
+pgRouter.post("/hr/leaves", asyncRoute(mod.hrLeaveApply));
+pgRouter.get("/hr/leaves/calendar", asyncRoute(mod.hrLeaveCalendar));
+pgRouter.post("/hr/leaves/:id/decide", asyncRoute(mod.hrLeaveDecide));
+pgRouter.get("/hr/leave-balances", asyncRoute(mod.hrLeaveBalances));
+pgRouter.get("/hr/leave-policies", asyncRoute(mod.hrLeavePolicies));
+pgRouter.get("/hr/leave-stats", asyncRoute(mod.hrLeaveStats));
 pgRouter.get("/hr/postings", asyncRoute(mod.hrPostings));
