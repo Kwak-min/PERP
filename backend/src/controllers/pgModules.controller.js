@@ -1045,18 +1045,91 @@ export async function hrLeaveStats(req, res) {
   });
 }
 
-// GET /api/v1/pg/hr/postings
+// GET /api/v1/pg/hr/postings — 채용 공고 (RecruitmentScreen 계약)
 export async function hrPostings(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT jp.title AS 공고, d.name AS 부서,
-            jp.headcount AS 모집인원, jp.status AS status, jp.opened_at AS 게시일
+    `SELECT jp.id, jp.title, jp.status,
+            to_char(jp.closed_at,'YYYY-MM-DD') AS closes_on,
+            to_char(jp.opened_at,'YYYY-MM-DD"T"HH24:MI:SS') AS created_at
        FROM hr.job_postings jp
-       LEFT JOIN org.departments d ON d.id = jp.department_id
       WHERE jp.company_id = $1
       ORDER BY jp.opened_at DESC`,
     [companyId],
   );
-  res.json({ items: rows });
+  const items = rows.map((r) => ({
+    id: String(r.id),
+    title: r.title,
+    status: r.status,
+    closes_on: r.closes_on,
+    created_at: r.created_at ?? "",
+  }));
+  res.json({ items });
+}
+
+// POST /api/v1/pg/hr/postings/:id/close — 공고 마감
+export async function hrPostingClose(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "권한이 없습니다");
+  const result = await pgQuery(
+    `UPDATE hr.job_postings SET status = 'closed', closed_at = now()
+      WHERE id = $1 AND company_id = $2`,
+    [req.params.id, companyId],
+  );
+  if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "공고를 찾을 수 없습니다");
+  res.json({ ok: true });
+}
+
+// GET /api/v1/pg/hr/postings/:id/applications — 공고 지원자
+export async function hrPostingApplications(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT a.id, a.posting_id, a.name, a.email, a.phone, a.stage
+       FROM hr.applicants a
+       JOIN hr.job_postings jp ON jp.id = a.posting_id
+      WHERE a.posting_id = $1 AND jp.company_id = $2
+      ORDER BY a.id`,
+    [req.params.id, companyId],
+  );
+  const items = rows.map((r) => ({
+    id: String(r.id),
+    posting_id: String(r.posting_id),
+    applicant_name: r.name,
+    applicant_email: r.email ?? "",
+    applicant_phone: r.phone,
+    score: null,
+    stage: r.stage,
+    retain_until: null,
+  }));
+  res.json({ items });
+}
+
+// POST /api/v1/pg/hr/applications/:id/stage — 지원자 단계 변경
+export async function hrApplicationStage(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "권한이 없습니다");
+  const stage = String((req.body ?? {}).stage ?? "").trim();
+  if (!stage) throw new ApiError("VALIDATION_ERROR", "stage 는 필수입니다");
+  const result = await pgQuery(
+    `UPDATE hr.applicants a SET stage = $3
+       FROM hr.job_postings jp
+      WHERE a.id = $1 AND a.posting_id = jp.id AND jp.company_id = $2`,
+    [req.params.id, companyId, stage],
+  );
+  if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "지원자를 찾을 수 없습니다");
+  res.json({ ok: true });
+}
+
+// 온보딩 — perp_db 테이블 미구현 → 빈/준비중
+export async function hrOnboarding(_req, res) {
+  res.json({ items: [], progress: { total: 0, done: 0 } });
+}
+export async function hrOnboardingComplete(_req, res) {
+  throw new ApiError("VALIDATION_ERROR", "온보딩 기능은 준비 중입니다");
+}
+// 채용 확정 후 멤버 초대 — perp_db 이관 전 준비중
+export async function membersInvite(_req, res) {
+  throw new ApiError("VALIDATION_ERROR", "구성원 초대 기능은 준비 중입니다");
 }

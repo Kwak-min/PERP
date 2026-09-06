@@ -42,14 +42,14 @@ export function PipelinePanel({ apiSession }: Props) {
   const reload = useCallback(async (): Promise<void> => {
     try {
       const postingResult = postingListSchema.parse(
-        await apiRequest("/hr/postings", { session: apiSession }),
+        await apiRequest("/pg/hr/postings", { session: apiSession }),
       );
       setPostings(postingResult.items);
 
       const applicationPath =
         selectedPostingId === ALL_POSTINGS
-          ? "/hr/applications"
-          : `/hr/postings/${selectedPostingId}/applications`;
+          ? "/pg/hr/applications"
+          : `/pg/hr/postings/${selectedPostingId}/applications`;
       const applicationResult = applicationListSchema.parse(
         await apiRequest(applicationPath, { session: apiSession }),
       );
@@ -69,7 +69,7 @@ export function PipelinePanel({ apiSession }: Props) {
     setBusy(true);
     setError(null);
     try {
-      await apiRequest("/hr/postings", {
+      await apiRequest("/pg/hr/postings", {
         method: "POST",
         session: apiSession,
         body: { title: postingTitle },
@@ -88,7 +88,7 @@ export function PipelinePanel({ apiSession }: Props) {
     setBusy(true);
     setError(null);
     try {
-      await apiRequest(`/hr/postings/${postingId}/close`, { method: "POST", session: apiSession });
+      await apiRequest(`/pg/hr/postings/${postingId}/close`, { method: "POST", session: apiSession });
       setNotice("공고를 마감했습니다.");
       await reload();
     } catch (caught) {
@@ -104,7 +104,7 @@ export function PipelinePanel({ apiSession }: Props) {
     setBusy(true);
     setError(null);
     try {
-      await apiRequest(`/hr/postings/${selectedPostingId}/applications`, {
+      await apiRequest(`/pg/hr/postings/${selectedPostingId}/applications`, {
         method: "POST",
         session: apiSession,
         body: {
@@ -128,7 +128,7 @@ export function PipelinePanel({ apiSession }: Props) {
     setMovingId(application.id);
     setError(null);
     try {
-      await apiRequest(`/hr/applications/${application.id}/stage`, {
+      await apiRequest(`/pg/hr/applications/${application.id}/stage`, {
         method: "POST",
         session: apiSession,
         body: { stage, ...(application.score === null ? {} : { score: application.score }) },
@@ -145,7 +145,7 @@ export function PipelinePanel({ apiSession }: Props) {
     setMovingId(application.id);
     setError(null);
     try {
-      await apiRequest(`/hr/applications/${application.id}/stage`, {
+      await apiRequest(`/pg/hr/applications/${application.id}/stage`, {
         method: "POST",
         session: apiSession,
         body: { stage: application.stage, score },
@@ -180,7 +180,7 @@ export function PipelinePanel({ apiSession }: Props) {
     setMovingId(application.id);
     setError(null);
     try {
-      await apiRequest("/members/invites", {
+      await apiRequest("/pg/members/invites", {
         method: "POST",
         session: apiSession,
         body: { email: application.applicant_email },
