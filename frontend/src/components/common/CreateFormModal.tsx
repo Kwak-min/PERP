@@ -11,13 +11,16 @@ type Props = Readonly<{
   session: ApiSession | null;
   onClose: () => void;
   onCreated: () => void;
+  method?: "POST" | "PATCH";
+  initialValues?: Record<string, string>;
 }>;
 
-// 설정(CreateConfig)에 따라 입력 폼을 렌더하고 perp_db 로 실제 생성 요청을 보낸다.
-export function CreateFormModal({ entityLabel, config, session, onClose, onCreated }: Props) {
+// 설정(CreateConfig)에 따라 입력 폼을 렌더하고 perp_db 로 생성/수정 요청을 보낸다.
+export function CreateFormModal({ entityLabel, config, session, onClose, onCreated, method = "POST", initialValues }: Props) {
   const dialogRef = useModalFocus<HTMLFormElement>(onClose);
   const firstRef = useRef<HTMLInputElement>(null);
-  const [values, setValues] = useState<Record<string, string>>({});
+  const isEdit = method === "PATCH";
+  const [values, setValues] = useState<Record<string, string>>(initialValues ?? {});
   const [options, setOptions] = useState<Record<string, readonly { value: string; label: string }[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -69,7 +72,7 @@ export function CreateFormModal({ entityLabel, config, session, onClose, onCreat
     setError(null);
     try {
       await apiRequest(config.endpoint, {
-        method: "POST",
+        method,
         body: values,
         ...(session ? { session } : {}),
       });
@@ -94,8 +97,8 @@ export function CreateFormModal({ entityLabel, config, session, onClose, onCreat
       >
         <header className="modal__head">
           <div>
-            <span className="eyebrow">새 항목</span>
-            <h2 id="create-form-title">{entityLabel} 만들기</h2>
+            <span className="eyebrow">{isEdit ? "항목 수정" : "새 항목"}</span>
+            <h2 id="create-form-title">{entityLabel} {isEdit ? "수정" : "만들기"}</h2>
             <p>필수 정보를 입력해 저장합니다.</p>
           </div>
           <Button tone="ghost" size="small" type="button" onClick={requestClose}>닫기</Button>
@@ -133,7 +136,7 @@ export function CreateFormModal({ entityLabel, config, session, onClose, onCreat
         {error && <p className="field-error" role="alert">{error}</p>}
         <footer className="modal__foot">
           <Button tone="ghost" type="button" onClick={requestClose}>취소</Button>
-          <Button type="submit" disabled={saving}>{saving ? "저장 중…" : "만들기"}</Button>
+          <Button type="submit" disabled={saving}>{saving ? "저장 중…" : isEdit ? "저장" : "만들기"}</Button>
         </footer>
       </form>
     </div>

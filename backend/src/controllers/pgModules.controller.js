@@ -396,6 +396,87 @@ export async function deleteRecord(req, res) {
   res.json({ ok: true });
 }
 
+// ── 수정(단건 조회/PATCH) ────────────────────────────────────────
+// 편집 가능한 리소스: 테이블 · 스코프 · 필드(이름/타입). FK·불변 컬럼은 제외.
+const EDITABLE = {
+  projects: { table: "project.projects", scope: "company",
+    fields: [["name", "text"], ["starts_on", "date"], ["ends_on", "date"], ["description", "text"]] },
+  calendar: { table: "calendar.events", scope: "company",
+    fields: [["title", "text"], ["starts_at", "ts"], ["ends_at", "ts"], ["location", "text"]] },
+  assets: { table: "asset.assets", scope: "company",
+    fields: [["name", "text"], ["category", "text"], ["location", "text"]] },
+  budgets: { table: "accounting.budgets", scope: "company",
+    fields: [["name", "text"], ["amount", "num"]] },
+  settlements: { table: "accounting.settlements", scope: "company",
+    fields: [["title", "text"], ["amount", "num"]] },
+  tasks: { table: "project.tasks", scope: "project",
+    fields: [["title", "text"], ["due_on", "date"]] },
+  documents: { table: "project.documents", scope: "project",
+    fields: [["title", "text"], ["content_md", "text"]] },
+  dues: { table: "accounting.dues_charges", scope: "company",
+    fields: [["amount", "num"], ["due_date", "date"]] },
+};
+
+function ownershipClause(scope, tableAlias) {
+  // company 스코프: 테이블에 company_id. project 스코프: project_id → projects.company_id.
+  return scope === "project"
+    ? `${tableAlias}.project_id IN (SELECT id FROM project.projects WHERE company_id = $2)`
+    : `${tableAlias}.company_id = $2`;
+}
+
+// GET /api/v1/pg/records/:resource/:id — 편집용 단건 조회
+export async function getRecord(req, res) {
+  const { companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "권한이 없습니다");
+  const { resource, id } = req.params;
+  const def = EDITABLE[resource];
+  if (!def) throw new ApiError("VALIDATION_ERROR", "수정할 수 없는 항목입니다");
+  if (!/^\d+$/.test(String(id))) throw new ApiError("VALIDATION_ERROR", "잘못된 id");
+  const selects = def.fields.map(([col, type]) =>
+    type === "date" ? `to_char(t.${col}, 'YYYY-MM-DD') AS ${col}`
+    : type === "ts" ? `to_char(t.${col}, 'YYYY-MM-DD"T"HH24:MI') AS ${col}`
+    : `t.${col} AS ${col}`,
+  ).join(", ");
+  const { rows } = await pgQuery(
+    `SELECT ${selects} FROM ${def.table} t WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")}`,
+    [id, companyId],
+  );
+  if (!rows[0]) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
+  res.json(rows[0]);
+}
+
+// PATCH /api/v1/pg/records/:resource/:id — 수정
+export async function updateRecord(req, res) {
+  const { companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 수정할 수 있습니다");
+  const { resource, id } = req.params;
+  const def = EDITABLE[resource];
+  if (!def) throw new ApiError("VALIDATION_ERROR", "수정할 수 없는 항목입니다");
+  if (!/^\d+$/.test(String(id))) throw new ApiError("VALIDATION_ERROR", "잘못된 id");
+  const body = req.body ?? {};
+  const sets = [];
+  const params = [id, companyId];
+  for (const [col, type] of def.fields) {
+    if (!(col in body)) continue;
+    let value = body[col];
+    if (type === "num") {
+      value = value === "" || value === null ? null : Number(value);
+      if (value !== null && !Number.isFinite(value)) throw new ApiError("VALIDATION_ERROR", `${col} 숫자 오류`);
+    } else {
+      value = value === "" ? null : value;
+    }
+    params.push(value);
+    sets.push(`${col} = $${params.length}`);
+  }
+  if (sets.length === 0) throw new ApiError("VALIDATION_ERROR", "변경할 내용이 없습니다");
+  const result = await pgQuery(
+    `UPDATE ${def.table} t SET ${sets.join(", ")} WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")}`,
+    params,
+  );
+  if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
+  res.json({ ok: true });
+}
+
 // GET /api/v1/pg/departments/options
 export async function departmentOptions(req, res) {
   const companyId = await resolveCompanyId(req);

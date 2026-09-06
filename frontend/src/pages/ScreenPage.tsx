@@ -23,7 +23,7 @@ import { apiRequest, userMessageOf } from "../services/api";
 import { useDepartments } from "../hooks/useDepartments";
 import { useResource } from "../hooks/useResource";
 import { useRoles } from "../hooks/useRoles";
-import { sectionLabels, type ScreenDefinition } from "../routes/catalog";
+import { sectionLabels, type ScreenDefinition, type CreateConfig } from "../routes/catalog";
 import { useSession } from "../store/session";
 import { useBranch } from "../store/branch";
 import { useDemoMode } from "../store/demo";
@@ -240,12 +240,16 @@ function DataTable({
   table,
   onRowClick,
   onDelete,
+  onEdit,
 }: Readonly<{
   table: TableFixture;
   onRowClick?: (row: readonly string[], index: number) => void;
   onDelete?: (id: string) => void;
+  onEdit?: (id: string) => void;
 }>) {
   const canDelete = Boolean(onDelete && table.ids);
+  const canEdit = Boolean(onEdit && table.ids);
+  const canAct = canDelete || canEdit;
   return (
     <div className="table-wrap" role="region" aria-label="데이터 표" tabIndex={0}>
       <p className="table-scroll-hint">표를 좌우로 스크롤해 모든 열을 확인할 수 있습니다.</p>
@@ -257,7 +261,7 @@ function DataTable({
                 {column.replaceAll("_", " ")}
               </th>
             ))}
-            {canDelete && <th aria-label="작업" />}
+            {canAct && <th aria-label="작업" />}
           </tr>
         </thead>
         <tbody>
@@ -276,21 +280,36 @@ function DataTable({
                   {cell}
                 </td>
               ))}
-              {canDelete && (
+              {canAct && (
                 <td>
-                  {table.ids?.[index] ? (
-                    <Button
-                      tone="ghost"
-                      size="small"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        const id = table.ids?.[index];
-                        if (id && window.confirm("이 항목을 삭제할까요?")) onDelete?.(id);
-                      }}
-                    >
-                      삭제
-                    </Button>
-                  ) : null}
+                  <span className="row-actions">
+                    {canEdit && table.ids?.[index] ? (
+                      <Button
+                        tone="ghost"
+                        size="small"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          const id = table.ids?.[index];
+                          if (id) onEdit?.(id);
+                        }}
+                      >
+                        수정
+                      </Button>
+                    ) : null}
+                    {canDelete && table.ids?.[index] ? (
+                      <Button
+                        tone="ghost"
+                        size="small"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          const id = table.ids?.[index];
+                          if (id && window.confirm("이 항목을 삭제할까요?")) onDelete?.(id);
+                        }}
+                      >
+                        삭제
+                      </Button>
+                    ) : null}
+                  </span>
                 </td>
               )}
             </tr>
@@ -370,6 +389,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const [trend, setTrend] = useState<{ stat: Stat; metric: MetricKey } | null>(null);
   const [showMembers, setShowMembers] = useState(false);
   const [quickModal, setQuickModal] = useState<"create" | "edit" | null>(null);
+  const [editModal, setEditModal] = useState<{ config: CreateConfig; initialValues: Record<string, string> } | null>(null);
   const departments = useDepartments(apiSession);
   const roles = useRoles(apiSession);
 
@@ -407,6 +427,30 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
           });
           setReloadKey((key) => key + 1);
           setNotice("삭제했습니다.");
+        } catch (error) {
+          setNotice(userMessageOf(error));
+        }
+      }
+    : undefined;
+
+  const editResource = screen.editResource;
+  const editCreateConfig = screen.create;
+  const handleEdit = editResource && editCreateConfig
+    ? async (id: string) => {
+        try {
+          const data = (await apiRequest(`/pg/records/${editResource}/${id}`, {
+            ...(apiSession ? { session: apiSession } : {}),
+          })) as Record<string, unknown>;
+          const initialValues: Record<string, string> = {};
+          for (const [key, value] of Object.entries(data)) {
+            initialValues[key] = value == null ? "" : String(value);
+          }
+          // 수정 폼: 생성 필드 중 select(FK) 제외 = 편집 가능한 스칼라 필드.
+          const fields = editCreateConfig.fields.filter((f) => f.type !== "select");
+          setEditModal({
+            config: { endpoint: `/pg/records/${editResource}/${id}`, fields },
+            initialValues,
+          });
         } catch (error) {
           setNotice(userMessageOf(error));
         }
@@ -812,7 +856,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
           {table && (
             <div className="col-12">
               <SectionCard title="상세 목록" subtitle="상위 8건" action={<DetailAction />}>
-                <DataTable table={table} {...(handleDelete ? { onDelete: handleDelete } : {})} />
+                <DataTable table={table} {...(handleDelete ? { onDelete: handleDelete } : {})} {...(handleEdit ? { onEdit: handleEdit } : {})} />
               </SectionCard>
             </div>
           )}
@@ -871,6 +915,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
               <DataTable
                 table={table}
                 {...(handleDelete ? { onDelete: handleDelete } : {})}
+                {...(handleEdit ? { onEdit: handleEdit } : {})}
               />
             ) : visibleRows.length > 0 ? (
               <div className="list-rows">
@@ -899,6 +944,20 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
           onCreated={() => {
             setReloadKey((key) => key + 1);
             setNotice(`${screen.label} 항목을 저장했습니다.`);
+          }}
+        />
+      )}
+      {editModal && (
+        <CreateFormModal
+          entityLabel={screen.label}
+          config={editModal.config}
+          session={apiSession}
+          method="PATCH"
+          initialValues={editModal.initialValues}
+          onClose={() => setEditModal(null)}
+          onCreated={() => {
+            setReloadKey((key) => key + 1);
+            setNotice("수정했습니다.");
           }}
         />
       )}
