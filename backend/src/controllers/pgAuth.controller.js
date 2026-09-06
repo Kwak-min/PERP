@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { pgQuery, pgTransaction } from "../config/pg.js";
+import { OPTIONAL_MODULES } from "../config/modules.js";
 import { hashPassword, verifyPassword } from "../utils/crypto.js";
 import { ApiError } from "../utils/errors.js";
 
@@ -120,6 +121,14 @@ export async function signup(req, res) {
       [companyId],
     );
     const deptId = dep[0].id;
+
+    // 기본 활성 모듈(전체 옵션) 세팅
+    await client.query(
+      `INSERT INTO org.company_modules (company_id, module_key)
+       SELECT $1, k FROM unnest($2::text[]) AS k
+       ON CONFLICT DO NOTHING`,
+      [companyId, OPTIONAL_MODULES],
+    );
 
     // 즉시 승인 + 관리자(대표)
     const { rows: u } = await client.query(

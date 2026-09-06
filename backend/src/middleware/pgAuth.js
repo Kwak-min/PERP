@@ -1,4 +1,5 @@
 import { pgQuery } from "../config/pg.js";
+import { OPTIONAL_MODULES } from "../config/modules.js";
 import { ApiError } from "../utils/errors.js";
 
 // perp_db(PostgreSQL) 세션 브리지.
@@ -71,6 +72,25 @@ export async function pgAuthBridge(req, _res, next) {
         }
       },
     };
+    // 회사 활성 모듈 → 레거시 게이팅(req.organization.modules)로 주입.
+    // 테이블 미생성 등 오류 시엔 안전값(전체 옵션)으로 폴백해 로그인이 깨지지 않게 함.
+    let modules = OPTIONAL_MODULES;
+    if (row.company_id) {
+      try {
+        const { rows: mr } = await pgQuery(
+          `SELECT module_key FROM org.company_modules WHERE company_id = $1`,
+          [row.company_id],
+        );
+        if (mr.length > 0) modules = mr.map((m) => m.module_key);
+      } catch {
+        // org.company_modules 미생성 → 기본(전체 옵션) 유지
+      }
+    }
+    req.organization = {
+      id: row.company_id ? String(row.company_id) : null,
+      modules: modules.join(","),
+    };
+
     return next();
   } catch (error) {
     return next(error);

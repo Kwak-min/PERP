@@ -22,6 +22,8 @@ pgRouter.get("/members/departments", asyncRoute(members.listDepartments));
 pgRouter.get("/members/roles", asyncRoute(members.listRoles));
 pgRouter.get("/departments/options", asyncRoute(mod.departmentOptions));
 pgRouter.get("/positions/options", asyncRoute(mod.positionOptions));
+pgRouter.get("/org/modules", asyncRoute(mod.getOrgModules));
+pgRouter.patch("/org/modules", asyncRoute(mod.updateOrgModules));
 
 // 모듈 read 슬라이스 (1단계) — 회사(company_id) 스코프
 pgRouter.get("/usage", asyncRoute(mod.usage));

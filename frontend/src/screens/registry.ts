@@ -9,6 +9,7 @@ import { OrgLogScreen } from "./OrgLogScreen";
 import { RecruitmentScreen } from "./RecruitmentScreen";
 import { VaultScreen } from "./VaultScreen";
 import { HomeBuilderScreen } from "./HomeBuilderScreen";
+import { OrgModulesScreen } from "./OrgModulesScreen";
 import { ReservationScreen } from "./ReservationScreen";
 
 export type ScreenComponent = ComponentType<Readonly<{ screen: ScreenDefinition }>>;
@@ -17,6 +18,7 @@ export type ScreenComponent = ComponentType<Readonly<{ screen: ScreenDefinition 
  * 화면 ID별 전용 화면. 여기 없는 화면은 공통 ScreenPage가 렌더한다.
  */
 export const screenOverrides: Readonly<Record<string, ScreenComponent>> = {
+  "ORG-001": OrgModulesScreen,
   "ORG-003": OrgChartScreen,
   "ORG-005": BranchSettingsScreen,
   "ORG-006": OrgLogScreen,

@@ -1,4 +1,5 @@
-import { pgQuery } from "../config/pg.js";
+import { pgQuery, pgTransaction } from "../config/pg.js";
+import { MODULE_CATALOG, OPTIONAL_MODULES } from "../config/modules.js";
 import { hashPassword } from "../utils/crypto.js";
 import { ApiError } from "../utils/errors.js";
 
@@ -475,6 +476,45 @@ export async function updateRecord(req, res) {
   );
   if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
   res.json({ ok: true });
+}
+
+// ── 조직 모듈 활성 ───────────────────────────────────────────────
+// GET /api/v1/pg/org/modules — 카탈로그 + 회사 활성 여부
+export async function getOrgModules(req, res) {
+  const { companyId } = await resolveUser(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT module_key FROM org.company_modules WHERE company_id = $1`,
+    [companyId],
+  );
+  const enabled = new Set(rows.map((r) => r.module_key));
+  const items = MODULE_CATALOG.map((m) => ({
+    key: m.key,
+    label: m.label ?? m.key,
+    core: Boolean(m.core),
+    enabled: m.core ? true : enabled.has(m.key),
+  }));
+  res.json({ items });
+}
+
+// PATCH /api/v1/pg/org/modules — 활성 모듈 교체 (옵션 모듈만)
+export async function updateOrgModules(req, res) {
+  const { companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 모듈을 변경할 수 있습니다");
+  const body = req.body ?? {};
+  const requested = Array.isArray(body.enabled) ? body.enabled : [];
+  const valid = requested.filter((k) => OPTIONAL_MODULES.includes(k));
+  await pgTransaction(async (client) => {
+    await client.query(`DELETE FROM org.company_modules WHERE company_id = $1`, [companyId]);
+    if (valid.length > 0) {
+      await client.query(
+        `INSERT INTO org.company_modules (company_id, module_key)
+         SELECT $1, k FROM unnest($2::text[]) AS k`,
+        [companyId, valid],
+      );
+    }
+  });
+  res.json({ ok: true, enabled: valid });
 }
 
 // GET /api/v1/pg/departments/options
