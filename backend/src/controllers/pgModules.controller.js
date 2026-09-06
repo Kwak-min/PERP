@@ -478,6 +478,110 @@ export async function updateRecord(req, res) {
   res.json({ ok: true });
 }
 
+// ── 조직 변경 로그 / 브랜치 접근 (간이) ──────────────────────────
+// GET /api/v1/pg/members/activity — perp_db 통합 감사 소스 없음 → 빈 목록
+export async function membersActivity(_req, res) {
+  res.json({ items: [] });
+}
+// PUT /api/v1/pg/members/departments/:id/access — 접근권한은 perp_db 미모델 → no-op
+export async function departmentAccess(_req, res) {
+  res.json({ ok: true });
+}
+
+// ── 개인 노트(Vault) : notes.vaults / notes.notes ────────────────
+async function ensureVault(userId) {
+  const { rows } = await pgQuery(
+    `SELECT id FROM notes.vaults WHERE owner_id = $1 ORDER BY id LIMIT 1`,
+    [userId],
+  );
+  if (rows[0]) return rows[0].id;
+  const { rows: created } = await pgQuery(
+    `INSERT INTO notes.vaults (owner_id, name) VALUES ($1, 'My Vault') RETURNING id`,
+    [userId],
+  );
+  return created[0].id;
+}
+const toNote = (r) => ({
+  id: String(r.id),
+  title: r.title,
+  content: r.content_md ?? "",
+  folder: r.folder_path ?? "/",
+  tags: [],
+});
+
+// GET /api/v1/pg/vault/notes
+export async function vaultNotes(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) return res.json({ items: [], folders: [] });
+  const vaultId = await ensureVault(userId);
+  const { rows } = await pgQuery(
+    `SELECT id, title, content_md, folder_path FROM notes.notes WHERE vault_id = $1 ORDER BY updated_at DESC`,
+    [vaultId],
+  );
+  const items = rows.map(toNote);
+  const folders = [...new Set(items.map((i) => i.folder))];
+  res.json({ items, folders });
+}
+
+// GET /api/v1/pg/vault/notes/:id
+export async function vaultNote(req, res) {
+  const { userId } = await resolveUser(req);
+  const { rows } = await pgQuery(
+    `SELECT n.id, n.title, n.content_md, n.folder_path
+       FROM notes.notes n JOIN notes.vaults v ON v.id = n.vault_id
+      WHERE n.id = $1 AND v.owner_id = $2`,
+    [req.params.id, userId],
+  );
+  if (!rows[0]) throw new ApiError("NOT_FOUND", "노트를 찾을 수 없습니다");
+  res.json(toNote(rows[0]));
+}
+
+// POST /api/v1/pg/vault/notes
+export async function vaultCreateNote(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 노트를 만들 수 있습니다");
+  const b = req.body ?? {};
+  const title = String(b.title ?? "").trim();
+  if (!title) throw new ApiError("VALIDATION_ERROR", "제목은 필수입니다");
+  const vaultId = await ensureVault(userId);
+  const { rows } = await pgQuery(
+    `INSERT INTO notes.notes (vault_id, folder_path, title, content_md)
+     VALUES ($1, $2, $3, $4) RETURNING id`,
+    [vaultId, String(b.folder ?? "/") || "/", title, b.content ?? null],
+  );
+  res.status(201).json({ id: String(rows[0].id) });
+}
+
+// PATCH /api/v1/pg/vault/notes/:id
+export async function vaultUpdateNote(req, res) {
+  const { userId } = await resolveUser(req);
+  const b = req.body ?? {};
+  const result = await pgQuery(
+    `UPDATE notes.notes n
+        SET title = COALESCE($3, n.title),
+            content_md = COALESCE($4, n.content_md),
+            folder_path = COALESCE($5, n.folder_path),
+            updated_at = now()
+       FROM notes.vaults v
+      WHERE n.id = $1 AND n.vault_id = v.id AND v.owner_id = $2`,
+    [req.params.id, userId, b.title ?? null, b.content ?? null, b.folder ?? null],
+  );
+  if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "노트를 찾을 수 없습니다");
+  res.json({ ok: true });
+}
+
+// DELETE /api/v1/pg/vault/notes/:id
+export async function vaultDeleteNote(req, res) {
+  const { userId } = await resolveUser(req);
+  const result = await pgQuery(
+    `DELETE FROM notes.notes n USING notes.vaults v
+      WHERE n.id = $1 AND n.vault_id = v.id AND v.owner_id = $2`,
+    [req.params.id, userId],
+  );
+  if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "노트를 찾을 수 없습니다");
+  res.json({ ok: true });
+}
+
 // ── 조직 모듈 활성 ───────────────────────────────────────────────
 // GET /api/v1/pg/org/modules — 카탈로그 + 회사 활성 여부
 export async function getOrgModules(req, res) {

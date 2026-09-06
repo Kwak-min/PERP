@@ -72,7 +72,7 @@ export function OrgLogScreen({ screen }: Readonly<{ screen: ScreenDefinition }>)
   useEffect(() => {
     if (!token || !orgId) return;
     const controller = new AbortController();
-    apiRequest("/members/activity?limit=200", {
+    apiRequest("/pg/members/activity?limit=200", {
       session: { token, orgId },
       signal: controller.signal,
     })
