@@ -4,9 +4,9 @@ const KEY = "orbitflow.demoMode";
 const listeners = new Set<() => void>();
 
 function read(): boolean {
-  if (typeof window === "undefined") return true;
+  if (typeof window === "undefined") return false;
   const raw = localStorage.getItem(KEY);
-  return raw === null ? true : raw === "1";
+  return raw === "1";
 }
 
 let current = read();
@@ -25,5 +25,5 @@ export const demoStore = {
 };
 
 export function useDemoMode(): boolean {
-  return useSyncExternalStore(demoStore.subscribe, demoStore.getSnapshot, () => true);
+  return useSyncExternalStore(demoStore.subscribe, demoStore.getSnapshot, () => false);
 }

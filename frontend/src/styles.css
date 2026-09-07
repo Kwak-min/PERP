@@ -284,8 +284,18 @@ input:focus, select:focus, textarea:focus { border-color: var(--of-primary); box
 .member-modal__empty span { color: var(--of-text-muted); font-size: 11.5px; }
 .quick-create-modal { width: min(480px, 100%); }
 .quick-create-modal .field { display: grid; gap: 6px; margin-top: 18px; font-size: 11.5px; font-weight: 800; }
-.quick-create-modal .field input { min-height: 38px; border: 1px solid var(--of-border-strong); border-radius: var(--r-md); padding: 0 11px; font: inherit; }
-.quick-create-modal .field input:focus-visible { outline: 2px solid var(--of-primary); outline-offset: 2px; }
+.quick-create-modal .field input, .quick-create-modal .field select { min-height: 38px; border: 1px solid var(--of-border-strong); border-radius: var(--r-md); padding: 0 11px; background: var(--of-card); color: var(--of-text); font: inherit; }
+.quick-create-modal .field input:focus-visible, .quick-create-modal .field select:focus-visible { outline: 2px solid var(--of-primary); outline-offset: 2px; }
+.operational-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.operational-list li { min-height: 52px; display: flex; align-items: center; gap: 12px; padding: 8px 4px; border-bottom: 1px solid var(--of-border); }
+.operational-list li:last-child { border-bottom: 0; }
+.operational-list a, .operational-list strong { min-width: 0; flex: 1; color: var(--of-text); font-size: 13px; font-weight: 800; }
+.operational-list li > span:not(.badge), .operational-list time { color: var(--of-text-muted); font-size: 11.5px; }
+.calendar-event-list { margin-top: 12px; border-top: 1px solid var(--of-border); }
+.calendar-nav { min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 12px; border-bottom: 1px solid var(--of-border); }
+.calendar-nav strong { min-width: 110px; text-align: center; }
+.dues-list strong { flex: 0 0 auto; white-space: nowrap; }
+.dues-list li > span:first-of-type { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .modal__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 .table-row--interactive { cursor: pointer; }
 .table-row--interactive:hover { background: var(--of-primary-soft); }
@@ -612,10 +622,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* ---------- calendar ---------- */
 .calendar { display: flex; flex-direction: column; }
-.calendar__head { display: grid; grid-template-columns: repeat(7, 1fr); border-bottom: 1px solid var(--of-border); background: var(--of-surface-muted); }
+.calendar__head { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-bottom: 1px solid var(--of-border); background: var(--of-surface-muted); }
 .calendar__head span { padding: 8px 10px; color: var(--of-text-muted); font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; text-align: left; }
 .calendar__weekend { color: #b45309; }
-.calendar__grid { display: grid; grid-template-columns: repeat(7, 1fr); }
+.calendar__grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
 .calendar__cell { position: relative; min-height: 96px; display: flex; flex-direction: column; gap: 5px; padding: 7px 8px; border-right: 1px solid var(--of-border); border-bottom: 1px solid var(--of-border); background: var(--of-card); }
 .calendar__cell:nth-child(7n) { border-right: 0; }
 .calendar__cell--muted { background: var(--of-surface-muted); }
@@ -702,7 +712,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .button--small { padding: 0 12px; }
   .chip { padding: 0 12px; }
   .calendar__event b { display: inline; }
+  .dues-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; }
+  .dues-list li > span:nth-of-type(2) { grid-column: 1 / 3; }
 }
+
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }

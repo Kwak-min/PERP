@@ -9,7 +9,7 @@ import { OrgTree } from "../components/data/OrgTree";
 import { FlowCanvas, NodeGraph } from "../components/data/Graphs";
 import { PermissionMatrix, WorkloadHeatmap } from "../components/data/Matrix";
 import { StateBoundary } from "../components/common/StateBoundary";
-import { QuickCreateModal } from "../components/common/QuickCreateModal";
+import { isOperationalScreen, OperationalSurface } from "../components/data/OperationalSurface";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { ListRow } from "../components/ui/ListRow";
@@ -340,7 +340,6 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const trendable = (screen.endpoint ?? "").startsWith("/members");
   const [trend, setTrend] = useState<{ stat: Stat; metric: MetricKey } | null>(null);
   const [showMembers, setShowMembers] = useState(false);
-  const [quickModal, setQuickModal] = useState<"create" | "edit" | null>(null);
   const departments = useDepartments(apiSession);
   const roles = useRoles(apiSession);
 
@@ -348,7 +347,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
     setQuery(new URLSearchParams(location.search).get("q") ?? "");
   }, [location.search]);
 
-  // 서버가 응답했으면(빈 결과 포함) 서버가 진실이다. 데모는 서버가 없을 때만 쓴다.
+  // 데모는 사용자가 명시적으로 켠 경우에만 쓴다. 로딩·오류·빈 응답은 서버 상태 그대로 표시한다.
   const serverAnswered = resource.status === "ready" || resource.status === "empty";
   const blocked = !demoMode && (resource.status === "forbidden" || resource.status === "error");
   const serverStats = serverAnswered && !demoMode ? liveStats(resource.data) : null;
@@ -360,8 +359,8 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
       : null;
   const serverEmpty = !demoMode && resource.status === "empty";
   const serverFacts = serverAnswered && !demoMode ? liveFacts(resource.data) : null;
-  const usingDemo = demoMode || !screen.endpoint || (!serverAnswered && !blocked);
-  const progress = screen.id === "DASH-001" && serverAnswered ? undefined : fixture.progress;
+  const usingDemo = demoMode;
+  const progress = usingDemo ? fixture.progress : undefined;
   const passedFacts = !demoMode ? passedDetailFacts(location.state) : null;
   const passedStats = !demoMode ? passedDetailStats(location.state) : null;
   const detailFacts = passedFacts ?? serverFacts ?? (usingDemo ? fixture.facts ?? [] : []);
@@ -410,6 +409,10 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
     return out;
   }, [fixture.rows, query, usingDemo, filterWord]);
 
+  if (isOperationalScreen(screen.id) && apiSession) {
+    return <OperationalSurface screen={screen} session={apiSession} />;
+  }
+
   return (
     <div className="screen" data-screen-id={screen.id}>
       <header className="screen-header">
@@ -443,9 +446,10 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
           <Button
             tone={screen.ai ? "ai" : "primary"}
             size="small"
-            onClick={() => setQuickModal(isDetail ? "edit" : "create")}
+            disabled
+            title="이 화면의 저장 양식은 아직 연결되지 않았습니다"
           >
-            {isDetail ? "편집" : "새로 만들기"}
+            {isDetail ? "편집 미지원" : "만들기 미지원"}
           </Button>
         </div>
       </header>
@@ -507,23 +511,23 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             <div />
           </StateBoundary>
         </SectionCard>
-      ) : fixture.layout === "graph" && fixture.graph ? (
+      ) : usingDemo && fixture.layout === "graph" && fixture.graph ? (
         <SectionCard title="관계 그래프" subtitle="위키링크와 백링크" action={<DetailAction onClick={() => setNotice("노드를 클릭하면 해당 노트로 이동합니다 (데모)")} />} foot="회색 노드는 연결이 없는 고아 노트입니다">
           <NodeGraph nodes={fixture.graph.nodes} edges={fixture.graph.edges} />
         </SectionCard>
-      ) : fixture.layout === "flow" && fixture.flow ? (
+      ) : usingDemo && fixture.layout === "flow" && fixture.flow ? (
         <SectionCard title="워크플로" subtitle="트리거 → 조건 → 액션" action={<DetailAction onClick={() => setNotice("샌드박스 테스트는 데모에서 준비 중입니다.")} />} foot="게시 전 샌드박스에서 실행해 볼 수 있습니다">
           <FlowCanvas nodes={fixture.flow} />
         </SectionCard>
-      ) : fixture.layout === "heatmap" && fixture.heatmap ? (
+      ) : usingDemo && fixture.layout === "heatmap" && fixture.heatmap ? (
         <SectionCard title="업무량" subtitle="구성원별 배정 시간" action={<DetailAction onClick={() => setNotice("셀을 클릭하면 해당 일자 업무 목록이 열립니다 (데모)")} />} foot="색이 진할수록 배정 시간이 많습니다 · 붉은 합계는 가용 시간 초과">
           <WorkloadHeatmap columns={fixture.heatmap.columns} rows={fixture.heatmap.rows} />
         </SectionCard>
-      ) : fixture.layout === "matrix" && fixture.matrix ? (
+      ) : usingDemo && fixture.layout === "matrix" && fixture.matrix ? (
         <SectionCard title="권한 매트릭스" subtitle="역할별 허용 범위" action={<DetailAction onClick={() => setNotice("권한 시뮬레이션은 데모에서 준비 중입니다.")} />} foot="기본 역할의 핵심 권한은 보호되어 변경할 수 없습니다">
           <PermissionMatrix roles={fixture.matrix.roles} rows={fixture.matrix.rows} />
         </SectionCard>
-      ) : fixture.layout === "brief" && fixture.brief ? (
+      ) : usingDemo && fixture.layout === "brief" && fixture.brief ? (
         <SectionCard title="오늘의 브리핑" subtitle="우선순위·결재·위험" action={<DetailAction onClick={() => setNotice("브리핑을 새로 생성했습니다 (데모)")} />} foot="각 항목은 원천 데이터와 연결되어 있습니다">
           <div className="brief-list">
             {fixture.brief.map((item) => (
@@ -538,7 +542,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             ))}
           </div>
         </SectionCard>
-      ) : fixture.layout === "diff" && fixture.diff ? (
+      ) : usingDemo && fixture.layout === "diff" && fixture.diff ? (
         <div className="detail-layout">
           <SectionCard title="변경 미리보기" subtitle="실행 전/후 비교" action={<DetailAction onClick={() => setNotice("승인 요청을 전송했습니다 (데모)")} />} foot="승인 후에만 실제 반영됩니다">
             <div className="diff">
@@ -562,7 +566,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             </dl>
           </SectionCard>
         </div>
-      ) : fixture.layout === "kanban" && fixture.kanban ? (
+      ) : usingDemo && fixture.layout === "kanban" && fixture.kanban ? (
         <SectionCard
           title="업무 보드"
           subtitle="상태별 진행 현황 · WIP 한도 표시"
@@ -571,7 +575,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
         >
           <KanbanBoard columns={fixture.kanban} />
         </SectionCard>
-      ) : fixture.layout === "gantt" && fixture.gantt ? (
+      ) : usingDemo && fixture.layout === "gantt" && fixture.gantt ? (
         <SectionCard
           title="타임라인"
           subtitle="주 단위 일정과 마일스톤"
@@ -584,11 +588,11 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             todayIndex={fixture.gantt.todayIndex}
           />
         </SectionCard>
-      ) : fixture.layout === "orgchart" && fixture.orgchart ? (
+      ) : usingDemo && fixture.layout === "orgchart" && fixture.orgchart ? (
         <SectionCard title="조직도" subtitle="부서 구조와 책임자" action={<DetailAction />} foot="괄호 표기는 공석입니다">
           <OrgTree root={fixture.orgchart} />
         </SectionCard>
-      ) : fixture.layout === "calendar" && fixture.calendar ? (
+      ) : usingDemo && fixture.layout === "calendar" && fixture.calendar ? (
         <div className="grid-12">
           <div className="col-8">
             <SectionCard
@@ -689,7 +693,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             </SectionCard>
           )}
         </div>
-      ) : fixture.layout === "dashboard" ? (
+      ) : usingDemo && fixture.layout === "dashboard" ? (
         <div className="grid-12">
           {fixture.bars && (
             <div className="col-8">
@@ -841,17 +845,6 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             ) : null}
           </StateBoundary>
         </SectionCard>
-      )}
-      {quickModal && (
-        <QuickCreateModal
-          entityLabel={screen.label}
-          mode={quickModal}
-          onClose={() => setQuickModal(null)}
-          onSubmit={(name) => {
-            setQuickModal(null);
-            setNotice(`${name}의 상세 입력은 ${screen.label} 화면의 전용 양식에서 계속할 수 있습니다.`);
-          }}
-        />
       )}
     </div>
   );
