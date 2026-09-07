@@ -4,6 +4,7 @@ import { db } from "../config/db.js";
 import {
   MASKED_FIELDS,
   ROLE_TEMPLATES,
+  SCOPE_ORDER,
   permissionsFor,
   widestScope,
 } from "../config/rbac.js";
@@ -83,8 +84,26 @@ const fieldDecisionSchema = z.object({
 
 function assertKnownRoles(roles) {
   for (const role of roles) {
-    if (!(role in ROLE_TEMPLATES)) {
+    if (!Object.hasOwn(ROLE_TEMPLATES, role)) {
       throw new ApiError("VALIDATION_ERROR", `unknown role: ${role}`);
+    }
+  }
+}
+
+function assertCanDelegateRoles(principal, roles) {
+  principal.require("role.assign");
+  assertKnownRoles(roles);
+
+  const actorPermissions = permissionsFor(principal.roles);
+  const actorScope = SCOPE_ORDER.indexOf(principal.scope);
+  for (const role of roles) {
+    const template = ROLE_TEMPLATES[role];
+    const delegatesPlatformAccess = template.permissions.some((permission) => permission.startsWith("platform."));
+    const exceedsPermissions = template.permissions.some(
+      (permission) => !actorPermissions.has("*") && !actorPermissions.has(permission),
+    );
+    if (delegatesPlatformAccess || exceedsPermissions || SCOPE_ORDER.indexOf(template.scope) > actorScope) {
+      throw new ApiError("PERMISSION_DENIED", `role delegation denied: ${role}`);
     }
   }
 }
@@ -345,20 +364,34 @@ export function createInvite(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("member.write");
   const payload = inviteSchema.parse(req.body);
-  assertKnownRoles(payload.roles);
+  assertCanDelegateRoles(principal, payload.roles);
+
+  const email = payload.email.trim().toLowerCase();
+  const now = nowIso();
+  const expired = db()
+    .prepare(
+      `SELECT id FROM invitation
+       WHERE tenant_id = ? AND org_id = ? AND lower(email) = ? AND status = 'pending'
+         AND expires_at <= ? AND deleted_at IS NULL`,
+    )
+    .all(principal.tenantId, principal.orgId, email, now);
+  for (const invitation of expired) {
+    update("invitation", invitation.id, { status: "expired" }, principal.userId);
+  }
 
   const existing = db()
     .prepare(
       `SELECT id FROM invitation
-       WHERE tenant_id = ? AND org_id = ? AND email = ? AND status = 'pending' AND deleted_at IS NULL`,
+       WHERE tenant_id = ? AND org_id = ? AND lower(email) = ? AND status = 'pending'
+         AND expires_at > ? AND deleted_at IS NULL`,
     )
-    .get(principal.tenantId, principal.orgId, payload.email);
+    .get(principal.tenantId, principal.orgId, email, now);
   if (existing) throw new ApiError("CONFLICT", "a pending invitation already exists for this email");
 
   const invitation = insert("invitation", {
     tenant_id: principal.tenantId,
     org_id: principal.orgId,
-    email: payload.email,
+    email,
     roles: payload.roles.join(","),
     token: newToken(),
     expires_at: new Date(Date.now() + payload.expires_in_days * 86400000).toISOString(),
@@ -371,7 +404,7 @@ export function createInvite(req, res) {
     resourceType: "invitation",
     resourceId: invitation.id,
     actorId: principal.userId,
-    after: { email: payload.email, roles: payload.roles },
+    after: { email, roles: payload.roles },
     requestId: req.requestId,
   });
 
@@ -398,67 +431,37 @@ export function provision(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("member.write");
   const payload = provisionSchema.parse(req.body);
-  assertKnownRoles(payload.roles);
+  assertCanDelegateRoles(principal, payload.roles);
 
   const email = payload.email.trim().toLowerCase();
-  const temporary = temporaryPassword();
-  let user = db().prepare("SELECT * FROM app_user WHERE email = ?").get(email);
-
-  if (!user) {
-    user = insert("app_user", {
-      id: newId(),
-      email,
-      name: payload.name,
-      password_hash: hashPassword(temporary),
-      must_change_password: 1,
-      created_at: nowIso(),
-    });
-  } else {
-    const active = db()
-      .prepare(
-        `SELECT * FROM membership
-         WHERE tenant_id = ? AND org_id = ? AND user_id = ? AND deleted_at IS NULL`,
-      )
-      .get(principal.tenantId, principal.orgId, user.id);
-    if (active && active.status === "active") {
-      throw new ApiError("CONFLICT", "이미 이 조직에 등록된 이메일입니다");
-    }
-    user = update("app_user", user.id, {
-      password_hash: hashPassword(temporary),
-      must_change_password: 1,
-      failed_logins: 0,
-      locked_until: null,
-    });
-  }
-
-  let membership = db()
-    .prepare("SELECT * FROM membership WHERE tenant_id = ? AND org_id = ? AND user_id = ?")
-    .get(principal.tenantId, principal.orgId, user.id);
-  if (!membership) {
-    membership = insert("membership", {
-      tenant_id: principal.tenantId,
-      user_id: user.id,
-      org_id: principal.orgId,
-      roles: payload.roles.join(","),
-      status: "active",
-      department_id: payload.department_id ?? null,
-      title: payload.title ?? null,
-      joined_at: nowIso(),
-      created_by: principal.userId,
-    });
-  } else {
-    membership = update(
-      "membership",
-      membership.id,
-      {
-        roles: payload.roles.join(","),
-        status: "active",
-        department_id: payload.department_id ?? null,
-        title: payload.title ?? null,
-      },
-      principal.userId,
+  const existingUser = db().prepare("SELECT * FROM app_user WHERE lower(email) = ?").get(email);
+  if (existingUser) {
+    throw new ApiError(
+      "CONFLICT",
+      "이미 등록된 계정입니다. 사용자가 로그인한 뒤 이메일 초대를 수락해야 합니다",
     );
   }
+
+  const temporary = temporaryPassword();
+  const user = insert("app_user", {
+    id: newId(),
+    email,
+    name: payload.name,
+    password_hash: hashPassword(temporary),
+    must_change_password: 1,
+    created_at: nowIso(),
+  });
+  const membership = insert("membership", {
+    tenant_id: principal.tenantId,
+    user_id: user.id,
+    org_id: principal.orgId,
+    roles: payload.roles.join(","),
+    status: "active",
+    department_id: payload.department_id ?? null,
+    title: payload.title ?? null,
+    joined_at: nowIso(),
+    created_by: principal.userId,
+  });
 
   audit.record({
     tenantId: principal.tenantId,
@@ -485,12 +488,23 @@ export function provision(req, res) {
 export function resetPassword(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("member.write");
+  principal.require("role.assign");
   const membership = db()
-    .prepare("SELECT * FROM membership WHERE id = ? AND tenant_id = ? AND org_id = ?")
+    .prepare(
+      `SELECT * FROM membership
+       WHERE id = ? AND tenant_id = ? AND org_id = ? AND status = 'active' AND deleted_at IS NULL`,
+    )
     .get(req.params.membershipId, principal.tenantId, principal.orgId);
   if (!membership) throw notFound("membership");
   const user = db().prepare("SELECT * FROM app_user WHERE id = ?").get(membership.user_id);
   if (!user) throw notFound("user");
+
+  const memberships = db()
+    .prepare("SELECT org_id FROM membership WHERE user_id = ? AND deleted_at IS NULL")
+    .all(user.id);
+  if (!user.must_change_password || memberships.length !== 1 || memberships[0].org_id !== principal.orgId) {
+    throw new ApiError("CONFLICT", "등록이 완료된 계정의 비밀번호는 관리자가 변경할 수 없습니다");
+  }
 
   const temporary = temporaryPassword();
   update("app_user", user.id, {
@@ -524,9 +538,8 @@ export function resetPassword(req, res) {
 
 export function setRoles(req, res) {
   const principal = resolvePrincipal(req);
-  principal.require("role.assign");
   const payload = rolesSchema.parse(req.body);
-  assertKnownRoles(payload.roles);
+  assertCanDelegateRoles(principal, payload.roles);
 
   const membership = db()
     .prepare("SELECT * FROM membership WHERE id = ? AND tenant_id = ? AND org_id = ?")
@@ -534,6 +547,7 @@ export function setRoles(req, res) {
   if (!membership) throw notFound("membership");
 
   const before = (membership.roles ?? "").split(",").filter(Boolean);
+  assertCanDelegateRoles(principal, before);
   const updated = bumpVersion("membership", membership, { roles: payload.roles.join(",") }, principal.userId);
 
   audit.record({
