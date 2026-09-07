@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { useDepartments } from "../../hooks/useDepartments";
+import { useDepartmentResource } from "../../hooks/useDepartments";
 import { useRoles } from "../../hooks/useRoles";
 import { apiRequest, userMessageOf } from "../../services/api";
 import { branchStore, useBranch } from "../../store/branch";
@@ -26,7 +26,8 @@ export function WorkspaceSwitcher({ session }: Readonly<{ session: SessionState 
   const wrapRef = useRef<HTMLDivElement>(null);
 
   const apiSession = session.orgId ? { token: session.token, orgId: session.orgId } : null;
-  const departments = useDepartments(apiSession, reloadKey);
+  const { departments, status: departmentStatus, error: departmentError } = useDepartmentResource(apiSession, reloadKey);
+  const departmentsReady = departmentStatus === "ready" || departmentStatus === "empty";
   const roles = useRoles(apiSession);
   const branchId = useBranch(session.orgId);
 
@@ -44,10 +45,10 @@ export function WorkspaceSwitcher({ session }: Readonly<{ session: SessionState 
 
   // 브랜치로 지정한 부서가 사라지거나 접근 권한을 잃으면 전사 범위로 되돌린다.
   useEffect(() => {
-    if (!session.orgId || !branchId || departments.length === 0) return;
+    if (!session.orgId || !branchId || !departmentsReady) return;
     const found = departments.find((department) => department.id === branchId);
     if (!found || !found.can_enter) branchStore.select(session.orgId, null);
-  }, [branchId, departments, session.orgId]);
+  }, [branchId, departments, departmentsReady, session.orgId]);
 
   function toggleRole(role: string): void {
     setAccessRoles((current) =>
@@ -60,7 +61,7 @@ export function WorkspaceSwitcher({ session }: Readonly<{ session: SessionState 
     setBusy(true);
     setError(null);
     try {
-      await apiRequest("/members/departments", {
+      await apiRequest("/pg/members/departments", {
         method: "POST",
         session: apiSession,
         body: {
@@ -94,7 +95,7 @@ export function WorkspaceSwitcher({ session }: Readonly<{ session: SessionState 
         </span>
         <span className="workspace-picker__text">
           <strong>{activeOrg?.org_name ?? "조직 선택"}</strong>
-          <small>{activeBranch ? `${activeBranch.name} 브랜치` : "전사 범위"}</small>
+          <small>{activeBranch ? `${activeBranch.name} 브랜치` : branchId ? "브랜치 확인 필요" : "전사 범위"}</small>
         </span>
         <span className="workspace-picker__caret" aria-hidden="true">▾</span>
       </button>
@@ -125,6 +126,17 @@ export function WorkspaceSwitcher({ session }: Readonly<{ session: SessionState 
           {session.organizations.length === 0 && (
             <p className="workspace-picker__empty">소속 회사가 없습니다</p>
           )}
+          <button
+            type="button"
+            role="menuitem"
+            className="workspace-picker__item workspace-picker__add"
+            onClick={() => {
+              setOpen(false);
+              navigate("/onboarding/organization");
+            }}
+          >
+            <b>조직 추가</b>
+          </button>
 
           {session.orgId && (
             <>
@@ -136,6 +148,7 @@ export function WorkspaceSwitcher({ session }: Readonly<{ session: SessionState 
                     className="workspace-picker__icon"
                     aria-label="브랜치 만들기"
                     title="브랜치 만들기"
+                    disabled={!departmentsReady}
                     onClick={() => setCreating((value) => !value)}
                   >
                     +
@@ -235,7 +248,16 @@ export function WorkspaceSwitcher({ session }: Readonly<{ session: SessionState 
                   </span>
                 </button>
               ))}
-              {departments.length === 0 && (
+              {departmentStatus === "loading" && (
+                <p className="workspace-picker__empty" role="status">부서를 확인하고 있습니다.</p>
+              )}
+              {(departmentStatus === "error" || departmentStatus === "forbidden") && (
+                <div className="workspace-picker__empty">
+                  <p role="alert">{userMessageOf(departmentError)}</p>
+                  <button type="button" onClick={() => setReloadKey((value) => value + 1)}>부서 다시 확인</button>
+                </div>
+              )}
+              {departmentStatus === "empty" && (
                 <p className="workspace-picker__empty">브랜치가 없습니다. +로 만들어 보세요.</p>
               )}
               <p className="workspace-picker__note">

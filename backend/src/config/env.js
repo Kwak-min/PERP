@@ -9,6 +9,7 @@ export const env = {
   corsOrigins: (process.env.ORBITFLOW_CORS_ORIGINS ?? "http://localhost:5173,http://localhost:3000").split(","),
   aiProvider: process.env.ORBITFLOW_AI_PROVIDER ?? "echo",
   openrouterApiKey: process.env.OPENROUTER_API_KEY ?? "",
+  aiKeyEncryptionKey: process.env.ORBITFLOW_AI_KEY_ENCRYPTION_KEY ?? "",
   openrouterBaseUrl: process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? "http://localhost:11434",
   localModel: process.env.ORBITFLOW_LOCAL_MODEL ?? "llama3.1:8b",

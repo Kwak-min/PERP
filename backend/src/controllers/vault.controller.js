@@ -3,6 +3,7 @@ import { z } from "zod";
 import { resolvePrincipal } from "../middleware/auth.js";
 import { getScoped, hardDelete, insert, listScoped, softDelete, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
+import { CANDIDATE_LIMIT, legacyVaultScope, vaultSemantic } from "../services/vault-semantic.service.js";
 import { ApiError, notFound } from "../utils/errors.js";
 
 const WIKILINK = /\[\[([^\]]+)\]\]/g;
@@ -38,7 +39,7 @@ const patchSchema = z.object({
   tags: z.array(z.string()).optional(),
   agent_enabled: z.boolean().optional(),
   pinned: z.boolean().optional(),
-  version: z.number().int().optional(),
+  version: z.number().int().nonnegative(),
 });
 
 const view = (note, backlinks = []) => ({
@@ -99,6 +100,22 @@ function backlinksOf(principal, note) {
   ).map((l) => l.source_id);
 }
 
+function analyze(principal, note) {
+  return vaultSemantic.schedule(legacyVaultScope(principal), note, () => listScoped("vault_note", principal,
+    [{ sql: "owner_id = ? AND agent_enabled = 1", params: [principal.userId] }],
+    { limit: CANDIDATE_LIMIT + 1, orderBy: "updated_at DESC, id" }), !note.agent_enabled);
+}
+
+export async function noteAnalysis(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("agent.chat");
+  const note = own(principal, req.params.noteId);
+  const scope = legacyVaultScope(principal);
+  if (req.method === "POST") analyze(principal, note);
+  if (req.query.wait === "1") await vaultSemantic.wait(scope, note.id);
+  res.json(vaultSemantic.status(scope, own(principal, note.id)));
+}
+
 export function createNote(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("agent.chat");
@@ -144,7 +161,7 @@ export function createNote(req, res) {
     requestId: req.requestId,
   });
 
-  res.status(201).json({ ...view(note), links });
+  res.status(201).json({ ...view(note), links, analysis: analyze(principal, note) });
 }
 
 export function listNotes(req, res) {
@@ -185,6 +202,7 @@ export function getNote(req, res) {
   res.json({
     ...view(note, backlinksOf(principal, note)),
     content: note.content,
+    analysis: vaultSemantic.status(legacyVaultScope(principal), note),
     links: links.map((l) => ({ title: l.target_title, target_id: l.target_id })),
   });
 }
@@ -213,7 +231,8 @@ export function patchNote(req, res) {
 
   const updated = update("vault_note", note.id, patch, principal.userId);
   reindexLinks(principal, updated);
-  res.json(view(updated, backlinksOf(principal, updated)));
+  vaultSemantic.invalidate(legacyVaultScope(principal), note.id, updated.version);
+  res.json({ ...view(updated, backlinksOf(principal, updated)), analysis: analyze(principal, updated) });
 }
 
 export function deleteNote(req, res) {
@@ -221,6 +240,7 @@ export function deleteNote(req, res) {
   principal.require("agent.chat");
   const note = own(principal, req.params.noteId);
   softDelete("vault_note", note.id, principal.userId);
+  vaultSemantic.invalidate(legacyVaultScope(principal), note.id);
   hardDelete("vault_link", "source_id = ?", [note.id]);
 
   audit.record({
@@ -235,9 +255,11 @@ export function deleteNote(req, res) {
   res.json({ id: note.id, deleted: true });
 }
 
-export function graph(req, res) {
+export async function graph(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("agent.chat");
+  const scope = legacyVaultScope(principal);
+  if (req.query.wait === "1") await vaultSemantic.wait(scope);
   const notes = listScoped(
     "vault_note",
     principal,
@@ -251,14 +273,12 @@ export function graph(req, res) {
     { limit: 2000 },
   );
   const known = new Set(notes.map((n) => n.id));
-
+  const semantic = vaultSemantic.graph(scope, notes);
+  const edges = [...links.filter(l => known.has(l.source_id))
+    .map(l => ({ source: l.source_id, target_id: known.has(l.target_id) ? l.target_id : null, target_title: l.target_title })), ...semantic.edges];
   res.json({
     nodes: notes.map((n) => ({ id: n.id, title: n.title, folder: n.folder })),
-    edges: links
-      .filter((l) => known.has(l.source_id))
-      .map((l) => ({ source: l.source_id, target_id: l.target_id, target_title: l.target_title })),
-    orphans: notes
-      .filter((n) => !links.some((l) => l.source_id === n.id || l.target_id === n.id))
-      .map((n) => n.id),
+    edges, analysis: semantic.analysis,
+    orphans: notes.filter(n => !edges.some(e => e.source === n.id || e.target_id === n.id)).map(n => n.id),
   });
 }

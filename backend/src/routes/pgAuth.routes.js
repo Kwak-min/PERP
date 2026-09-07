@@ -1,17 +1,21 @@
 import { Router } from "express";
 
 import * as controller from "../controllers/pgAuth.controller.js";
+import { createCompany } from "../controllers/pgCompanies.controller.js";
 import * as members from "../controllers/pgMembers.controller.js";
 import * as mod from "../controllers/pgModules.controller.js";
 import { pgRoute, pgRecordRoute } from "../middleware/pgAccess.js";
 import { asyncRoute } from "../middleware/error.js";
+import { pgAgentKeyRouter } from "./pg-agent-key.routes.js";
 
 // perp_db (PostgreSQL) 슬라이스 라우터. strangler-fig: 기존 SQLite 라우트와 분리.
 // 마운트 지점: /api/v1/pg
 export const pgRouter = Router();
 
+pgRouter.use("/agent/api-key", pgAgentKeyRouter);
 pgRouter.get("/health", asyncRoute(controller.health));
 pgRouter.post("/auth/signup", asyncRoute(controller.signup));
+pgRouter.post("/companies", asyncRoute(createCompany));
 pgRouter.post("/auth/login", asyncRoute(controller.login));
 pgRouter.get("/auth/me", asyncRoute(controller.me));
 pgRouter.get("/auth/workspace", asyncRoute(controller.workspace));
@@ -33,6 +37,8 @@ pgRouter.patch("/members/:membershipId/assignment", asyncRoute(pgRoute(members.a
 pgRouter.get("/vault/graph", asyncRoute(pgRoute(mod.vaultGraph)));
 pgRouter.get("/vault/notes", asyncRoute(pgRoute(mod.vaultNotes)));
 pgRouter.get("/vault/notes/:id", asyncRoute(pgRoute(mod.vaultNote)));
+pgRouter.get("/vault/notes/:id/analysis", asyncRoute(pgRoute(mod.vaultAnalysis)));
+pgRouter.post("/vault/notes/:id/analysis", asyncRoute(pgRoute(mod.vaultAnalysis)));
 pgRouter.post("/vault/notes", asyncRoute(pgRoute(mod.vaultCreateNote)));
 pgRouter.patch("/vault/notes/:id", asyncRoute(pgRoute(mod.vaultUpdateNote)));
 pgRouter.delete("/vault/notes/:id", asyncRoute(pgRoute(mod.vaultDeleteNote)));

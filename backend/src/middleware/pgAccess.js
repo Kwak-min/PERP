@@ -8,13 +8,28 @@ export function pgIdentity(req) {
     throw new ApiError("UNAUTHENTICATED", "유효한 perp_db 세션이 필요합니다");
   }
   const identity = req.externalIdentity;
-  return { userId: identity.subject, companyId: identity.companyId };
+  return { userId: identity.subject, companyId: req.pgCompanyPrincipal?.companyId ?? identity.companyId };
 }
 
-export async function pgWorkspace(req) {
-  const { userId, companyId } = pgIdentity(req);
-  if (!companyId) throw new ApiError("NO_ORGANIZATION", "PG 회사 소속이 없습니다");
-  const [grants, modules, company] = await Promise.all([
+export function pgMembershipError(error) {
+  return error?.code === "42P01"
+    ? new ApiError("SERVICE_UNAVAILABLE", "PG 회사 소속 스키마가 없습니다. perp_additions_v5.sql 적용 상태를 확인하세요.")
+    : error;
+}
+
+async function membershipsOf(userId, companyId = null) {
+  try {
+    return (await pgQuery(`SELECT m.company_id, m.user_id, m.department_id, m.position_id, c.name
+      FROM org.company_memberships m JOIN org.companies c ON c.id = m.company_id
+      WHERE m.user_id = $1 AND m.status = 'active' AND c.is_active = true
+      ${companyId ? "AND m.company_id = $2" : ""}
+      ORDER BY m.created_at, m.company_id`, companyId ? [userId, companyId] : [userId])).rows;
+  } catch (error) { throw pgMembershipError(error); }
+}
+
+async function workspaceOf(userId, membership) {
+  const companyId = String(membership.company_id);
+  const [grants, modules] = await Promise.all([
     pgQuery(`SELECT DISTINCT p.code, r.name AS role
       FROM org.user_roles ur
       JOIN org.roles r ON r.id = ur.role_id AND r.company_id = $2
@@ -22,13 +37,44 @@ export async function pgWorkspace(req) {
       JOIN org.permissions p ON p.id = rp.permission_id
       WHERE ur.user_id = $1 AND ur.workspace_id IS NULL`, [userId, companyId]),
     pgQuery("SELECT module_key FROM org.company_modules WHERE company_id = $1", [companyId]),
-    pgQuery("SELECT name FROM org.companies WHERE id = $1", [companyId]),
   ]);
-  if (!company.rows[0]) throw new ApiError("NO_ORGANIZATION", "PG 회사를 찾을 수 없습니다");
-  return { org_id: `pg:${companyId}`, org_name: company.rows[0].name, org_type: "perp_db",
+  return { org_id: `pg:${companyId}`, org_name: membership.name, org_type: "perp_db",
     roles: [...new Set(grants.rows.map(row => row.role))],
     permissions: [...new Set(grants.rows.map(row => row.code).filter(code => code !== "*" && !code.startsWith("platform.")))],
     modules: [...new Set([...CORE_MODULES, ...modules.rows.map(row => row.module_key)])] };
+}
+
+export async function pgWorkspaces(req) {
+  const { userId } = pgIdentity(req);
+  const memberships = await membershipsOf(userId);
+  return Promise.all(memberships.map(membership => workspaceOf(userId, membership)));
+}
+
+export async function resolvePgCompanyPrincipal(req) {
+  const { userId } = pgIdentity(req);
+  if (req.pgCompanyPrincipal) return req.pgCompanyPrincipal;
+  const selected = req.get("x-org-id");
+  if (!selected) throw new ApiError("VALIDATION_ERROR", "X-Org-Id 헤더가 필요합니다");
+  if (!/^pg:[1-9]\d*$/.test(selected)) throw new ApiError("PERMISSION_DENIED", "유효한 PG 회사를 선택하세요");
+  const companyId = selected.slice(3);
+  const membership = (await membershipsOf(userId, companyId))[0];
+  if (!membership) throw new ApiError("PERMISSION_DENIED", "선택한 PG 회사의 활성 소속이 없습니다");
+  const workspace = await workspaceOf(userId, membership);
+  req.pgCompanyWorkspace = workspace;
+  req.pgCompanyPrincipal = {
+    source: "perp_db", userId, companyId, orgId: workspace.org_id,
+    membership: { userId, companyId, departmentId: membership.department_id == null ? null : String(membership.department_id),
+      positionId: membership.position_id == null ? null : String(membership.position_id) },
+    roles: workspace.roles, permissions: workspace.permissions, modules: workspace.modules,
+    has(code) { return workspace.permissions.includes(code); },
+    require(code) { if (!this.has(code)) throw new ApiError("PERMISSION_DENIED", "이 PG 작업의 명시적 권한이 없습니다"); },
+  };
+  return req.pgCompanyPrincipal;
+}
+
+export async function pgWorkspace(req) {
+  await resolvePgCompanyPrincipal(req);
+  return req.pgCompanyWorkspace;
 }
 
 // 회사 생성 트랜잭션에서만 부여하는 유한 권한 집합. 기존 is_admin을 이 목록으로 승격하지 않는다.
@@ -59,13 +105,9 @@ export function pgRecordRoute(handler) {
 
 export function pgRoute(handler, permission = null, module = null) {
   return async (req, res) => {
-    const { companyId } = pgIdentity(req);
-    const selected = req.get("x-org-id");
-    if (selected && selected !== `pg:${companyId}`) {
-      throw new ApiError("PERMISSION_DENIED", "선택한 조직은 이 PG 회사가 아닙니다");
-    }
+    pgIdentity(req);
+    if (req.get("x-org-id") || permission) await resolvePgCompanyPrincipal(req);
     if (permission) {
-      if (!selected) throw new ApiError("VALIDATION_ERROR", "X-Org-Id 헤더가 필요합니다");
       const workspace = await pgWorkspace(req);
       const required = Array.isArray(permission) ? permission : [permission];
       if (!required.every(code => workspace.permissions.includes(code))) {

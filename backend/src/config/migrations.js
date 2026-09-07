@@ -177,6 +177,31 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 6,
+    up(conn) {
+      conn.exec(`
+        CREATE TABLE IF NOT EXISTS ai_user_key (
+          id TEXT PRIMARY KEY,
+          tenant_id TEXT NOT NULL,
+          org_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          provider TEXT NOT NULL CHECK (provider = 'openrouter'),
+          ciphertext TEXT NOT NULL,
+          nonce TEXT NOT NULL,
+          auth_tag TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          created_by TEXT,
+          updated_at TEXT NOT NULL,
+          updated_by TEXT,
+          version INTEGER NOT NULL DEFAULT 1,
+          deleted_at TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_ai_user_key_owner
+          ON ai_user_key(tenant_id, org_id, user_id, provider) WHERE deleted_at IS NULL;
+      `);
+    },
+  },
 ];
 
 export function applyMigrations(conn) {

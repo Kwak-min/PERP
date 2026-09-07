@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { z } from "zod";
 
-import { apiRequest, type ApiSession } from "../services/api";
+import { ApiError, apiRequest, type ApiSession } from "../services/api";
 
 const departmentSchema = z.object({
   id: z.string(),
@@ -22,20 +22,15 @@ const pending = new Map<string, Promise<readonly Department[]>>();
 function loadDepartments(
   token: string,
   orgId: string,
-  signal?: AbortSignal,
 ): Promise<readonly Department[]> {
   const key = `${token}:${orgId}`;
   const cached = cache.get(key);
   if (cached) return Promise.resolve(cached);
   const inflight = pending.get(key);
   if (inflight) return inflight;
-  const abortCleanup = () => {
-    pending.delete(key);
-  };
-  signal?.addEventListener("abort", abortCleanup, { once: true });
+  // 공유 요청은 한 구독자가 화면을 떠나도 다른 구독자를 위해 완료한다.
   const request = apiRequest("/pg/members/departments", {
     session: { token, orgId },
-    ...(signal ? { signal } : {}),
   })
     .then((data) => {
       const departments = listSchema.parse(data).items;
@@ -43,41 +38,53 @@ function loadDepartments(
       return departments;
     })
     .finally(() => {
-      signal?.removeEventListener("abort", abortCleanup);
       if (pending.get(key) === request) pending.delete(key);
     });
   pending.set(key, request);
   return request;
 }
 
-export function useDepartments(
+type DepartmentResource = Readonly<{
+  departments: readonly Department[];
+  status: "idle" | "loading" | "ready" | "empty" | "forbidden" | "error";
+  error: Error | null;
+}>;
+
+export function useDepartmentResource(
   session: ApiSession | null,
   reloadKey = 0,
-): readonly Department[] {
-  const [departments, setDepartments] = useState<readonly Department[]>([]);
+): DepartmentResource {
   const token = session?.token ?? null;
   const orgId = session?.orgId ?? null;
+  const key = token && orgId ? `${token}:${orgId}:${reloadKey}` : null;
+  const [state, setState] = useState<DepartmentResource & { key: string | null }>({
+    key: null, departments: [], status: "idle", error: null,
+  });
 
   useEffect(() => {
-    if (!token || !orgId) {
-      setDepartments([]);
-      return;
-    }
+    if (!token || !orgId) return;
     let active = true;
-    const controller = new AbortController();
     if (reloadKey > 0) cache.delete(`${token}:${orgId}`);
-    loadDepartments(token, orgId, controller.signal)
-      .then((data) => {
-        if (active) setDepartments(data);
+    loadDepartments(token, orgId)
+      .then((departments) => {
+        if (active) setState({ key, departments, status: departments.length ? "ready" : "empty", error: null });
       })
-      .catch(() => {
-        if (active) setDepartments([]);
+      .catch((error: unknown) => {
+        if (active) setState({
+          key, departments: [],
+          status: error instanceof ApiError && error.status === 403 ? "forbidden" : "error",
+          error: error instanceof Error ? error : new Error("부서 응답을 확인할 수 없습니다."),
+        });
       });
-    return () => {
-      active = false;
-      controller.abort();
-    };
-  }, [token, orgId, reloadKey]);
+    return () => { active = false; };
+  }, [token, orgId, reloadKey, key]);
 
-  return departments;
+  // 조직 전환 직후에도 이전 조직의 부서를 한 프레임도 노출하지 않는다.
+  if (!key) return { departments: [], status: "idle", error: null };
+  if (state.key !== key) return { departments: [], status: "loading", error: null };
+  return state;
+}
+
+export function useDepartments(session: ApiSession | null, reloadKey = 0): readonly Department[] {
+  return useDepartmentResource(session, reloadKey).departments;
 }

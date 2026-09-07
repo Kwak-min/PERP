@@ -16,9 +16,16 @@ export const graphSchema = z.object({
         source: z.string(),
         target_id: z.string().nullable().catch(null),
         target_title: z.string().catch(""),
+        kind: z.enum(["manual", "ai_similarity"]).optional(),
+        score: z.number().min(-1).max(1).optional(),
+        provenance: z.object({
+          provider: z.string(), model: z.string(), method: z.string(),
+          source_version: z.number().int(), target_version: z.number().int(), analyzed_at: z.string(),
+        }).optional(),
       }),
     )
-    .catch([]),
+    .default([]),
+  analysis: z.array(z.object({ id: z.string(), state: z.string() })).optional(),
   orphans: z.array(z.string()).catch([]),
 });
 
@@ -33,6 +40,7 @@ export type Scene = {
   readonly disp: Float32Array;
   readonly links: Int32Array; // [a,b] 쌍
   readonly linkCount: number;
+  readonly linkKinds: readonly ("manual" | "ai_similarity")[];
   readonly degree: Int32Array;
   readonly proj: Float32Array; // sx,sy,depth,scale
   readonly order: Int32Array;
@@ -86,20 +94,23 @@ export function buildScene(graph: VaultGraph): Scene {
   });
 
   const pairs: number[] = [];
+  const linkKinds: ("manual" | "ai_similarity")[] = [];
   const seen = new Set<string>();
   let unresolved = 0;
   for (const edge of graph.edges) {
     const a = index.get(edge.source);
-    const b = edge.target_id === null ? byTitle.get(edge.target_title.trim().toLowerCase()) : index.get(edge.target_id);
+    const b = edge.target_id === null && edge.kind !== "ai_similarity" ? byTitle.get(edge.target_title.trim().toLowerCase()) : index.get(edge.target_id ?? "");
     if (a === undefined || b === undefined) {
       unresolved += 1;
       continue;
     }
     if (a === b) continue;
-    const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+    const kind = edge.kind ?? "manual";
+    const key = `${a < b ? `${a}:${b}` : `${b}:${a}`}:${kind}`;
     if (seen.has(key)) continue;
     seen.add(key);
     pairs.push(a, b);
+    linkKinds.push(kind);
   }
 
   const degree = new Int32Array(count);
@@ -129,6 +140,7 @@ export function buildScene(graph: VaultGraph): Scene {
     disp: new Float32Array(count * 3),
     links: Int32Array.from(pairs),
     linkCount: pairs.length / 2,
+    linkKinds,
     degree,
     proj: new Float32Array(count * 4),
     order: Int32Array.from({ length: count }, (_, i) => i),

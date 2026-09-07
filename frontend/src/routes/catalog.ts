@@ -104,6 +104,7 @@ export const screens: readonly ScreenDefinition[] = [
   { id: "ANL-001", path: "/analytics", label: "분석", description: "KPI와 운영 보고서를 한 화면에서 비교합니다.", section: "operations", endpoint: "/analytics/dashboard", module: "analytics", nav: true },
   { id: "NOT-001", path: "/notifications", label: "알림", description: "업무, 승인과 운영 알림을 한곳에서 확인합니다.", section: "home", endpoint: "/pg/notifications", module: null },
   { id: "SET-001", path: "/settings/approval-forms", label: "결재 양식", description: "결재 입력 항목과 승인 경로를 설정합니다.", section: "admin", endpoint: "/approvals/forms", module: "approvals" },
+  { id: "SET-002", path: "/settings/ai-key", label: "AI API 키", description: "개인 OpenRouter 키를 암호화 저장하고 연결을 확인합니다.", section: "admin", endpoint: "/pg/agent/api-key", module: "agent", nav: true },
   { id: "ADM-001", path: "/admin", label: "관리자 콘솔", description: "조직 운영, 보안과 시스템 상태를 관리합니다.", section: "admin", endpoint: "/pg/usage", module: null, nav: true },
   { id: "ADM-002", path: "/admin/audit", label: "감사로그", description: "변경 이력과 append-only 해시체인을 검증합니다.", section: "admin", endpoint: "/integrations/audit", module: "integrations" },
   { id: "ADM-003", path: "/admin/ai-policy", label: "AI 정책", description: "모델, 데이터 등급과 도구 실행 정책을 설정합니다.", section: "admin", endpoint: "/agent/profile", module: "agent" },

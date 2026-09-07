@@ -7,6 +7,7 @@ import type { ScreenDefinition } from "../routes/catalog";
 import { apiRequest, userMessageOf } from "../services/api";
 import { useSession } from "../store/session";
 import { NoteEditor } from "./vault/NoteEditor";
+import { NoteAnalysisPanel } from "./vault/NoteAnalysisPanel";
 import {
   EMPTY_DRAFT,
   draftOf,
@@ -243,6 +244,7 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
           title={editingId ? "노트 편집" : "새 노트 작성"}
           subtitle={editingId ? "내용을 고치고 저장하세요" : "제목과 내용을 적으면 바로 저장됩니다"}
         >
+          {editingId && apiSession && <NoteAnalysisPanel noteId={editingId} version={editingVersion} base={vaultBase} session={apiSession} />}
           <NoteEditor
             storage={vaultBase === "/pg/vault" ? "pg" : "legacy"}
             draft={draft}

@@ -8,6 +8,8 @@ process.env.PG_HOST = "127.0.0.1";
 process.env.PG_PORT = "1";
 let server, pool, originalQuery;
 const sessions = new Map();
+// 검증된 소속 픽스처는 역할 grant와 독립적이다.
+const memberships = [{ user_id: "101", company_id: "77", department_id: null, position_id: null, name: "PG company" }];
 const queries = [];
 let grants = [];
 let modules = ["projects", "tasks", "documents", "calendar", "finance", "hr", "agent"];
@@ -23,6 +25,7 @@ before(async () => {
   pool.query = async (sql, values = []) => {
     queries.push({ sql, values });
     if (sql.includes("FROM auth.sessions s")) return { rows: sessions.has(values[0]) ? [sessions.get(values[0])] : [] };
+    if (sql.includes("FROM org.company_memberships m JOIN org.companies c")) return { rows: memberships.filter(m => m.user_id === values[0] && (!values[1] || m.company_id === values[1])) };
     if (sql.includes("FROM org.user_roles")) return { rows: grants.map(code => ({ code, role: "configured" })) };
     if (sql.includes("FROM org.company_modules")) return { rows: modules.map(module_key => ({ module_key })) };
     if (sql.includes("FROM org.companies")) return { rows: [{ name: "PG company" }] };

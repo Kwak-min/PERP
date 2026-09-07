@@ -31,6 +31,13 @@ export function notFoundHandler(req, res) {
 }
 
 export function errorHandler(error, req, res, _next) {
+  // JSON 파서 오류는 원본 body를 포함하므로 비밀 입력 경로에서는 기록하지 않는다.
+  if (/^\/api\/v1\/(?:pg\/)?agent\/api-key(?:\/|$)/i.test(req.path) && error?.type === "entity.parse.failed") {
+    res.set("Cache-Control", "no-store").status(400).json({
+      error: { code: "VALIDATION_ERROR", message: "요청 JSON 형식을 확인하세요.", details: {}, request_id: req.requestId ?? "" },
+    });
+    return;
+  }
   if (error instanceof ApiError) {
     res.status(error.status).json({
       error: {

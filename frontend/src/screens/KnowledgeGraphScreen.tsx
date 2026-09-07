@@ -222,7 +222,8 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
       paletteRef.current = folderPalette(graph.nodes);
       sceneRef.current = buildScene({
         nodes: graph.nodes.map((n) => ({ id: n.id, title: n.title, folder: n.folder })),
-        edges: graph.edges,
+        // 조직의 space/link 간선은 직접 연결이며 개인 AI 추론 간선이 아니다.
+        edges: graph.edges.map(({ source, target_id, target_title }) => ({ source, target_id, target_title, kind: "manual" })),
         orphans: graph.orphans,
       });
       selectedRef.current = -1;

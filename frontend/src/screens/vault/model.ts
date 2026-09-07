@@ -1,5 +1,17 @@
 import { z } from "zod";
 
+export const analysisSchema = z.object({
+  state: z.enum(["pending", "ready", "unavailable", "error", "not_analyzed"]),
+  reason: z.string().optional(),
+  version: z.number().int(),
+  model: z.string().nullable(),
+  local_only: z.literal(true),
+  candidates: z.number().int().optional(),
+  candidate_limit: z.number().int().optional(),
+  truncated: z.boolean().optional(),
+});
+export type NoteAnalysis = z.infer<typeof analysisSchema>;
+
 export const noteSchema = z.object({
   id: z.string(),
   folder: z.string().catch("/"),
@@ -10,6 +22,7 @@ export const noteSchema = z.object({
   pinned: z.boolean().catch(false),
   version: z.number().int().nonnegative(),
   updated_at: z.string().catch(""),
+  analysis: analysisSchema.optional(),
 });
 
 export const noteListSchema = z.object({

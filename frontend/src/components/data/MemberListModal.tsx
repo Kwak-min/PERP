@@ -23,29 +23,15 @@ export type Member = z.infer<typeof memberSchema>;
 
 type Props = Readonly<{
   session: ApiSession | null;
-  fallback: readonly (readonly string[])[];
   onClose: () => void;
 }>;
 
-function fallbackMembers(rows: readonly (readonly string[])[]): readonly Member[] {
-  return rows.map((row, index) => ({
-    membership_id: `demo-${index}`,
-    user_id: `demo-${index}`,
-    name: row[0] ?? "이름 없음",
-    email: row[1] ?? "",
-    roles: row[2] ? [row[2]] : [],
-    department_id: row[3] ?? null,
-    status: row[4] ?? "active",
-    title: null,
-  }));
-}
-
-export function MemberListModal({ session, fallback, onClose }: Props) {
+export function MemberListModal({ session, onClose }: Props) {
   const navigate = useNavigate();
   const searchRef = useRef<HTMLInputElement>(null);
   const dialogRef = useModalFocus<HTMLDivElement>(onClose);
   const [query, setQuery] = useState("");
-  const [members, setMembers] = useState<readonly Member[]>(session ? [] : fallbackMembers(fallback));
+  const [members, setMembers] = useState<readonly Member[]>([]);
   const [loading, setLoading] = useState(Boolean(session));
   const [error, setError] = useState<string | null>(null);
 

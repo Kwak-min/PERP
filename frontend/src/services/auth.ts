@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { ApiError, apiRequest } from "./api";
-import type { Organization, SessionState } from "../store/session";
+import { sessionStore, type Organization, type SessionState } from "../store/session";
 
 // --- perp_db (PostgreSQL) 인증 슬라이스 연동 ---
 // 백엔드 /api/v1/pg/auth/* 응답 형태를 기존 SessionState 로 매핑한다.
@@ -40,13 +40,18 @@ const legacyMeSchema = z.object({
     ),
 });
 
+// 저장소 라우팅에만 사용한다. 신원과 회사 소속/권한은 서버가 별도로 검증한다.
+export function isPgToken(token: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token);
+}
+
 /** 검증된 계정의 운영 조직 소속만 조회한다. 조회 실패는 빈 소속과 구분한다. */
 export async function organizationsOf(token: string): Promise<readonly Organization[]> {
   const parsed = legacyMeSchema.parse(
     await apiRequest("/auth/me", { session: { token, orgId: null } }),
   );
   // UUID PG 토큰은 서버가 검증한 별도 PG 회사 목록을 가져온다.
-  if (/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(token)) {
+  if (isPgToken(token)) {
     const pg = legacyMeSchema.parse(await apiRequest("/pg/auth/workspace", { session: { token, orgId: null } }));
     return [...parsed.organizations, ...pg.organizations];
   }
@@ -70,6 +75,17 @@ async function toSessionState(
   };
 }
 
+function withLoginOrganization(session: SessionState): SessionState {
+  const previous = sessionStore.getSnapshot();
+  const selected = previous?.email.toLowerCase() === session.email.toLowerCase() ? previous.orgId : null;
+  // 저장된 선택은 힌트일 뿐이다. 새로 검증된 소속에 있을 때만 보존한다.
+  return {
+    ...session,
+    orgId: session.organizations.find((org) => org.org_id === selected)?.org_id
+      ?? session.organizations[0]?.org_id ?? null,
+  };
+}
+
 export async function login(email: string, password: string): Promise<SessionState> {
   let payload: z.infer<typeof pgLoginSchema>;
   try {
@@ -84,18 +100,17 @@ export async function login(email: string, password: string): Promise<SessionSta
     const payload = legacyLoginSchema.parse(
       await apiRequest("/auth/login", { method: "POST", body: { email, password } }),
     );
-    return {
+    return withLoginOrganization({
       token: payload.access_token,
-      // 레거시 로그인은 소속이 하나여도 사용자가 선택하도록 한다.
       orgId: null,
       name: payload.user.name,
       email: payload.user.email,
       mustChangePassword: payload.must_change_password,
       organizations: [...await organizationsOf(payload.access_token)],
-    };
+    });
   }
   // 소속 조회 장애는 PG 로그인 장애가 아니며 다른 인증 저장소로 전환하지 않는다.
-  return await toSessionState(payload.token, payload.user);
+  return withLoginOrganization(await toSessionState(payload.token, payload.user));
 }
 
 export async function signup(

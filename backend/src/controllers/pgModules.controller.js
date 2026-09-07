@@ -3,7 +3,9 @@ import { pgIdentity } from "../middleware/pgAccess.js";
 import { pgQuery, pgTransaction } from "../config/pg.js";
 import { MODULE_CATALOG, OPTIONAL_MODULES } from "../config/modules.js";
 import { hashPassword } from "../utils/crypto.js";
+import { isCompanyMember } from "../services/pg-company.service.js";
 import { ApiError } from "../utils/errors.js";
+import { CANDIDATE_LIMIT, pgVaultScope, vaultSemantic } from "../services/vault-semantic.service.js";
 
 // perp_db(PostgreSQL) 모듈 read 슬라이스.
 // strangler-fig 1단계: 홈/프로젝트/캘린더/재무/HR 화면을 실데이터로 전환.
@@ -50,7 +52,7 @@ export async function usage(req, res) {
   }
   const { rows } = await pgQuery(
     `SELECT
-       (SELECT count(*) FROM auth.users        WHERE company_id = $1) AS members,
+       (SELECT count(*) FROM org.company_memberships WHERE company_id = $1 AND status = 'active') AS members,
        (SELECT count(*) FROM project.projects  WHERE company_id = $1) AS projects,
        (SELECT count(*) FROM project.assignments a
           JOIN project.projects p ON p.id = a.project_id
@@ -341,7 +343,9 @@ export async function memberOptions(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT id, name FROM auth.users WHERE company_id = $1 ORDER BY name`,
+    `SELECT u.id, u.name FROM org.company_memberships m JOIN auth.users u ON u.id = m.user_id
+       WHERE m.company_id = $1 AND m.status = 'active' AND u.account_status = 'active'
+         AND u.approval_status = 'approved' ORDER BY u.name`,
     [companyId],
   );
   res.json({ items: rows.map((r) => ({ value: String(r.id), label: r.name })) });
@@ -503,11 +507,24 @@ const noteInput = z.object({
 }).strict();
 const notePatch = noteInput.partial().extend({ version: z.number().int().nonnegative() }).strict();
 const noteId = z.string().regex(/^\d+$/);
-async function ownedNotes(userId) {
+async function ownedNotes(userId, bounded = false) {
   const { rows } = await pgQuery(
     `SELECT ${noteFields} FROM notes.notes n JOIN notes.vaults v ON v.id = n.vault_id
-     WHERE v.owner_id = $1 ORDER BY n.updated_at DESC, n.id`, [userId]);
+     WHERE v.owner_id = $1 ORDER BY n.updated_at DESC, n.id${bounded ? " LIMIT $2" : ""}`, bounded ? [userId, CANDIDATE_LIMIT + 1] : [userId]);
   return rows.map(toNote);
+}
+function analyzeVault(identity, note) {
+  return vaultSemantic.schedule(pgVaultScope(identity), note, () => ownedNotes(identity.userId, true));
+}
+export async function vaultAnalysis(req, res) {
+  const identity = resolveUser(req);
+  const { rows } = await pgQuery(`SELECT ${noteFields} FROM notes.notes n JOIN notes.vaults v ON v.id = n.vault_id
+    WHERE n.id = $1 AND v.owner_id = $2`, [noteId.parse(req.params.id), identity.userId]);
+  if (!rows[0]) throw new ApiError("NOT_FOUND", "노트를 찾을 수 없습니다");
+  const note = toNote(rows[0]), scope = pgVaultScope(identity);
+  if (req.method === "POST") analyzeVault(identity, note);
+  if (req.query.wait === "1") await vaultSemantic.wait(scope, note.id);
+  res.json(vaultSemantic.status(scope, note));
 }
 
 // 목록과 그래프는 같은 소유자 전체 노트를 읽으며 GET은 저장소를 만들지 않는다.
@@ -519,8 +536,10 @@ export async function vaultNotes(req, res) {
 }
 
 export async function vaultGraph(req, res) {
-  const { userId } = resolveUser(req);
-  const items = await ownedNotes(userId);
+  const identity = resolveUser(req);
+  const scope = pgVaultScope(identity);
+  if (req.query.wait === "1") await vaultSemantic.wait(scope);
+  const items = await ownedNotes(identity.userId);
   const byTitle = new Map();
   for (const note of items) {
     const key = note.title.trim().toLowerCase();
@@ -540,7 +559,10 @@ export async function vaultGraph(req, res) {
       if (target) { connected.add(note.id); connected.add(target); }
     }
   }
-  res.json({ nodes: items.map(({ id, title, folder }) => ({ id, title, folder })), edges,
+  const semantic = vaultSemantic.graph(scope, items);
+  edges.push(...semantic.edges);
+  for (const edge of semantic.edges) { connected.add(edge.source); connected.add(edge.target_id); }
+  res.json({ nodes: items.map(({ id, title, folder }) => ({ id, title, folder })), edges, analysis: semantic.analysis,
     orphans: items.filter(note => !connected.has(note.id)).map(note => note.id) });
 }
 
@@ -554,7 +576,8 @@ export async function vaultNote(req, res) {
     [noteId.parse(req.params.id), userId],
   );
   if (!rows[0]) throw new ApiError("NOT_FOUND", "노트를 찾을 수 없습니다");
-  res.json(toNote(rows[0]));
+  const note = toNote(rows[0]);
+  res.json({ ...note, analysis: vaultSemantic.status(pgVaultScope(resolveUser(req)), note) });
 }
 
 // POST /api/v1/pg/vault/notes
@@ -567,7 +590,8 @@ export async function vaultCreateNote(req, res) {
      VALUES ($1, $2, $3, $4) RETURNING id, title, content_md, folder_path, xmin::text AS version`,
     [vaultId, body.folder, body.title, body.content],
   );
-  res.status(201).json(toNote(rows[0]));
+  const note = toNote(rows[0]);
+  res.status(201).json({ ...note, analysis: analyzeVault(resolveUser(req), note) });
 }
 
 // PATCH /api/v1/pg/vault/notes/:id
@@ -592,7 +616,9 @@ export async function vaultUpdateNote(req, res) {
     if (!owned.rows[0]) throw new ApiError("NOT_FOUND", "노트를 찾을 수 없습니다");
     throw new ApiError("VERSION_CONFLICT", "다른 창에서 노트가 변경되었습니다. 새 내용을 확인하세요");
   }
-  res.json(toNote(result.rows[0]));
+  const note = toNote(result.rows[0]), identity = resolveUser(req);
+  vaultSemantic.invalidate(pgVaultScope(identity), note.id, note.version);
+  res.json({ ...note, analysis: analyzeVault(identity, note) });
 }
 
 // DELETE /api/v1/pg/vault/notes/:id
@@ -604,6 +630,7 @@ export async function vaultDeleteNote(req, res) {
     [req.params.id, userId],
   );
   if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "노트를 찾을 수 없습니다");
+  vaultSemantic.invalidate(pgVaultScope(resolveUser(req)), req.params.id);
   res.json({ ok: true });
 }
 
@@ -692,11 +719,16 @@ export async function createMember(req, res) {
     const { rows } = await pgQuery(`SELECT 1 FROM org.positions WHERE id=$1 AND company_id=$2`, [positionId, companyId]);
     if (!rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 직급입니다");
   }
-  const { rows } = await pgQuery(
-    `INSERT INTO auth.users (company_id, department_id, position_id, email, name, password_hash, approval_status, approved_at)
-     VALUES ($1, $2, $3, $4, $5, $6, 'approved', now()) RETURNING id`,
-    [companyId, departmentId, positionId, email, name, hashPassword(password)],
-  );
+  const { rows } = await pgTransaction(async client => {
+    const created = await client.query(
+      `INSERT INTO auth.users (company_id, department_id, position_id, email, name, password_hash, approval_status, approved_at)
+       VALUES ($1, $2, $3, $4, $5, $6, 'approved', now()) RETURNING id`,
+      [companyId, departmentId, positionId, email, name, hashPassword(password)],
+    );
+    await client.query(`INSERT INTO org.company_memberships (company_id, user_id, department_id, position_id, created_by)
+      VALUES ($1, $2, $3, $4, $5)`, [companyId, created.rows[0].id, departmentId, positionId, resolveUser(req).userId]);
+    return created;
+  });
   res.status(201).json({ id: String(rows[0].id) });
 }
 
@@ -714,8 +746,7 @@ export async function createTask(req, res) {
   const { rows: ok } = await pgQuery(`SELECT 1 FROM project.projects WHERE id=$1 AND company_id=$2`, [projectId, companyId]);
   if (!ok[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 프로젝트입니다");
   if (assignee) {
-    const target = await pgQuery("SELECT 1 FROM auth.users WHERE id = $1 AND company_id = $2", [assignee, companyId]);
-    if (!target.rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 담당자입니다");
+    if (!await isCompanyMember(assignee, companyId)) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 담당자입니다");
   }
   const { rows } = await pgQuery(
     `INSERT INTO project.tasks (project_id, assignee_id, title, due_on, status)
@@ -735,8 +766,7 @@ export async function createApproval(req, res) {
   const note = String(body.note ?? "").trim();
   if (!requestType) throw new ApiError("VALIDATION_ERROR", "유형은 필수입니다");
   if (target) {
-    const member = await pgQuery("SELECT 1 FROM auth.users WHERE id = $1 AND company_id = $2", [target, companyId]);
-    if (!member.rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 대상자입니다");
+    if (!await isCompanyMember(target, companyId)) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 대상자입니다");
   }
   const { rows } = await pgQuery(
     `INSERT INTO org.approval_requests (company_id, request_type, requester_id, target_user_id, payload, status)
@@ -853,8 +883,7 @@ export async function createDuesCharge(req, res) {
   const dueDate = body.due_date || null;
   if (!target) throw new ApiError("VALIDATION_ERROR", "대상자를 선택하세요");
   if (!Number.isFinite(amount) || amount <= 0) throw new ApiError("VALIDATION_ERROR", "금액은 0보다 큰 숫자여야 합니다");
-  const { rows: ok } = await pgQuery(`SELECT 1 FROM auth.users WHERE id = $1 AND company_id = $2`, [target, companyId]);
-  if (!ok[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 대상자입니다");
+  if (!await isCompanyMember(target, companyId)) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 대상자입니다");
   const { rows } = await pgQuery(
     `INSERT INTO accounting.dues_charges (company_id, target_user_id, amount, due_date) VALUES ($1, $2, $3, $4) RETURNING id`,
     [companyId, target, amount, dueDate],

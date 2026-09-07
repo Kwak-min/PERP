@@ -1,11 +1,10 @@
 import { useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { matchPath, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useAppContext } from "../../context/AppContext";
 import { navigation, sectionLabels } from "../../routes/catalog";
 import { logout as revokeSession } from "../../services/auth";
 import { sessionStore, useSession } from "../../store/session";
-import { demoStore, useDemoMode } from "../../store/demo";
 import { Button } from "../ui/Button";
 import { AgentPanel } from "./AgentPanel";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
@@ -18,9 +17,12 @@ export function AppShell() {
   const location = useLocation();
   const { sidebarOpen, setSidebarOpen, toggleAgent, toggleSidebar } = useAppContext();
   const [search, setSearch] = useState("");
-  const demoMode = useDemoMode();
   if (!session) return null;
   const activeSession = session;
+  // 별도 메뉴가 있는 하위 경로만 부모 강조를 해제한다. 실제 상세 화면은 부모를 유지한다.
+  const activePath = navigation.reduce((active, screen) =>
+    matchPath({ path: screen.path, end: screen.path === "/" }, location.pathname)
+      && screen.path.length > active.length ? screen.path : active, "");
 
   const grouped = Object.entries(
     navigation.reduce<Record<string, typeof navigation>>((groups, screen) => {
@@ -55,7 +57,7 @@ export function AppShell() {
                 <NavLink
                   key={screen.path}
                   to={screen.path}
-                  end={screen.path === "/"}
+                  end={screen.path !== activePath}
                   onClick={() => setSidebarOpen(false)}
                   className={({ isActive }) => (isActive ? "active" : "")}
                 >
@@ -104,15 +106,6 @@ export function AppShell() {
             </label>
           </form>
           <div className="topbar__actions">
-            <Button
-              tone={demoMode ? "primary" : "neutral"}
-              size="small"
-              onClick={() => demoStore.toggle()}
-              aria-pressed={demoMode}
-              title="데모 데이터와 실제 서버 데이터를 전환합니다"
-            >
-              {demoMode ? "데모 ON" : "데모 OFF"}
-            </Button>
             <NavLink className="icon-link" to="/notifications" aria-label="알림">알림</NavLink>
             <Button tone="ai" size="small" onClick={toggleAgent}>AI Agent</Button>
           </div>

@@ -43,8 +43,9 @@ class HttpChatProvider {
     return true;
   }
 
-  async complete(model, system, user) {
+  async complete(model, system, user, options = {}) {
     const started = Date.now();
+    let failure = `${this.name} request failed`;
     const headers = { "Content-Type": "application/json" };
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
     try {
@@ -58,12 +59,20 @@ class HttpChatProvider {
             { role: "user", content: user },
           ],
           stream: false,
+          ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
         }),
-        signal: AbortSignal.timeout(60000),
+        redirect: "error",
+        signal: AbortSignal.timeout(options.timeoutMs ?? 60000),
       });
-      if (!response.ok) throw new Error(`${this.name} returned HTTP ${response.status}`);
+      if (!response.ok) {
+        failure = `${this.name} returned HTTP ${response.status}`;
+        throw new Error(failure);
+      }
       const payload = await response.json();
       const choice = payload.choices?.[0] ?? {};
+      if (typeof choice.message?.content !== "string" || !choice.message.content.trim()) {
+        throw new Error("모델 응답 형식이 올바르지 않습니다");
+      }
       const usage = payload.usage ?? {};
       return {
         text: choice.message?.content ?? "",
@@ -75,7 +84,8 @@ class HttpChatProvider {
         cost_micro: (usage.total_tokens ?? 0) * 2,
         error: null,
       };
-    } catch (error) {
+    } catch {
+      // 공급자 본문/네트워크 오류에는 인증 정보가 포함될 수 있어 고정 오류만 반환한다.
       return {
         text: "",
         model,
@@ -84,7 +94,7 @@ class HttpChatProvider {
         completion_tokens: 0,
         latency_ms: Date.now() - started,
         cost_micro: 0,
-        error: String(error).slice(0, 200),
+        error: failure,
       };
     }
   }
@@ -96,24 +106,32 @@ export const REGISTRY = {
   openrouter: new HttpChatProvider("openrouter", env.openrouterBaseUrl, env.openrouterApiKey, false),
 };
 
-export function route(dataClass, prefer = null) {
+export function openRouterForKey(apiKey) {
+  return new HttpChatProvider("openrouter", env.openrouterBaseUrl, apiKey, false);
+}
+
+export function externalAllowed(dataClass) {
+  return DATA_CLASSES.has(dataClass) && !EXTERNAL_BLOCKED_CLASSES.has(dataClass);
+}
+
+export function route(dataClass, prefer = null, externalProvider = REGISTRY.openrouter) {
   const localChain = [
     [REGISTRY.ollama, env.localModel],
     [REGISTRY.echo, "echo-local"],
   ];
-  const externalChain = [[REGISTRY.openrouter, env.externalModel]];
+  const externalChain = [[externalProvider, env.externalModel]];
 
-  if (!DATA_CLASSES.has(dataClass) || EXTERNAL_BLOCKED_CLASSES.has(dataClass)) return localChain;
+  if (!externalAllowed(dataClass)) return localChain;
   if (prefer === "local") return localChain;
   if (prefer === "external") return [...externalChain, ...localChain];
   if (env.aiProvider === "echo") return [[REGISTRY.echo, "echo-local"]];
   return [...externalChain, ...localChain];
 }
 
-export async function complete(dataClass, system, user, prefer = null) {
+export async function complete(dataClass, system, user, prefer = null, externalProvider = REGISTRY.openrouter) {
   const attempted = [];
   let last = null;
-  for (const [provider, model] of route(dataClass, prefer)) {
+  for (const [provider, model] of route(dataClass, prefer, externalProvider)) {
     if (!provider.available()) {
       attempted.push(`${provider.name}:unavailable`);
       continue;
