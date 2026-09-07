@@ -3,7 +3,10 @@ import path from "node:path";
 import { z } from "zod";
 import { pgIdentity } from "../middleware/pgAccess.js";
 import { pgQuery, pgTransaction } from "../config/pg.js";
-import { MODULE_CATALOG, OPTIONAL_MODULES } from "../config/modules.js";
+import { MODULE_CATALOG } from "../config/modules.js";
+import { enabledFeatures, FEATURE_CATALOG, modulesForFeatures, validateFeatureSelection } from "../config/features.js";
+import { pgEnabledFeatures } from "../middleware/features.js";
+import { validateSelection } from "../middleware/modules.js";
 import { hashPassword } from "../utils/crypto.js";
 import { isCompanyMember } from "../services/pg-company.service.js";
 import { ApiError } from "../utils/errors.js";
@@ -873,7 +876,7 @@ export async function vaultDeleteNote(req, res) {
 // GET /api/v1/pg/org/modules — 카탈로그 + 회사 활성 여부
 export async function getOrgModules(req, res) {
   const { companyId } = await resolveUser(req);
-  if (!companyId) return res.json({ items: [] });
+  if (!companyId) return res.json({ items: [], features: [] });
   const { rows } = await pgQuery(
     `SELECT module_key FROM org.company_modules WHERE company_id = $1`,
     [companyId],
@@ -885,17 +888,27 @@ export async function getOrgModules(req, res) {
     core: Boolean(m.core),
     enabled: m.core ? true : enabled.has(m.key),
   }));
-  res.json({ items });
+  const features = await pgEnabledFeatures(companyId, [...enabled]);
+  res.json({ items, features: FEATURE_CATALOG.map(feature => ({ ...feature, enabled: features.includes(feature.key) })) });
 }
 
-// PATCH /api/v1/pg/org/modules — 활성 모듈 교체 (옵션 모듈만)
+const orgModulesSchema = z.object({
+  enabled: z.array(z.string()).optional(),
+  features: z.array(z.string()).optional(),
+}).strict().refine(body => body.enabled !== undefined || body.features !== undefined);
+
+// 모듈과 독립 기능을 같은 트랜잭션에서 저장한다. 역할 권한은 변경하지 않는다.
 export async function updateOrgModules(req, res) {
-  const { companyId } = await resolveUser(req);
+  const { companyId, userId } = await resolveUser(req);
   if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 모듈을 변경할 수 있습니다");
-  const body = req.body ?? {};
-  const requested = Array.isArray(body.enabled) ? body.enabled : [];
-  const valid = requested.filter((k) => OPTIONAL_MODULES.includes(k));
-  await pgTransaction(async (client) => {
+  const body = orgModulesSchema.parse(req.body);
+  const requested = body.enabled === undefined ? undefined : validateSelection(body.enabled);
+  const features = body.features === undefined ? undefined : validateFeatureSelection(body.features);
+  const saved = await pgTransaction(async (client) => {
+    await client.query('SELECT id FROM org.companies WHERE id = $1 AND is_active = true FOR UPDATE', [companyId]);
+    const { rows: modules } = await client.query('SELECT module_key FROM org.company_modules WHERE company_id = $1', [companyId]);
+    const selected = requested ?? modules.map(row => row.module_key);
+    const valid = features === undefined ? selected : modulesForFeatures(selected, features);
     await client.query(`DELETE FROM org.company_modules WHERE company_id = $1`, [companyId]);
     if (valid.length > 0) {
       await client.query(
@@ -904,8 +917,21 @@ export async function updateOrgModules(req, res) {
         [companyId, valid],
       );
     }
+    if (features !== undefined) {
+      try {
+        await client.query(`INSERT INTO org.company_feature_settings (company_id, enabled_features)
+          VALUES ($1, $2::text[]) ON CONFLICT (company_id)
+          DO UPDATE SET enabled_features = EXCLUDED.enabled_features, configured_at = now()`, [companyId, features]);
+      } catch (error) {
+        if (error?.code === '42P01') throw new ApiError('SERVICE_UNAVAILABLE', 'PG 회사 기능 스키마가 없습니다. perp_additions_v6.sql 적용 상태를 확인하세요.');
+        throw error;
+      }
+    }
+    await client.query("INSERT INTO org.company_events (company_id, actor_id, action) VALUES ($1, $2, 'company.settings.updated')", [companyId, userId]);
+    return { enabled: valid };
   });
-  res.json({ ok: true, enabled: valid });
+  res.json({ ok: true, ...saved, enabled_features: features === undefined
+    ? await pgEnabledFeatures(companyId, saved.enabled) : enabledFeatures(features, saved.enabled) });
 }
 
 // GET /api/v1/pg/departments/options

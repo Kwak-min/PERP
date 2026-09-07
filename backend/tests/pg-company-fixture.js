@@ -21,7 +21,7 @@ export async function installCompanyFixture() {
     featureSettings: [],
     departments: [], projects: [], tasks: [], events: [], sessions: [], logs: [],
   };
-  let failMembership = false, schemaAvailable = true, featureSchemaAvailable = true;
+  let failMembership = false, schemaAvailable = true, featureSchemaAvailable = true, failSettingsAudit = false;
   const queries = [];
   function execute(data, sql, values = []) {
     const text = sql.replace(/\s+/g, ' ').trim();
@@ -57,6 +57,10 @@ export async function installCompanyFixture() {
       const company = { id: String(78 + data.companies.length - 1), name: values[0], is_active: true };
       data.companies.push(company); return { rows: [company], rowCount: 1 };
     }
+    if (text.startsWith('DELETE FROM org.company_modules')) {
+      data.modules = data.modules.filter(row => row.company_id !== values[0]);
+      return { rows: [], rowCount: 1 };
+    }
     if (text.includes('INSERT INTO org.company_modules')) {
       for (const module_key of values[1]) data.modules.push({ company_id: values[0], module_key });
       return { rows: [], rowCount: values[1].length };
@@ -65,7 +69,9 @@ export async function installCompanyFixture() {
       throw Object.assign(new Error('relation org.company_feature_settings does not exist'), { code: '42P01' });
     }
     if (text.includes('INSERT INTO org.company_feature_settings')) {
-      data.featureSettings.push({ company_id: values[0], enabled_features: [...values[1]] });
+      const existing = data.featureSettings.find(row => row.company_id === values[0]);
+      if (existing && text.includes('ON CONFLICT')) existing.enabled_features = [...values[1]];
+      else data.featureSettings.push({ company_id: values[0], enabled_features: [...values[1]] });
       return { rows: [], rowCount: 1 };
     }
     if (text.includes('INSERT INTO org.departments')) {
@@ -96,7 +102,10 @@ export async function installCompanyFixture() {
     if (text.includes('INSERT INTO org.user_roles')) {
       data.grants.push({ user_id: values[0], role_id: values[1] }); return { rows: [], rowCount: 1 };
     }
-    if (text.includes('INSERT INTO org.company_events') || text.includes('INSERT INTO org.role_change_events')) { data.events.push(values); return { rows: [], rowCount: 1 }; }
+    if (text.includes('INSERT INTO org.company_events') || text.includes('INSERT INTO org.role_change_events')) {
+      if (failSettingsAudit && text.includes('company.settings.updated')) throw new Error('injected settings audit failure');
+      data.events.push(values); return { rows: [], rowCount: 1 };
+    }
     if (text.startsWith('SELECT id FROM org.companies') && text.endsWith('FOR UPDATE')) {
       return { rows: data.companies.filter(c => c.id === values[0] && c.is_active) };
     }
@@ -163,5 +172,6 @@ export async function installCompanyFixture() {
   return { get users() { return state.users; }, queries, get state() { return state; },
     set failMembership(value) { failMembership = value; }, set schemaAvailable(value) { schemaAvailable = value; },
     set featureSchemaAvailable(value) { featureSchemaAvailable = value; },
+    set failSettingsAudit(value) { failSettingsAudit = value; },
     async close() { pgPool.query = originalQuery; pgPool.connect = originalConnect; await pgPool.end(); } };
 }
