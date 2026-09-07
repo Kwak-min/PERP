@@ -202,6 +202,14 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 7,
+    up(conn) {
+      // NULL은 분리 기능 설정 이전 조직이다. 신규 조직만 명시적인 빈 문자열/선택값을 저장한다.
+      addColumn(conn, "organization", "enabled_features TEXT");
+    },
+  },
+
 ];
 
 export function applyMigrations(conn) {

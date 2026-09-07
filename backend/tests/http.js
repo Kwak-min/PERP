@@ -50,7 +50,10 @@ export async function api(baseUrl, route, options = {}) {
   return { status: response.status, body };
 }
 
-export async function createOwnerOrg(baseUrl, modules) {
+export async function createOwnerOrg(baseUrl, modules, features = [
+  ...(modules.includes("hr") ? ["attendance", "leave"] : []),
+  ...(modules.includes("approvals") ? ["approvals"] : []),
+]) {
   const signup = await api(baseUrl, "/auth/signup", {
     method: "POST",
     body: {
@@ -65,7 +68,7 @@ export async function createOwnerOrg(baseUrl, modules) {
   const org = await api(baseUrl, "/tenants", {
     method: "POST",
     token,
-    body: { name: "Test Org", type: "custom", modules, departments: [] },
+    body: { name: "Test Org", type: "custom", modules, features, departments: [] },
   });
   assert.equal(org.status, 201);
   return { token, orgId: org.body.org_id, userId: signup.body.user.id };

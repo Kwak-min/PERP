@@ -1,6 +1,12 @@
 import { z } from "zod";
 
 import { db, transaction } from "../config/db.js";
+import {
+  enabledFeatures,
+  FEATURE_CATALOG,
+  modulesForFeatures,
+  validateFeatureSelection,
+} from "../config/features.js";
 import { CORE_MODULES, MODULE_CATALOG, OPTIONAL_MODULES } from "../config/modules.js";
 import { ORG_TEMPLATES } from "../config/org-templates.js";
 import { currentUser, resolvePrincipal } from "../middleware/auth.js";
@@ -16,6 +22,7 @@ const createSchema = z.object({
   timezone: z.string().default("Asia/Seoul"),
   fiscal_year_start: z.number().int().min(1).max(12).default(1),
   modules: z.array(z.string()).nullable().optional(),
+  features: z.array(z.string()).default([]),
   terminology: z.record(z.string()).nullable().optional(),
   departments: z.array(z.string()).nullable().optional(),
 });
@@ -55,6 +62,7 @@ export function publicModuleCatalog(_req, res) {
     })),
     core: [...CORE_MODULES].sort(),
     optional: OPTIONAL_MODULES,
+    features: FEATURE_CATALOG,
   });
 }
 
@@ -72,6 +80,10 @@ export function moduleCatalog(req, res) {
     })),
     core: [...CORE_MODULES].sort(),
     optional: OPTIONAL_MODULES,
+    features: FEATURE_CATALOG.map((feature) => ({
+      ...feature,
+      enabled: enabledFeatures(org?.enabled_features, org?.modules).includes(feature.key),
+    })),
   });
 }
 
@@ -93,9 +105,10 @@ export function createOrg(req, res) {
   // 조직 유형은 부서 생성 동의가 아니다. 명시적으로 제출한 부서만 만든다.
   const departments = payload.departments ?? [];
 
-  const selected = validateSelection(
+  const features = validateFeatureSelection(payload.features);
+  const selected = modulesForFeatures(validateSelection(
     payload.modules === null || payload.modules === undefined ? template.modules : payload.modules,
-  );
+  ), features);
 
   const created = transaction(() => {
     const tenantId = newId();
@@ -116,6 +129,7 @@ export function createOrg(req, res) {
       timezone: payload.timezone,
       fiscal_year_start: payload.fiscal_year_start,
       modules: selected.join(","),
+      enabled_features: features.join(","),
       created_by: user.id,
     });
 
@@ -149,7 +163,7 @@ export function createOrg(req, res) {
     resourceType: "organization",
     resourceId: org.id,
     actorId: user.id,
-    after: { name: org.name, type: org.type },
+    after: { name: org.name, type: org.type, enabled_features: features },
     requestId: req.requestId,
   });
 
@@ -162,6 +176,7 @@ export function createOrg(req, res) {
     name: created.org.name,
     type: created.org.type,
     modules: selected,
+    enabled_features: features,
     terminology,
   });
 }
@@ -176,6 +191,7 @@ export function current(req, res) {
     name: org.name,
     type: org.type,
     modules: (org.modules ?? "").split(",").filter(Boolean),
+    enabled_features: enabledFeatures(org.enabled_features, org.modules),
     terminology: effectiveTerminology(org),
     roles: principal.roles,
     permissions: [...principal.permissions].sort(),

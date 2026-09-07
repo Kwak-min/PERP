@@ -7,15 +7,22 @@ import { ApiError, apiRequest, userMessageOf } from "../services/api";
 import { isPgToken, organizationsOf } from "../services/auth";
 import { sessionStore, useSession } from "../store/session";
 
+const catalogItemSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  core: z.boolean(),
+  description: z.string(),
+});
+
+const featureItemSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  description: z.string(),
+});
+
 const catalogSchema = z.object({
-  items: z.array(
-    z.object({
-      key: z.string(),
-      label: z.string(),
-      core: z.boolean(),
-      description: z.string(),
-    }),
-  ),
+  items: z.array(catalogItemSchema),
+  features: z.array(featureItemSchema),
 });
 
 const orgSchema = z.object({
@@ -44,7 +51,9 @@ export function OnboardingPage() {
   const [type, setType] = useState(nativePg ? "company" : "club");
   const [name, setName] = useState("");
   const [modules, setModules] = useState<string[]>([]);
-  const [catalog, setCatalog] = useState<z.infer<typeof catalogSchema>["items"]>([]);
+  const [features, setFeatures] = useState<string[]>([]);
+  const [catalog, setCatalog] = useState<z.infer<typeof catalogItemSchema>[]>([]);
+  const [featureCatalog, setFeatureCatalog] = useState<z.infer<typeof featureItemSchema>[]>([]);
   const [departments, setDepartments] = useState("");
   const [fiscalStart, setFiscalStart] = useState(1);
   const [busy, setBusy] = useState(false);
@@ -53,7 +62,11 @@ export function OnboardingPage() {
 
   useEffect(() => {
     apiRequest("/tenants/modules/catalog")
-      .then((data) => setCatalog(catalogSchema.parse(data).items))
+      .then((data) => {
+        const parsed = catalogSchema.parse(data);
+        setCatalog(parsed.items);
+        setFeatureCatalog(parsed.features);
+      })
       .catch((caught: unknown) => setError(userMessageOf(caught)));
   }, []);
 
@@ -62,6 +75,12 @@ export function OnboardingPage() {
 
   function toggleModule(key: string): void {
     setModules((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
+    );
+  }
+
+  function toggleFeature(key: string): void {
+    setFeatures((current) =>
       current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
     );
   }
@@ -77,7 +96,8 @@ export function OnboardingPage() {
           session: { token: session.token, orgId: null },
           body: nativePg ? {
             name: name.trim(),
-            modules: catalog.filter((item) => item.core || modules.includes(item.key)).map((item) => item.key),
+            modules: catalog.filter((item) => item.key !== "approvals" && (item.core || modules.includes(item.key))).map((item) => item.key),
+            features,
             departments: departments.split(",").map((item) => item.trim()).filter(Boolean),
           } : {
             name: name.trim(),
@@ -85,7 +105,8 @@ export function OnboardingPage() {
             currency: "KRW",
             timezone: "Asia/Seoul",
             fiscal_year_start: fiscalStart,
-            modules: catalog.filter((item) => item.core || modules.includes(item.key)).map((item) => item.key),
+            modules: catalog.filter((item) => item.key !== "approvals" && (item.core || modules.includes(item.key))).map((item) => item.key),
+            features,
             departments:
               type === "custom"
                 ? departments.split(",").map((item) => item.trim()).filter(Boolean)
@@ -163,7 +184,17 @@ export function OnboardingPage() {
       )}
       {step === 3 && (
         <div className="module-list">
-          {catalog.map((item) => (
+          {featureCatalog.map((item) => (
+            <label key={item.key} className="module-option">
+              <input
+                type="checkbox"
+                checked={features.includes(item.key)}
+                onChange={() => toggleFeature(item.key)}
+              />
+              <span><strong>{item.label}</strong><small>{item.description}</small></span>
+            </label>
+          ))}
+          {catalog.filter((item) => item.key !== "approvals").map((item) => (
             <label key={item.key} className={item.core ? "module-option module-option--core" : "module-option"}>
               <input
                 type="checkbox"
@@ -187,10 +218,10 @@ export function OnboardingPage() {
           <div>
             <dt>켠 기능</dt>
             <dd>
-              {catalog
-                .filter((item) => item.core || modules.includes(item.key))
-                .map((item) => item.label)
-                .join(", ") || "기본 기능"}
+              {[
+                ...featureCatalog.filter((item) => features.includes(item.key)).map((item) => item.label),
+                ...catalog.filter((item) => item.key !== "approvals" && (item.core || modules.includes(item.key))).map((item) => item.label),
+              ].join(", ") || "기본 기능"}
             </dd>
           </div>
         </dl>

@@ -85,9 +85,9 @@ export const MODULE_CATALOG = [
   },
   {
     "key": "hr",
-    "label": "인사·근태",
+    "label": "인사·채용",
     "core": false,
-    "description": "근태, 휴가, 모집, 온보딩. 기업·연구실에 적합합니다."
+    "description": "모집, 지원자 관리와 온보딩. 근태·휴가는 별도 기능으로 선택합니다."
   },
   {
     "key": "agent",

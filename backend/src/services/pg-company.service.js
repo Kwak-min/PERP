@@ -1,5 +1,6 @@
 import { pgQuery, pgTransaction } from '../config/pg.js';
 import { PG_CREATOR_PERMISSIONS, pgMembershipError } from '../middleware/pgAccess.js';
+import { ApiError } from '../utils/errors.js';
 
 export async function isCompanyMember(userId, companyId) {
   if (!/^[1-9]\d*$/.test(String(userId))) return false;
@@ -28,6 +29,15 @@ export async function createPgCompany(userId, payload) {
       const company = companies[0];
       await client.query(`INSERT INTO org.company_modules (company_id, module_key)
         SELECT $1, k FROM unnest($2::text[]) AS k`, [company.id, payload.modules]);
+      try {
+        await client.query(`INSERT INTO org.company_feature_settings (company_id, enabled_features)
+          VALUES ($1, $2::text[])`, [company.id, payload.features]);
+      } catch (error) {
+        if (error?.code === '42P01') {
+          throw new ApiError('SERVICE_UNAVAILABLE', 'PG 회사 기능 스키마가 없습니다. perp_additions_v6.sql 적용 상태를 확인하세요.');
+        }
+        throw error;
+      }
       for (const name of payload.departments) {
         await client.query('INSERT INTO org.departments (company_id, name) VALUES ($1, $2)', [company.id, name]);
       }
@@ -35,7 +45,7 @@ export async function createPgCompany(userId, payload) {
         VALUES ($1, $2, $3, $4, $2)`, [company.id, userId, null, null]);
       await grantCompanyCreator(client, company.id, userId);
       await client.query("INSERT INTO org.company_events (company_id, actor_id, action) VALUES ($1, $2, 'company.created')", [company.id, userId]);
-      return { org_id: `pg:${company.id}`, name: company.name, type: 'perp_db' };
+      return { org_id: `pg:${company.id}`, name: company.name, type: 'perp_db', enabled_features: payload.features };
     });
   } catch (error) { throw pgMembershipError(error); }
 }

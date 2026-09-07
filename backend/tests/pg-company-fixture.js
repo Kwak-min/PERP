@@ -18,9 +18,10 @@ export async function installCompanyFixture() {
     grants: [{ user_id: '101', role_id: '1' }],
     permissions: [{ role_id: '1', code: 'task.read' }],
     modules: [{ company_id: '77', module_key: 'tasks' }],
+    featureSettings: [],
     departments: [], projects: [], tasks: [], events: [], sessions: [], logs: [],
   };
-  let failMembership = false, schemaAvailable = true;
+  let failMembership = false, schemaAvailable = true, featureSchemaAvailable = true;
   const queries = [];
   function execute(data, sql, values = []) {
     const text = sql.replace(/\s+/g, ' ').trim();
@@ -60,6 +61,13 @@ export async function installCompanyFixture() {
       for (const module_key of values[1]) data.modules.push({ company_id: values[0], module_key });
       return { rows: [], rowCount: values[1].length };
     }
+    if (text.includes('org.company_feature_settings') && !featureSchemaAvailable) {
+      throw Object.assign(new Error('relation org.company_feature_settings does not exist'), { code: '42P01' });
+    }
+    if (text.includes('INSERT INTO org.company_feature_settings')) {
+      data.featureSettings.push({ company_id: values[0], enabled_features: [...values[1]] });
+      return { rows: [], rowCount: 1 };
+    }
     if (text.includes('INSERT INTO org.departments')) {
       const department = { id: String(data.departments.length + 100), company_id: values[0], name: values[1], parent_id: values[2] ?? null, manager_id: null };
       data.departments.push(department); return { rows: [department], rowCount: 1 };
@@ -87,6 +95,7 @@ export async function installCompanyFixture() {
       return { rows: roles.flatMap(role => data.permissions.filter(p => p.role_id === role.id).map(p => ({ code: p.code, role: role.name }))) };
     }
     if (text.includes('FROM org.company_modules')) return { rows: data.modules.filter(row => row.company_id === values[0]) };
+    if (text.includes('FROM org.company_feature_settings')) return { rows: data.featureSettings.filter(row => row.company_id === values[0]) };
     if (text.includes('SELECT name FROM org.companies')) return { rows: data.companies.filter(row => row.id === values[0]) };
     if (text.includes('FROM org.company_memberships m JOIN org.companies c')) {
       return { rows: data.memberships.filter(m => m.user_id === values[0] && (values.length === 1 || m.company_id === values[1]) && m.status === 'active')
@@ -116,6 +125,7 @@ export async function installCompanyFixture() {
     if (text.includes('FROM project.projects')) return { rows: data.projects.filter(p => p.company_id === values[values.length - 1] && (values.length === 1 || p.id === values[0])) };
     if (text.includes('INSERT INTO project.tasks')) { data.tasks.push(values); return { rows: [{ id: '300' }], rowCount: 1 }; }
     if (text.includes('INSERT INTO org.approval_requests') || text.includes('INSERT INTO accounting.dues_charges')) return { rows: [{ id: '301' }], rowCount: 1 };
+    if (text.includes('FROM org.approval_requests ar')) return { rows: [] };
     // 이 fixture가 주장하지 않는 대시보드/옵션 읽기만 빈 결과로 둔다. 쓰기와 auth는 절대 폴백하지 않는다.
     if (text.startsWith('SELECT') && !text.includes('auth.') && !text.includes('company_memberships')) return { rows: [] };
     throw new Error('Unexpected native company fixture SQL: ' + text);
@@ -132,5 +142,6 @@ export async function installCompanyFixture() {
   };
   return { get users() { return state.users; }, queries, get state() { return state; },
     set failMembership(value) { failMembership = value; }, set schemaAvailable(value) { schemaAvailable = value; },
+    set featureSchemaAvailable(value) { featureSchemaAvailable = value; },
     async close() { pgPool.query = originalQuery; pgPool.connect = originalConnect; await pgPool.end(); } };
 }

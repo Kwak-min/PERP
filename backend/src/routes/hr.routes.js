@@ -2,8 +2,14 @@ import { Router } from "express";
 
 import * as controller from "../controllers/hr.controller.js";
 import { asyncRoute } from "../middleware/error.js";
+import { requireFeature } from "../middleware/features.js";
+import { requireModule } from "../middleware/modules.js";
 
 export const hrRouter = Router();
+
+hrRouter.use("/attendance", requireFeature("attendance"));
+hrRouter.use(["/leaves", "/leave-balances", "/leave-policies", "/leave-stats"], requireFeature("leave"));
+hrRouter.use(["/postings", "/applications", "/onboarding"], requireModule("hr"));
 
 hrRouter.post("/attendance", asyncRoute(controller.checkAttendance));
 hrRouter.get("/attendance", asyncRoute(controller.listAttendance));
