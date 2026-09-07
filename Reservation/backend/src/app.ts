@@ -10,6 +10,10 @@ import { attendeeRouter } from './modules/attendees/attendee.router';
 import { waitlistRouter } from './modules/waitlist/waitlist.router';
 import { AppError } from './common/errors';
 import { sendError } from './common/response';
+import { authenticate } from './auth/principal';
+import { attendeeController } from './modules/attendees/attendee.controller';
+import { ZodError } from 'zod';
+import { Prisma } from '@prisma/client';
 
 const app = express();
 
@@ -23,6 +27,8 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // ── 라우터 ────────────────────────────────────
+app.patch('/api/v1/attendees/:token/respond', attendeeController.respondInvite);
+app.use('/api/v1', authenticate);
 app.use('/api/v1/spaces', spaceRouter);
 app.use('/api/v1/reservations', reservationRouter);
 app.use('/api/v1', attendeeRouter);
@@ -35,6 +41,10 @@ app.get('/health', (_req, res) => {
 
 // ── 글로벌 에러 핸들러 ────────────────────────
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+  if (err instanceof ZodError) return sendError(res, 400, '입력값이 올바르지 않습니다.');
+  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2004') {
+    return sendError(res, 409, '해당 시간대에 이미 예약이 존재합니다.');
+  }
   if (err instanceof AppError) {
     return sendError(res, err.statusCode, err.message);
   }

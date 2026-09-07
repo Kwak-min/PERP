@@ -25,7 +25,6 @@ export const attendeeSchema = z.object({
   email: z.string(),
   department: z.string().nullable(),
   status: attendeeStatusSchema,
-  inviteToken: z.string(),
   createdAt: z.string(),
 });
 export type Attendee = z.infer<typeof attendeeSchema>;
@@ -50,7 +49,7 @@ export type RecurrenceRule = z.infer<typeof recurrenceRuleSchema>;
 export const reservationSchema = z.object({
   id: z.number(),
   spaceId: z.number(),
-  userId: z.number(),
+  userId: z.number().nullable(),
   title: z.string(),
   description: z.string().nullable(),
   startTime: z.string(),
@@ -70,6 +69,7 @@ export const timetableSlotSchema = z.object({
   startTime: z.string(),
   endTime: z.string(),
   available: z.boolean(),
+  isMine: z.boolean(),
   reservation: reservationSchema.nullable(),
 });
 export type TimetableSlot = z.infer<typeof timetableSlotSchema>;
@@ -85,7 +85,7 @@ export type Timetable = z.infer<typeof timetableSchema>;
 export const waitlistSchema = z.object({
   id: z.number(),
   spaceId: z.number(),
-  userId: z.number(),
+  userId: z.number().nullable(),
   title: z.string(),
   description: z.string().nullable(),
   startTime: z.string(),

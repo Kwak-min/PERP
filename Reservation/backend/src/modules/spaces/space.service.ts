@@ -1,18 +1,21 @@
 import { prisma } from '../../lib/prisma';
 import { NotFoundError } from '../../common/errors';
 import { CreateSpaceDto, UpdateSpaceDto } from './space.schema';
+import type { OrganizationScope } from '../../auth/principal';
+import { organizationScope } from '../../auth/principal';
 
 export const spaceService = {
   // 전체 목록
-  findAll: () =>
+  findAll: (principal: OrganizationScope) =>
     prisma.space.findMany({
-      where: { isActive: true },
+      where: { ...organizationScope(principal), isActive: true },
       orderBy: { id: 'asc' },
     }),
 
   // 가용 공간 필터링 (날짜·수용인원)
-  findAvailable: async (minCapacity?: number, startTime?: Date, endTime?: Date) => {
-    const where: Record<string, unknown> = { isActive: true };
+  findAvailable: async (principal: OrganizationScope, minCapacity?: number, startTime?: Date, endTime?: Date) => {
+    const scope = organizationScope(principal);
+    const where: Record<string, unknown> = { ...scope, isActive: true };
     if (minCapacity) where.capacity = { gte: minCapacity };
 
     if (startTime && endTime) {
@@ -22,6 +25,7 @@ export const spaceService = {
           ...where,
           reservations: {
             none: {
+              ...scope,
               status: 'CONFIRMED',
               startTime: { lt: endTime },
               endTime: { gt: startTime },
@@ -36,25 +40,25 @@ export const spaceService = {
   },
 
   // 단건 조회
-  findById: async (id: number) => {
-    const space = await prisma.space.findFirst({ where: { id, isActive: true } });
+  findById: async (id: number, principal: OrganizationScope) => {
+    const space = await prisma.space.findFirst({ where: { id, ...organizationScope(principal), isActive: true } });
     if (!space) throw new NotFoundError(`공간을 찾을 수 없습니다. id=${id}`);
     return space;
   },
 
   // 등록
-  create: (data: CreateSpaceDto) =>
-    prisma.space.create({ data }),
+  create: (data: CreateSpaceDto, principal: OrganizationScope) =>
+    prisma.space.create({ data: { ...data, ...organizationScope(principal) } }),
 
   // 수정
-  update: async (id: number, data: UpdateSpaceDto) => {
-    await spaceService.findById(id); // 존재 확인
+  update: async (id: number, data: UpdateSpaceDto, principal: OrganizationScope) => {
+    await spaceService.findById(id, principal);
     return prisma.space.update({ where: { id }, data });
   },
 
   // 삭제 (soft delete)
-  delete: async (id: number) => {
-    await spaceService.findById(id); // 존재 확인
+  delete: async (id: number, principal: OrganizationScope) => {
+    await spaceService.findById(id, principal);
     return prisma.space.update({ where: { id }, data: { isActive: false } });
   },
 };

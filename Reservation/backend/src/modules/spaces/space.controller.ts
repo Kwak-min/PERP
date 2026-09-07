@@ -2,6 +2,7 @@ import { NextFunction, Request, Response } from 'express';
 import { spaceService } from './space.service';
 import { createSpaceSchema, updateSpaceSchema, spaceAvailabilitySchema } from './space.schema';
 import { sendSuccess } from '../../common/response';
+import { principalOf, requireSpaceAdmin } from '../../auth/principal';
 
 export const spaceController = {
   /**
@@ -25,6 +26,7 @@ export const spaceController = {
     try {
       const query = spaceAvailabilitySchema.parse(req.query);
       const spaces = await spaceService.findAvailable(
+        principalOf(req),
         query.minCapacity,
         query.startTime,
         query.endTime,
@@ -44,7 +46,7 @@ export const spaceController = {
    */
   getSpaceById: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const space = await spaceService.findById(Number(req.params.id));
+      const space = await spaceService.findById(Number(req.params.id), principalOf(req));
       sendSuccess(res, space);
     } catch (err) {
       next(err);
@@ -61,7 +63,9 @@ export const spaceController = {
   createSpace: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = createSpaceSchema.parse(req.body);
-      const space = await spaceService.create(data);
+      const principal = principalOf(req);
+      requireSpaceAdmin(principal);
+      const space = await spaceService.create(data, principal);
       sendSuccess(res, space, 201, '공간이 등록되었습니다.');
     } catch (err) {
       next(err);
@@ -78,7 +82,9 @@ export const spaceController = {
   updateSpace: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const data = updateSpaceSchema.parse(req.body);
-      const space = await spaceService.update(Number(req.params.id), data);
+      const principal = principalOf(req);
+      requireSpaceAdmin(principal);
+      const space = await spaceService.update(Number(req.params.id), data, principal);
       sendSuccess(res, space, 200, '공간이 수정되었습니다.');
     } catch (err) {
       next(err);
@@ -94,7 +100,9 @@ export const spaceController = {
    */
   deleteSpace: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await spaceService.delete(Number(req.params.id));
+      const principal = principalOf(req);
+      requireSpaceAdmin(principal);
+      await spaceService.delete(Number(req.params.id), principal);
       sendSuccess(res, null, 200, '공간이 삭제되었습니다.');
     } catch (err) {
       next(err);

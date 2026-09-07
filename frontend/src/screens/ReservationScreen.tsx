@@ -47,9 +47,6 @@ import { SpaceFormModal } from "./reservation/SpaceFormModal";
 
 import "./reservation.css";
 
-// TODO: 실제 세션의 userId로 교체 (현재 개발용 1 고정)
-const MY_USER_ID = 1;
-
 type MainTab = "spaces" | "my" | "waitlist" | "admin";
 
 type TimetableModalState =
@@ -64,10 +61,9 @@ type SpaceAdminModalState =
 
 export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const session = useSession();
-  const userRoles = session?.organizations?.flatMap((org) => org.roles) ?? [];
+  const userRoles = session?.organizations.find((org) => org.org_id === session.orgId)?.roles ?? [];
   const isAdmin = Boolean(
-    userRoles.some((r: string) => ["admin", "owner", "ADMIN", "OWNER"].includes(r)) ||
-    session?.email?.toLowerCase().includes("admin")
+    userRoles.some((role) => role === "owner" || role === "org_admin")
   );
 
   const [activeTab, setActiveTab] = useState<MainTab>("spaces");
@@ -562,7 +558,7 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
                 ) : (
                   <div className="rsv-timetable">
                     {slots.map((slot) => {
-                      const isMine = slot.reservation?.userId === MY_USER_ID;
+                      const isMine = slot.isMine;
                       const taken = !slot.available && !isMine;
                       return (
                         <div key={slot.startTime} className="rsv-slot">
