@@ -2,8 +2,6 @@
  * Reservation 백엔드 전용 API 서비스
  * BASE URL: VITE_RESERVATION_API_URL (기본값: http://localhost:8080)
  *
- * userId: 현재 개발 단계에서는 1로 고정.
- * TODO: 실제 세션의 userId로 교체 필요
  */
 
 import type {
@@ -14,12 +12,10 @@ import type {
   CreateSpaceInput,
   UpdateReservationInput,
 } from "../screens/reservation/model";
+import { sessionStore } from "../store/session";
 
 const RESERVATION_API_BASE =
   import.meta.env.VITE_RESERVATION_API_URL ?? "http://localhost:8080";
-
-// TODO: 실제 세션 연동 시 session.userId로 교체
-const DEV_USER_ID = 1;
 
 async function rsvFetch<T>(
   path: string,
@@ -28,6 +24,9 @@ async function rsvFetch<T>(
   const headers = new Headers(options.headers);
   headers.set("Accept", "application/json");
   if (options.body) headers.set("Content-Type", "application/json");
+  const session = sessionStore.getSnapshot();
+  if (session?.token) headers.set("Authorization", `Bearer ${session.token}`);
+  if (session?.orgId) headers.set("X-Org-Id", session.orgId);
 
   const res = await fetch(`${RESERVATION_API_BASE}${path}`, {
     ...options,
@@ -40,6 +39,7 @@ async function rsvFetch<T>(
   const payload = await res.json().catch(() => null);
 
   if (!res.ok) {
+    if (res.status === 401) sessionStore.clear();
     const message =
       payload?.error?.message ?? `요청 실패 (HTTP ${res.status})`;
     throw new Error(message);
@@ -95,7 +95,6 @@ export interface ReservationFilter {
   spaceId?: number;
   from?: string;
   to?: string;
-  userId?: number;
 }
 
 export function getReservations(filter: ReservationFilter = {}) {
@@ -103,13 +102,12 @@ export function getReservations(filter: ReservationFilter = {}) {
   if (filter.spaceId != null) params.set("spaceId", String(filter.spaceId));
   if (filter.from) params.set("from", filter.from);
   if (filter.to) params.set("to", filter.to);
-  if (filter.userId != null) params.set("userId", String(filter.userId));
   const qs = params.toString();
   return rsvFetch<unknown[]>(`/api/v1/reservations${qs ? `?${qs}` : ""}`);
 }
 
 export function getMyReservations() {
-  return getReservations({ userId: DEV_USER_ID });
+  return rsvFetch<unknown[]>("/api/v1/reservations?mine=true");
 }
 
 export function getReservationById(id: number) {
@@ -128,13 +126,13 @@ export function getTimetable(spaceId: number, date: string, slotMinutes = 60) {
 export function createReservation(dto: CreateReservationInput) {
   return rsvFetch<unknown>("/api/v1/reservations", {
     method: "POST",
-    body: JSON.stringify({ ...dto, userId: DEV_USER_ID }),
+    body: JSON.stringify(dto),
   });
 }
 
 export function updateReservation(id: number, dto: UpdateReservationInput) {
   return rsvFetch<unknown>(
-    `/api/v1/reservations/${id}?userId=${DEV_USER_ID}`,
+    `/api/v1/reservations/${id}`,
     {
       method: "PATCH",
       body: JSON.stringify(dto),
@@ -144,7 +142,7 @@ export function updateReservation(id: number, dto: UpdateReservationInput) {
 
 export function cancelReservation(id: number, cancelScope: CancelScope = "THIS") {
   return rsvFetch<unknown>(
-    `/api/v1/reservations/${id}?userId=${DEV_USER_ID}&cancelScope=${cancelScope}`,
+    `/api/v1/reservations/${id}?cancelScope=${cancelScope}`,
     { method: "DELETE" },
   );
 }
@@ -184,21 +182,19 @@ export function respondInvite(token: string, accept: boolean) {
 // ── 대기열(Waitlist) ───────────────────────────────────────────────────────
 
 export function getMyWaitlist() {
-  return rsvFetch<unknown[]>(
-    `/api/v1/waitlist?userId=${DEV_USER_ID}`,
-  );
+  return rsvFetch<unknown[]>("/api/v1/waitlist");
 }
 
 export function addWaitlist(dto: AddWaitlistInput) {
   return rsvFetch<unknown>("/api/v1/waitlist", {
     method: "POST",
-    body: JSON.stringify({ ...dto, userId: DEV_USER_ID }),
+    body: JSON.stringify(dto),
   });
 }
 
 export function cancelWaitlist(id: number) {
   return rsvFetch<unknown>(
-    `/api/v1/waitlist/${id}?userId=${DEV_USER_ID}`,
+    `/api/v1/waitlist/${id}`,
     { method: "DELETE" },
   );
 }

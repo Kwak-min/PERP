@@ -2,19 +2,26 @@ import { prisma } from '../../lib/prisma';
 import { NotFoundError, BadRequestError } from '../../common/errors';
 import { AddAttendeeDto } from './attendee.schema';
 import { emailService } from '../../notification/email.service';
+import type { Principal } from '../../auth/principal';
+
+const attendeeView = {
+  id: true, reservationId: true, name: true, email: true,
+  department: true, status: true, createdAt: true,
+} as const;
 
 export const attendeeService = {
   // 참석자 목록 조회
-  findByReservation: (reservationId: number) =>
-    prisma.attendee.findMany({
-      where: { reservationId },
-      orderBy: { createdAt: 'asc' },
-    }),
+  findByReservation: async (reservationId: number, principal: Principal) => {
+    await ownedReservation(reservationId, principal);
+    return prisma.attendee.findMany({
+      where: { reservationId }, select: attendeeView, orderBy: { createdAt: 'asc' },
+    });
+  },
 
   // 참석자 추가 + 초대 이메일 발송
-  add: async (reservationId: number, dto: AddAttendeeDto) => {
-    const reservation = await prisma.reservation.findUnique({
-      where: { id: reservationId },
+  add: async (reservationId: number, dto: AddAttendeeDto, principal: Principal) => {
+    const reservation = await prisma.reservation.findFirst({
+      where: { id: reservationId, tenantId: principal.tenantId, orgId: principal.orgId, ownerId: principal.userId },
       include: { space: true },
     });
     if (!reservation) throw new NotFoundError(`예약을 찾을 수 없습니다. id=${reservationId}`);
@@ -26,11 +33,13 @@ export const attendeeService = {
     });
 
     emailService.sendAttendeeInvite(attendee).catch(console.error);
-    return attendee;
+    const { inviteToken: _inviteToken, ...view } = attendee;
+    return view;
   },
 
   // 참석자 제거
-  remove: async (reservationId: number, attendeeId: number) => {
+  remove: async (reservationId: number, attendeeId: number, principal: Principal) => {
+    await ownedReservation(reservationId, principal);
     const attendee = await prisma.attendee.findUnique({ where: { id: attendeeId } });
     if (!attendee) throw new NotFoundError('참석자를 찾을 수 없습니다.');
     if (attendee.reservationId !== reservationId) throw new BadRequestError('해당 예약의 참석자가 아닙니다.');
@@ -51,7 +60,14 @@ export const attendeeService = {
       include: { reservation: { include: { space: true } } },
     });
 
-    emailService.sendAttendeeResponse(updated).catch(console.error);
-    return updated;
+    return { id: updated.id, status: updated.status };
   },
 };
+
+async function ownedReservation(reservationId: number, principal: Principal) {
+  const reservation = await prisma.reservation.findFirst({
+    where: { id: reservationId, tenantId: principal.tenantId, orgId: principal.orgId, ownerId: principal.userId },
+  });
+  if (!reservation) throw new NotFoundError(`예약을 찾을 수 없습니다. id=${reservationId}`);
+  return reservation;
+}

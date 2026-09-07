@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 import { pgQuery, pgTransaction } from "../config/pg.js";
+import { currentUser } from "../middleware/auth.js";
+import { pgIdentity, pgWorkspace, PG_CREATOR_PERMISSIONS } from "../middleware/pgAccess.js";
 import { OPTIONAL_MODULES } from "../config/modules.js";
 import { hashPassword, verifyPassword } from "../utils/crypto.js";
 import { ApiError } from "../utils/errors.js";
@@ -21,12 +23,6 @@ function clientIp(req) {
   if (!ip) return null;
   // Express 는 IPv4-mapped IPv6(::ffff:127.0.0.1)로 줄 수 있음 → 정리
   return ip.startsWith("::ffff:") ? ip.slice(7) : ip;
-}
-
-function bearerToken(req) {
-  const header = req.get("authorization") ?? "";
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : null;
 }
 
 // 조직명 조인 포함한 사용자 요약 조회.
@@ -70,6 +66,7 @@ const signupSchema = z.object({
   name: z.string().trim().min(1),
   password: z.string().min(8, "비밀번호는 8자 이상이어야 합니다"),
   phone: z.string().trim().optional(),
+  invitation_token: z.string().min(1).optional(),
   company_name: z.string().trim().min(1, "회사명을 입력하세요"),
 });
 
@@ -99,8 +96,8 @@ export async function signup(req, res) {
 
   const passwordHash = hashPassword(password);
 
-  // 회사 + 기본 부서·직급 + 관리자 사용자를 원자적으로 생성한다.
-  const userId = await pgTransaction(async (client) => {
+  // 회사·기본 설정·사용자·세션·가입 기록을 같은 PG 트랜잭션으로 생성한다.
+  const { userId, session } = await pgTransaction(async (client) => {
     const { rows: comp } = await client.query(
       `INSERT INTO org.companies (name, ceo_name) VALUES ($1, $2) RETURNING id`,
       [company_name, name],
@@ -139,23 +136,29 @@ export async function signup(req, res) {
        RETURNING id`,
       [companyId, deptId, ceoPositionId, email, name, phone ?? null, passwordHash],
     );
-    return u[0].id;
+    const createdUserId = u[0].id;
+    // 새 회사 생성자에게만 명시적 PG 역할을 기록한다. 기존 관리자 플래그는 사용하지 않는다.
+    await client.query(`INSERT INTO org.permissions (code, module)
+      SELECT code, split_part(code, '.', 1) FROM unnest($1::text[]) AS code
+      ON CONFLICT (code) DO NOTHING`, [PG_CREATOR_PERMISSIONS]);
+    const { rows: roles } = await client.query(
+      "INSERT INTO org.roles (company_id, name, is_system) VALUES ($1, 'company_creator', true) RETURNING id", [companyId]);
+    await client.query(`INSERT INTO org.role_permissions (role_id, permission_id)
+      SELECT $1, id FROM org.permissions WHERE code = ANY($2::text[])`, [roles[0].id, PG_CREATOR_PERMISSIONS]);
+    await client.query("INSERT INTO org.user_roles (user_id, role_id, granted_by) VALUES ($1, $2, $1)", [createdUserId, roles[0].id]);
+    const { rows: sessionRows } = await client.query(
+      `INSERT INTO auth.sessions (user_id, ip_address, user_agent)
+       VALUES ($1, $2, $3)
+       RETURNING session_token, login_at`,
+      [createdUserId, ip, userAgent],
+    );
+    await client.query(
+      `INSERT INTO auth.login_logs (user_id, email_tried, success, reason, ip_address)
+       VALUES ($1, $2, true, 'signup', $3)`,
+      [createdUserId, email, ip],
+    );
+    return { userId: createdUserId, session: sessionRows[0] };
   });
-
-  // 세션 생성 → session_token(UUID) 을 액세스 토큰으로 반환
-  const { rows: sessionRows } = await pgQuery(
-    `INSERT INTO auth.sessions (user_id, ip_address, user_agent)
-     VALUES ($1, $2, $3)
-     RETURNING session_token, login_at`,
-    [userId, ip, userAgent],
-  );
-  const session = sessionRows[0];
-
-  await pgQuery(
-    `INSERT INTO auth.login_logs (user_id, email_tried, success, reason, ip_address)
-     VALUES ($1, $2, true, 'signup', $3)`,
-    [userId, email, ip],
-  );
 
   const summary = await loadUserSummary(userId);
 
@@ -165,6 +168,12 @@ export async function signup(req, res) {
     login_at: session.login_at,
     user: serializeUser(summary),
   });
+}
+
+// PG 회사만 반환한다. SQLite 소속과 숫자 ID/이메일로 합치지 않는다.
+export async function workspace(req, res) {
+  const { companyId } = pgIdentity(req);
+  res.json({ organizations: companyId ? [await pgWorkspace(req)] : [] });
 }
 
 // POST /api/v1/pg/auth/login
@@ -244,29 +253,11 @@ export async function login(req, res) {
 
 // GET /api/v1/pg/auth/me
 export async function me(req, res) {
-  const token = bearerToken(req);
-  if (!token) {
-    throw new ApiError("UNAUTHENTICATED", "인증 토큰이 필요합니다");
+  currentUser(req);
+  if (req.authSource !== "perp_db" || !req.externalIdentity) {
+    throw new ApiError("UNAUTHENTICATED", "유효한 perp_db 세션이 필요합니다");
   }
-
-  // UUID 형식이 아니면 조회 자체가 22P02 오류를 낼 수 있으니 방어.
-  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!uuidRe.test(token)) {
-    throw new ApiError("UNAUTHENTICATED", "유효하지 않은 토큰입니다");
-  }
-
-  const { rows } = await pgQuery(
-    `SELECT user_id
-       FROM auth.sessions
-      WHERE session_token = $1 AND is_active = true`,
-    [token],
-  );
-  const session = rows[0];
-  if (!session) {
-    throw new ApiError("UNAUTHENTICATED", "세션이 만료되었거나 유효하지 않습니다");
-  }
-
-  const summary = await loadUserSummary(session.user_id);
+  const summary = await loadUserSummary(req.externalIdentity.subject);
   if (!summary) {
     throw new ApiError("UNAUTHENTICATED", "사용자를 찾을 수 없습니다");
   }
@@ -276,19 +267,13 @@ export async function me(req, res) {
 
 // POST /api/v1/pg/auth/logout
 export async function logout(req, res) {
-  const token = bearerToken(req);
-  if (!token) {
-    throw new ApiError("UNAUTHENTICATED", "인증 토큰이 필요합니다");
-  }
-  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!uuidRe.test(token)) {
-    throw new ApiError("UNAUTHENTICATED", "유효하지 않은 토큰입니다");
-  }
+  currentUser(req);
+  if (req.authSource !== "perp_db") throw new ApiError("UNAUTHENTICATED", "유효한 perp_db 세션이 필요합니다");
   await pgQuery(
     `UPDATE auth.sessions
         SET is_active = false, logout_at = now()
-      WHERE session_token = $1 AND is_active = true`,
-    [token],
+      WHERE id = $1 AND is_active = true`,
+    [req.sessionId],
   );
   res.json({ ok: true });
 }

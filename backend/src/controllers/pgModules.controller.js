@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { pgIdentity } from "../middleware/pgAccess.js";
 import { pgQuery, pgTransaction } from "../config/pg.js";
 import { MODULE_CATALOG, OPTIONAL_MODULES } from "../config/modules.js";
 import { hashPassword } from "../utils/crypto.js";
@@ -8,31 +10,7 @@ import { ApiError } from "../utils/errors.js";
 // 모든 조회는 로그인 사용자의 회사(company_id)로 스코프한다.
 // 응답은 프론트 ScreenPage 의 제네릭 매퍼(liveTable/liveStats)가 렌더한다.
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function bearerToken(req) {
-  const header = req.get("authorization") ?? "";
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : null;
-}
-
-async function resolveUser(req) {
-  const token = bearerToken(req);
-  if (!token || !UUID_RE.test(token)) {
-    throw new ApiError("UNAUTHENTICATED", "인증 토큰이 필요합니다");
-  }
-  const { rows } = await pgQuery(
-    `SELECT u.id, u.company_id
-       FROM auth.sessions s
-       JOIN auth.users u ON u.id = s.user_id
-      WHERE s.session_token = $1 AND s.is_active = true`,
-    [token],
-  );
-  if (!rows[0]) {
-    throw new ApiError("UNAUTHENTICATED", "세션이 만료되었거나 유효하지 않습니다");
-  }
-  return { userId: rows[0].id, companyId: rows[0].company_id };
-}
+const resolveUser = pgIdentity;
 
 async function resolveCompanyId(req) {
   return (await resolveUser(req)).companyId;
@@ -389,7 +367,7 @@ export async function deleteRecord(req, res) {
   const { companyId } = await resolveUser(req);
   if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 삭제할 수 있습니다");
   const { resource, id } = req.params;
-  const sql = DELETABLE[resource];
+  const sql = Object.hasOwn(DELETABLE, resource) ? DELETABLE[resource] : null;
   if (!sql) throw new ApiError("VALIDATION_ERROR", "삭제할 수 없는 항목입니다");
   if (!/^\d+$/.test(String(id))) throw new ApiError("VALIDATION_ERROR", "잘못된 id");
   const result = await pgQuery(sql, [id, companyId]);
@@ -480,19 +458,19 @@ export async function updateRecord(req, res) {
 
 // ── 조직 변경 로그 / 브랜치 접근 (간이) ──────────────────────────
 // GET /api/v1/pg/members/activity — perp_db 통합 감사 소스 없음 → 빈 목록
-export async function membersActivity(_req, res) {
-  res.json({ items: [] });
+export async function membersActivity() {
+  throw new ApiError("NOT_IMPLEMENTED", "PG 감사 기록 저장소가 아직 연결되지 않았습니다", {}, 501);
 }
 // PUT /api/v1/pg/members/departments/:id/access — 접근권한은 perp_db 미모델 → no-op
-export async function departmentAccess(_req, res) {
-  res.json({ ok: true });
+export async function departmentAccess() {
+  throw new ApiError("NOT_IMPLEMENTED", "PG 부서 접근권한 저장 기능은 아직 지원하지 않습니다", {}, 501);
 }
 // 홈 레이아웃 — perp_db 테이블 없음 → 빈 블록(저장 no-op)
-export async function homeLayoutGet(_req, res) {
-  res.json({ blocks: [] });
+export async function homeLayoutGet() {
+  throw new ApiError("NOT_IMPLEMENTED", "PG 홈 레이아웃 저장소가 아직 연결되지 않았습니다", {}, 501);
 }
-export async function homeLayoutSave(_req, res) {
-  res.json({ ok: true });
+export async function homeLayoutSave() {
+  throw new ApiError("NOT_IMPLEMENTED", "PG 홈 레이아웃 저장 기능은 아직 지원하지 않습니다", {}, 501);
 }
 
 // ── 개인 노트(Vault) : notes.vaults / notes.notes ────────────────
@@ -503,7 +481,8 @@ async function ensureVault(userId) {
   );
   if (rows[0]) return rows[0].id;
   const { rows: created } = await pgQuery(
-    `INSERT INTO notes.vaults (owner_id, name) VALUES ($1, 'My Vault') RETURNING id`,
+    `INSERT INTO notes.vaults (owner_id, name) VALUES ($1, 'My Vault')
+     ON CONFLICT (owner_id, name) DO UPDATE SET name = EXCLUDED.name RETURNING id`,
     [userId],
   );
   return created[0].id;
@@ -514,30 +493,65 @@ const toNote = (r) => ({
   content: r.content_md ?? "",
   folder: r.folder_path ?? "/",
   tags: [],
+  pinned: false,
+  agent_enabled: false,
+  version: Number(r.version),
 });
-
-// GET /api/v1/pg/vault/notes
-export async function vaultNotes(req, res) {
-  const { userId, companyId } = await resolveUser(req);
-  if (!companyId) return res.json({ items: [], folders: [] });
-  const vaultId = await ensureVault(userId);
+const noteFields = "n.id, n.title, n.content_md, n.folder_path, n.xmin::text AS version";
+const noteInput = z.object({
+  title: z.string().trim().min(1), content: z.string().default(""), folder: z.string().min(1).default("/"),
+}).strict();
+const notePatch = noteInput.partial().extend({ version: z.number().int().nonnegative() }).strict();
+const noteId = z.string().regex(/^\d+$/);
+async function ownedNotes(userId) {
   const { rows } = await pgQuery(
-    `SELECT id, title, content_md, folder_path FROM notes.notes WHERE vault_id = $1 ORDER BY updated_at DESC`,
-    [vaultId],
-  );
-  const items = rows.map(toNote);
+    `SELECT ${noteFields} FROM notes.notes n JOIN notes.vaults v ON v.id = n.vault_id
+     WHERE v.owner_id = $1 ORDER BY n.updated_at DESC, n.id`, [userId]);
+  return rows.map(toNote);
+}
+
+// 목록과 그래프는 같은 소유자 전체 노트를 읽으며 GET은 저장소를 만들지 않는다.
+export async function vaultNotes(req, res) {
+  const { userId } = resolveUser(req);
+  const items = await ownedNotes(userId);
   const folders = [...new Set(items.map((i) => i.folder))];
-  res.json({ items, folders });
+  res.json({ items, folders, capabilities: { tags: false, pinned: false, agent_enabled: false } });
+}
+
+export async function vaultGraph(req, res) {
+  const { userId } = resolveUser(req);
+  const items = await ownedNotes(userId);
+  const byTitle = new Map();
+  for (const note of items) {
+    const key = note.title.trim().toLowerCase();
+    byTitle.set(key, byTitle.has(key) ? null : note.id);
+  }
+  const edges = [];
+  const connected = new Set();
+  for (const note of items) {
+    const seen = new Set();
+    for (const match of note.content.matchAll(/\[\[([^\]\n]+)\]\]/g)) {
+      const title = match[1].split(/[|#]/, 1)[0].trim();
+      const key = title.toLowerCase();
+      if (!title || seen.has(key)) continue;
+      seen.add(key);
+      const target = byTitle.get(key) ?? null;
+      edges.push({ source: note.id, target_id: target, target_title: title });
+      if (target) { connected.add(note.id); connected.add(target); }
+    }
+  }
+  res.json({ nodes: items.map(({ id, title, folder }) => ({ id, title, folder })), edges,
+    orphans: items.filter(note => !connected.has(note.id)).map(note => note.id) });
 }
 
 // GET /api/v1/pg/vault/notes/:id
 export async function vaultNote(req, res) {
   const { userId } = await resolveUser(req);
   const { rows } = await pgQuery(
-    `SELECT n.id, n.title, n.content_md, n.folder_path
+    `SELECT ${noteFields}
        FROM notes.notes n JOIN notes.vaults v ON v.id = n.vault_id
       WHERE n.id = $1 AND v.owner_id = $2`,
-    [req.params.id, userId],
+    [noteId.parse(req.params.id), userId],
   );
   if (!rows[0]) throw new ApiError("NOT_FOUND", "노트를 찾을 수 없습니다");
   res.json(toNote(rows[0]));
@@ -545,24 +559,22 @@ export async function vaultNote(req, res) {
 
 // POST /api/v1/pg/vault/notes
 export async function vaultCreateNote(req, res) {
-  const { userId, companyId } = await resolveUser(req);
-  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 노트를 만들 수 있습니다");
-  const b = req.body ?? {};
-  const title = String(b.title ?? "").trim();
-  if (!title) throw new ApiError("VALIDATION_ERROR", "제목은 필수입니다");
+  const { userId } = await resolveUser(req);
+  const body = noteInput.parse(req.body);
   const vaultId = await ensureVault(userId);
   const { rows } = await pgQuery(
     `INSERT INTO notes.notes (vault_id, folder_path, title, content_md)
-     VALUES ($1, $2, $3, $4) RETURNING id`,
-    [vaultId, String(b.folder ?? "/") || "/", title, b.content ?? null],
+     VALUES ($1, $2, $3, $4) RETURNING id, title, content_md, folder_path, xmin::text AS version`,
+    [vaultId, body.folder, body.title, body.content],
   );
-  res.status(201).json({ id: String(rows[0].id) });
+  res.status(201).json(toNote(rows[0]));
 }
 
 // PATCH /api/v1/pg/vault/notes/:id
 export async function vaultUpdateNote(req, res) {
   const { userId } = await resolveUser(req);
-  const b = req.body ?? {};
+  const body = notePatch.parse(req.body);
+  const id = noteId.parse(req.params.id);
   const result = await pgQuery(
     `UPDATE notes.notes n
         SET title = COALESCE($3, n.title),
@@ -570,11 +582,17 @@ export async function vaultUpdateNote(req, res) {
             folder_path = COALESCE($5, n.folder_path),
             updated_at = now()
        FROM notes.vaults v
-      WHERE n.id = $1 AND n.vault_id = v.id AND v.owner_id = $2`,
-    [req.params.id, userId, b.title ?? null, b.content ?? null, b.folder ?? null],
+      WHERE n.id = $1 AND n.vault_id = v.id AND v.owner_id = $2 AND n.xmin::text = $6
+      RETURNING ${noteFields}`,
+    [id, userId, body.title ?? null, body.content ?? null, body.folder ?? null, String(body.version)],
   );
-  if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "노트를 찾을 수 없습니다");
-  res.json({ ok: true });
+  if (result.rowCount === 0) {
+    const owned = await pgQuery(`SELECT n.id FROM notes.notes n JOIN notes.vaults v ON v.id = n.vault_id
+      WHERE n.id = $1 AND v.owner_id = $2`, [id, userId]);
+    if (!owned.rows[0]) throw new ApiError("NOT_FOUND", "노트를 찾을 수 없습니다");
+    throw new ApiError("VERSION_CONFLICT", "다른 창에서 노트가 변경되었습니다. 새 내용을 확인하세요");
+  }
+  res.json(toNote(result.rows[0]));
 }
 
 // DELETE /api/v1/pg/vault/notes/:id
@@ -695,6 +713,10 @@ export async function createTask(req, res) {
   if (!title) throw new ApiError("VALIDATION_ERROR", "제목은 필수입니다");
   const { rows: ok } = await pgQuery(`SELECT 1 FROM project.projects WHERE id=$1 AND company_id=$2`, [projectId, companyId]);
   if (!ok[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 프로젝트입니다");
+  if (assignee) {
+    const target = await pgQuery("SELECT 1 FROM auth.users WHERE id = $1 AND company_id = $2", [assignee, companyId]);
+    if (!target.rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 담당자입니다");
+  }
   const { rows } = await pgQuery(
     `INSERT INTO project.tasks (project_id, assignee_id, title, due_on, status)
      VALUES ($1, $2, $3, $4, 'todo') RETURNING id`,
@@ -712,6 +734,10 @@ export async function createApproval(req, res) {
   const target = body.target_user_id || null;
   const note = String(body.note ?? "").trim();
   if (!requestType) throw new ApiError("VALIDATION_ERROR", "유형은 필수입니다");
+  if (target) {
+    const member = await pgQuery("SELECT 1 FROM auth.users WHERE id = $1 AND company_id = $2", [target, companyId]);
+    if (!member.rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 대상자입니다");
+  }
   const { rows } = await pgQuery(
     `INSERT INTO org.approval_requests (company_id, request_type, requester_id, target_user_id, payload, status)
      VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING id`,

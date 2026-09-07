@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { workspaceEndpoint } from "./workspace";
 
 const apiErrorSchema = z.object({
   error: z.object({
@@ -69,7 +70,7 @@ export async function apiRequest(
       : timeout,
   };
   if (options.body !== undefined) request.body = JSON.stringify(options.body);
-  const response = await fetch(`${API_BASE_URL}${path}`, request);
+  const response = await fetch(`${API_BASE_URL}${workspaceEndpoint(path, options.session?.orgId)}`, request);
 
   if (response.status === 204 || response.status === 205) return null;
   const contentType = response.headers.get("content-type") ?? "";
@@ -112,6 +113,9 @@ export async function apiRequest(
 
 export function userMessageOf(error: unknown): string {
   if (error instanceof ApiError) {
+    // 503 은 원인·조치가 담긴 운영 안내라 그대로 노출한다.
+    // 나머지 5xx 는 내부 사정을 감춘 일반 문구를 유지한다.
+    if (error.status === 503 && error.message) return error.message;
     if (error.status >= 500) return "서버에 일시적인 문제가 발생했습니다.";
     return error.message;
   }

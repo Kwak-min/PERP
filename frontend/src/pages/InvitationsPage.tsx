@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { z } from "zod";
 
 import { Button } from "../components/ui/Button";
@@ -35,9 +35,12 @@ function expiresLabel(value: string): string {
 
 export function InvitationsPage() {
   const session = useSession();
+  const location = useLocation();
   const navigate = useNavigate();
   const [mailbox, setMailbox] = useState<readonly Invitation[] | null>(null);
-  const [token, setToken] = useState("");
+  const [token, setToken] = useState(
+    () => new URLSearchParams(location.search).get("invite") ?? "",
+  );
   const [checked, setChecked] = useState<z.infer<typeof verifySchema> | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

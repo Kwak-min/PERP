@@ -17,17 +17,12 @@ type Props = Readonly<{
 
 // 설정(CreateConfig)에 따라 입력 폼을 렌더하고 perp_db 로 생성/수정 요청을 보낸다.
 export function CreateFormModal({ entityLabel, config, session, onClose, onCreated, method = "POST", initialValues }: Props) {
-  const dialogRef = useModalFocus<HTMLFormElement>(onClose);
   const firstRef = useRef<HTMLInputElement>(null);
   const isEdit = method === "PATCH";
   const [values, setValues] = useState<Record<string, string>>(initialValues ?? {});
   const [options, setOptions] = useState<Record<string, readonly { value: string; label: string }[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    firstRef.current?.focus();
-  }, []);
 
   // select 필드의 옵션을 엔드포인트에서 가져온다.
   useEffect(() => {
@@ -40,8 +35,8 @@ export function CreateFormModal({ entityLabel, config, session, onClose, onCreat
           const items = (data as { items?: readonly { value: string; label: string }[] }).items ?? [];
           setOptions((prev) => ({ ...prev, [field.name]: items }));
         })
-        .catch(() => {
-          if (alive) setOptions((prev) => ({ ...prev, [field.name]: [] }));
+        .catch((caught: unknown) => {
+          if (alive) setError(userMessageOf(caught));
         });
     }
     return () => {
@@ -49,12 +44,14 @@ export function CreateFormModal({ entityLabel, config, session, onClose, onCreat
     };
   }, [config.fields, session]);
 
-  const dirty = Object.values(values).some((v) => v.trim() !== "");
+  const dirty = Object.entries(values).some(([key, value]) => value !== (initialValues?.[key] ?? ""));
 
   function requestClose(): void {
     if (dirty && !window.confirm("입력한 내용이 사라집니다. 닫을까요?")) return;
     onClose();
   }
+
+  const dialogRef = useModalFocus<HTMLFormElement>(requestClose, true, firstRef);
 
   function set(name: string, value: string): void {
     setValues((prev) => ({ ...prev, [name]: value }));

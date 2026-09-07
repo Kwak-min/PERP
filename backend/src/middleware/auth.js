@@ -43,7 +43,13 @@ export function resolvePrincipal(req) {
   }
 
   const memberships = db()
-    .prepare("SELECT * FROM membership WHERE user_id = ? AND status = 'active' AND deleted_at IS NULL")
+    .prepare(
+      `SELECT m.* FROM membership m
+       JOIN organization o ON o.id = m.org_id AND o.tenant_id = m.tenant_id
+       JOIN tenant t ON t.id = o.tenant_id
+       WHERE m.user_id = ? AND m.status = 'active' AND m.deleted_at IS NULL
+         AND o.deleted_at IS NULL AND t.status = 'active'`,
+    )
     .all(user.id);
   if (memberships.length === 0) {
     throw new ApiError(

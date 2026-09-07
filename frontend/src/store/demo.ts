@@ -4,11 +4,10 @@ const KEY = "orbitflow.demoMode";
 const listeners = new Set<() => void>();
 
 function read(): boolean {
-  // 기본값 OFF: 데이터를 입력하지 않은 사용자에게 데모(fixture) 더미를 보이지 않는다.
-  // 데모를 보려면 상단 토글로 켠다(localStorage "1").
+  // 명시적으로 켠 데모만 표시한다.
   if (typeof window === "undefined") return false;
   const raw = localStorage.getItem(KEY);
-  return raw === null ? false : raw === "1";
+  return raw === "1";
 }
 
 let current = read();

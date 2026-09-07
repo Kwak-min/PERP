@@ -35,13 +35,13 @@ const chatSchema = z.object({
   message: z.string().min(1),
   conversation_id: z.string().nullable().optional(),
   project_id: z.string().nullable().optional(),
-  data_class: z.string().default("internal"),
+  data_class: z.enum(["public", "internal", "personal", "sensitive", "confidential"]).default("internal"),
 });
 
 const memorySchema = z.object({
   content: z.string().min(1).max(2000),
   source: z.string().default("user"),
-  sensitivity: z.string().default("internal"),
+  sensitivity: z.enum(["public", "internal", "personal", "sensitive", "confidential"]).default("internal"),
   usage_scope: z.string().default("personal"),
   expires_at: z.string().nullable().optional(),
 });
@@ -90,8 +90,9 @@ export async function chat(req, res) {
   ];
   const memories = rag.recallMemories(principal);
   const context = rag.buildContext(citations, memories);
+  const dataClass = rag.effectiveDataClass(payload.data_class, citations, memories);
   const result = await providers.complete(
-    payload.data_class,
+    dataClass,
     `${rag.SYSTEM_POLICY}\n\n${context}`,
     payload.message,
   );
@@ -153,7 +154,7 @@ export async function chat(req, res) {
       JSON.stringify(citations.map((c) => c.id)),
       result.error ? "error" : "ok",
       result.error ?? null,
-      payload.data_class,
+      dataClass,
       nowIso(),
     );
 

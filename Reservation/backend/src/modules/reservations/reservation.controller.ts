@@ -7,6 +7,7 @@ import {
   listQuerySchema,
 } from './reservation.schema';
 import { sendSuccess } from '../../common/response';
+import { principalOf, requireReservationWrite } from '../../auth/principal';
 
 export const reservationController = {
   /**
@@ -19,7 +20,7 @@ export const reservationController = {
   getReservations: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const q = listQuerySchema.parse(req.query);
-      const data = await reservationService.findMany(q.spaceId, q.from, q.to, q.userId);
+      const data = await reservationService.findMany(principalOf(req), q.spaceId, q.from, q.to, q.mine === 'true');
       sendSuccess(res, data);
     } catch (err) { next(err); }
   },
@@ -34,7 +35,7 @@ export const reservationController = {
   getTimetable: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { spaceId, date, slotMinutes } = timetableQuerySchema.parse(req.query);
-      const data = await reservationService.getTimetable(spaceId, date, slotMinutes);
+      const data = await reservationService.getTimetable(principalOf(req), spaceId, date, slotMinutes);
       sendSuccess(res, data);
     } catch (err) { next(err); }
   },
@@ -48,7 +49,7 @@ export const reservationController = {
    */
   getReservationById: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const data = await reservationService.findById(Number(req.params.id));
+      const data = await reservationService.findById(Number(req.params.id), principalOf(req));
       sendSuccess(res, data);
     } catch (err) { next(err); }
   },
@@ -63,7 +64,9 @@ export const reservationController = {
   createReservation: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const dto = createReservationSchema.parse(req.body);
-      const data = await reservationService.create(dto);
+      const principal = principalOf(req);
+      requireReservationWrite(principal);
+      const data = await reservationService.create(dto, principal);
       sendSuccess(res, data, 201, '예약이 완료되었습니다.');
     } catch (err) { next(err); }
   },
@@ -78,9 +81,9 @@ export const reservationController = {
   updateReservation: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const dto = updateReservationSchema.parse(req.body);
-      const userId = Number(req.query.userId);
-      if (!userId || isNaN(userId)) return next(new Error('userId 쿼리파라미터가 필요합니다.'));
-      const data = await reservationService.update(Number(req.params.id), userId, dto);
+      const principal = principalOf(req);
+      requireReservationWrite(principal);
+      const data = await reservationService.update(Number(req.params.id), principal, dto);
       sendSuccess(res, data, 200, '예약이 수정되었습니다.');
     } catch (err) { next(err); }
   },
@@ -94,16 +97,15 @@ export const reservationController = {
    */
   cancelReservation: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const userId = Number(req.query.userId);
-      if (!userId || isNaN(userId)) return next(new Error('userId 쿼리파라미터가 필요합니다.'));
-
+      const principal = principalOf(req);
+      requireReservationWrite(principal);
       const rawScope = req.query.cancelScope as string | undefined;
       const validScopes = ['THIS', 'THIS_AND_FOLLOWING', 'ALL'] as const;
       const cancelScope = validScopes.includes(rawScope as typeof validScopes[number])
         ? (rawScope as typeof validScopes[number])
         : 'THIS';
 
-      const data = await reservationService.cancel(Number(req.params.id), userId, cancelScope);
+      const data = await reservationService.cancel(Number(req.params.id), principal, cancelScope);
       sendSuccess(res, data, 200, '예약이 취소되었습니다.');
     } catch (err) { next(err); }
   },

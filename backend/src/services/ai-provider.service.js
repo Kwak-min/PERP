@@ -1,6 +1,7 @@
 import { env } from "../config/env.js";
 
 export const EXTERNAL_BLOCKED_CLASSES = new Set(["sensitive", "confidential"]);
+const DATA_CLASSES = new Set(["public", "internal", "personal", ...EXTERNAL_BLOCKED_CLASSES]);
 
 class EchoProvider {
   constructor() {
@@ -60,6 +61,7 @@ class HttpChatProvider {
         }),
         signal: AbortSignal.timeout(60000),
       });
+      if (!response.ok) throw new Error(`${this.name} returned HTTP ${response.status}`);
       const payload = await response.json();
       const choice = payload.choices?.[0] ?? {};
       const usage = payload.usage ?? {};
@@ -101,7 +103,7 @@ export function route(dataClass, prefer = null) {
   ];
   const externalChain = [[REGISTRY.openrouter, env.externalModel]];
 
-  if (EXTERNAL_BLOCKED_CLASSES.has(dataClass)) return localChain;
+  if (!DATA_CLASSES.has(dataClass) || EXTERNAL_BLOCKED_CLASSES.has(dataClass)) return localChain;
   if (prefer === "local") return localChain;
   if (prefer === "external") return [...externalChain, ...localChain];
   if (env.aiProvider === "echo") return [[REGISTRY.echo, "echo-local"]];

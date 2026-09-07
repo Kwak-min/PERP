@@ -160,6 +160,23 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 5,
+    up(conn) {
+      conn.exec(`
+        CREATE TABLE IF NOT EXISTS auth_identity (
+          id TEXT PRIMARY KEY,
+          provider TEXT NOT NULL,
+          subject TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(provider, subject),
+          UNIQUE(provider, user_id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_auth_identity_user ON auth_identity(user_id);
+      `);
+    },
+  },
 ];
 
 export function applyMigrations(conn) {

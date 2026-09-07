@@ -1,3 +1,4 @@
+import { pgIdentity } from "../middleware/pgAccess.js";
 import { pgQuery } from "../config/pg.js";
 import { ApiError } from "../utils/errors.js";
 
@@ -5,33 +6,7 @@ import { ApiError } from "../utils/errors.js";
 // strangler-fig: 레거시 SQLite /members 를 대체하는 /api/v1/pg/members/*.
 // 모든 조회는 로그인 사용자의 회사(company_id)로 스코프한다.
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function bearerToken(req) {
-  const header = req.get("authorization") ?? "";
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : null;
-}
-
-// Bearer(UUID 세션) → 로그인 사용자의 { userId, companyId, isAdmin } 해석.
-async function resolveAuthUser(req) {
-  const token = bearerToken(req);
-  if (!token || !UUID_RE.test(token)) {
-    throw new ApiError("UNAUTHENTICATED", "인증 토큰이 필요합니다");
-  }
-  const { rows } = await pgQuery(
-    `SELECT u.id, u.company_id, u.is_admin
-       FROM auth.sessions s
-       JOIN auth.users u ON u.id = s.user_id
-      WHERE s.session_token = $1 AND s.is_active = true`,
-    [token],
-  );
-  const row = rows[0];
-  if (!row) {
-    throw new ApiError("UNAUTHENTICATED", "세션이 만료되었거나 유효하지 않습니다");
-  }
-  return { userId: row.id, companyId: row.company_id, isAdmin: row.is_admin };
-}
+const resolveAuthUser = pgIdentity;
 
 // GET /api/v1/pg/members
 // 로그인 사용자 회사의 구성원 목록. (회사 미배정 사용자는 빈 목록)
@@ -187,6 +162,10 @@ export async function updateDepartment(req, res) {
   const sets = [];
   const params = [req.params.id, companyId];
   if ("leader_id" in body) {
+    if (body.leader_id) {
+      const leader = await pgQuery("SELECT 1 FROM auth.users WHERE id = $1 AND company_id = $2", [body.leader_id, companyId]);
+      if (!leader.rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 책임자입니다");
+    }
     params.push(body.leader_id || null);
     sets.push(`manager_id = $${params.length}`);
   }
@@ -209,6 +188,10 @@ export async function createDepartment(req, res) {
   const name = String(body.name ?? "").trim();
   const parentId = body.parent_id || null;
   if (!name) throw new ApiError("VALIDATION_ERROR", "부서명은 필수입니다");
+  if (parentId) {
+    const parent = await pgQuery("SELECT 1 FROM org.departments WHERE id = $1 AND company_id = $2", [parentId, companyId]);
+    if (!parent.rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 상위 부서입니다");
+  }
   const { rows } = await pgQuery(
     `INSERT INTO org.departments (company_id, name, parent_id) VALUES ($1, $2, $3) RETURNING id`,
     [companyId, name, parentId],

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { canReadDocument } from "../services/rag.service.js";
 
 import { resolvePrincipal } from "../middleware/auth.js";
 import {
@@ -24,14 +25,14 @@ const documentSchema = z.object({
   project_id: z.string().nullable().optional(),
   doc_type: z.string().default("wiki"),
   tags: z.array(z.string()).default([]),
-  visibility: z.string().default("org"),
-  sensitivity: z.string().default("internal"),
+  visibility: z.enum(["org", "private", "public"]).default("org"),
+  sensitivity: z.enum(["public", "internal", "personal", "sensitive", "confidential"]).default("internal"),
 });
 
 const patchSchema = z.object({
   title: z.string().optional(),
   content: z.string().optional(),
-  visibility: z.string().optional(),
+  visibility: z.enum(["org", "private", "public"]).optional(),
   review_status: z.string().optional(),
   version: z.number().int().optional(),
 });
@@ -168,13 +169,17 @@ export function listDocuments(req, res) {
     limit: Number(req.query.limit ?? 50),
     orderBy: "updated_at DESC",
   });
-  res.json({ items: rows.map(view), next_cursor: null });
+  res.json({
+    items: rows.filter((document) => canReadDocument(principal, document)).map(view),
+    next_cursor: null,
+  });
 }
 
 export function getDocument(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("document.read");
   const document = getScoped("document", principal, req.params.documentId, "document");
+  if (!canReadDocument(principal, document)) throw notFound("document");
   const versions = listScoped(
     "document_version",
     principal,
@@ -197,6 +202,7 @@ export function patchDocument(req, res) {
   principal.require("document.write");
   const payload = patchSchema.parse(req.body);
   const document = getScoped("document", principal, req.params.documentId, "document");
+  if (!canReadDocument(principal, document)) throw notFound("document");
 
   if (payload.version !== undefined && payload.version !== document.version) {
     throw new ApiError("VERSION_CONFLICT", "document was modified by someone else");
@@ -249,6 +255,7 @@ export function restoreVersion(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("document.write");
   const document = getScoped("document", principal, req.params.documentId, "document");
+  if (!canReadDocument(principal, document)) throw notFound("document");
   const revision = Number(req.params.revision);
   const version = listScoped(
     "document_version",
@@ -275,6 +282,7 @@ export function archiveDocument(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("document.write");
   const document = getScoped("document", principal, req.params.documentId, "document");
+  if (!canReadDocument(principal, document)) throw notFound("document");
   update("document", document.id, { archived: 1 }, principal.userId);
   softDelete("document", document.id, principal.userId);
   hardDelete("document_chunk", "document_id = ?", [document.id]);
@@ -423,8 +431,105 @@ export function searchDocuments(req, res) {
   principal.require("document.read");
   const needle = String(req.query.q ?? "").toLowerCase();
   const rows = listScoped("document", principal, [], { limit: 500 }).filter(
-    (d) =>
-      d.title.toLowerCase().includes(needle) || (d.content ?? "").toLowerCase().includes(needle),
+    (document) =>
+      canReadDocument(principal, document) &&
+      (document.title.toLowerCase().includes(needle) ||
+        (document.content ?? "").toLowerCase().includes(needle)),
   );
   res.json({ query: req.query.q ?? "", items: rows.slice(0, 20).map(view) });
+}
+
+// GET /documents/graph
+// 조직 지식(RAG)을 옵시디언식 그래프로 준다.
+// - 공간(space)은 허브 노드, 문서는 그 주위 노드
+// - 문서 본문의 [[제목]] 위키링크가 문서 사이 간선
+// - 노출 범위는 RAG 검색(searchChunks)과 같은 민감도 상한을 따른다.
+export function graph(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("document.read");
+  const spaces = listScoped("space", principal, [], { limit: 200 });
+  const spaceName = new Map(spaces.map((s) => [s.id, s.name]));
+
+  const documents = listScoped("document", principal, [], { limit: 1000 }).filter((document) =>
+    canReadDocument(principal, document),
+  );
+  const readableIds = new Set(documents.map((document) => document.id));
+
+  const chunkCount = new Map();
+  for (const chunk of listScoped("document_chunk", principal, [], { limit: 5000 })) {
+    if (!readableIds.has(chunk.document_id)) continue;
+    chunkCount.set(chunk.document_id, (chunkCount.get(chunk.document_id) ?? 0) + 1);
+  }
+
+  const byTitle = new Map();
+  for (const document of documents) {
+    if (!byTitle.has(document.title)) byTitle.set(document.title, document.id);
+  }
+
+  const nodes = [
+    ...spaces.map((space) => ({
+      id: space.id,
+      kind: "space",
+      title: space.name,
+      folder: space.name,
+      sensitivity: space.visibility,
+      chunks: 0,
+      tags: [],
+      updated_at: space.updated_at,
+    })),
+    ...documents.map((document) => ({
+      id: document.id,
+      kind: "document",
+      title: document.title,
+      folder: spaceName.get(document.space_id) ?? "미분류",
+      sensitivity: document.sensitivity,
+      chunks: chunkCount.get(document.id) ?? 0,
+      tags: (document.tags ?? "").split(",").filter(Boolean),
+      updated_at: document.updated_at,
+    })),
+  ];
+
+  const edges = [];
+  for (const document of documents) {
+    if (document.space_id && spaceName.has(document.space_id)) {
+      edges.push({
+        source: document.id,
+        target_id: document.space_id,
+        target_title: spaceName.get(document.space_id),
+        kind: "space",
+      });
+    }
+    const seen = new Set();
+    for (const match of (document.content ?? "").matchAll(/\[\[([^\]]+)\]\]/g)) {
+      const title = match[1].trim();
+      if (!title || seen.has(title)) continue;
+      seen.add(title);
+      const targetId = byTitle.get(title) ?? null;
+      if (targetId === document.id) continue;
+      edges.push({
+        source: document.id,
+        target_id: targetId,
+        target_title: targetId ? title : "",
+        kind: "link",
+      });
+    }
+  }
+
+  const linked = new Set();
+  for (const edge of edges) {
+    linked.add(edge.source);
+    if (edge.target_id) linked.add(edge.target_id);
+  }
+
+  res.json({
+    nodes,
+    edges,
+    orphans: documents.filter((d) => !linked.has(d.id)).map((d) => d.id),
+    stats: {
+      documents: documents.length,
+      spaces: spaces.length,
+      chunks: [...chunkCount.values()].reduce((sum, n) => sum + n, 0),
+      restricted: 0,
+    },
+  });
 }

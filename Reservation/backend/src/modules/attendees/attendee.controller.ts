@@ -2,6 +2,7 @@ import { NextFunction, Request, Response } from 'express';
 import { attendeeService } from './attendee.service';
 import { addAttendeeSchema, respondSchema } from './attendee.schema';
 import { sendSuccess } from '../../common/response';
+import { principalOf, requireReservationWrite } from '../../auth/principal';
 
 export const attendeeController = {
   /**
@@ -13,7 +14,7 @@ export const attendeeController = {
    */
   getAttendees: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const data = await attendeeService.findByReservation(Number(req.params.reservationId));
+      const data = await attendeeService.findByReservation(Number(req.params.reservationId), principalOf(req));
       sendSuccess(res, data);
     } catch (err) { next(err); }
   },
@@ -28,7 +29,9 @@ export const attendeeController = {
   addAttendee: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const dto = addAttendeeSchema.parse(req.body);
-      const data = await attendeeService.add(Number(req.params.reservationId), dto);
+      const principal = principalOf(req);
+      requireReservationWrite(principal);
+      const data = await attendeeService.add(Number(req.params.reservationId), dto, principal);
       sendSuccess(res, data, 201, '참석자를 초대했습니다.');
     } catch (err) { next(err); }
   },
@@ -42,7 +45,9 @@ export const attendeeController = {
    */
   removeAttendee: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      await attendeeService.remove(Number(req.params.reservationId), Number(req.params.attendeeId));
+      const principal = principalOf(req);
+      requireReservationWrite(principal);
+      await attendeeService.remove(Number(req.params.reservationId), Number(req.params.attendeeId), principal);
       sendSuccess(res, null, 200, '참석자를 제거했습니다.');
     } catch (err) { next(err); }
   },

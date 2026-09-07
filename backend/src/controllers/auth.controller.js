@@ -1,8 +1,10 @@
 import { z } from "zod";
 
-import { db } from "../config/db.js";
+import { db, transaction } from "../config/db.js";
 import { env } from "../config/env.js";
-import { currentUser } from "../middleware/auth.js";
+import { pgQuery } from "../config/pg.js";
+import { currentUser, resolvePrincipal } from "../middleware/auth.js";
+import { enabledSet } from "../middleware/modules.js";
 import { insert, newId, nowIso, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
 import { hashPassword, newToken, tokenFingerprint, verifyPassword } from "../utils/crypto.js";
@@ -43,14 +45,18 @@ function revokeAllSessions(userId) {
     .run(nowIso(), userId);
 }
 
-export function signup(req, res) {
-  const payload = signupSchema.parse(req.body);
-  const email = payload.email.trim().toLowerCase();
-
-  if (db().prepare("SELECT id FROM app_user WHERE email = ?").get(email)) {
-    throw new ApiError("CONFLICT", "email already registered");
+const createSignup = transaction((payload, email, req) => {
+  let invite = null;
+  if (payload.invitation_token) {
+    invite = db().prepare("SELECT * FROM invitation WHERE token = ?").get(payload.invitation_token);
+    if (!invite || invite.status !== "pending") {
+      throw new ApiError("VALIDATION_ERROR", "invitation is invalid or already used");
+    }
+    if (invite.expires_at < nowIso()) throw new ApiError("VALIDATION_ERROR", "invitation expired");
+    if (invite.email.toLowerCase() !== email) {
+      throw new ApiError("VALIDATION_ERROR", "invitation email mismatch");
+    }
   }
-
   const user = insert("app_user", {
     id: newId(),
     email,
@@ -59,20 +65,7 @@ export function signup(req, res) {
     created_at: nowIso(),
   });
 
-  let joinedOrg = null;
-  if (payload.invitation_token) {
-    const invite = db()
-      .prepare("SELECT * FROM invitation WHERE token = ?")
-      .get(payload.invitation_token);
-    if (!invite || invite.status !== "pending") {
-      throw new ApiError("VALIDATION_ERROR", "invitation is invalid or already used");
-    }
-    if (invite.expires_at < nowIso()) {
-      throw new ApiError("VALIDATION_ERROR", "invitation expired");
-    }
-    if (invite.email.toLowerCase() !== email) {
-      throw new ApiError("VALIDATION_ERROR", "invitation email mismatch");
-    }
+  if (invite) {
     insert("membership", {
       tenant_id: invite.tenant_id,
       user_id: user.id,
@@ -83,7 +76,6 @@ export function signup(req, res) {
       created_by: user.id,
     });
     update("invitation", invite.id, { status: "accepted" });
-    joinedOrg = invite.org_id;
     audit.record({
       tenantId: invite.tenant_id,
       action: "member.invitation.accepted",
@@ -94,9 +86,22 @@ export function signup(req, res) {
     });
   }
 
+  return { user, joinedOrg: invite?.org_id ?? null, token: issueSession(user, req) };
+});
+
+export function signup(req, res) {
+  const payload = signupSchema.parse(req.body);
+  const email = payload.email.trim().toLowerCase();
+
+  if (db().prepare("SELECT id FROM app_user WHERE email = ?").get(email)) {
+    throw new ApiError("CONFLICT", "email already registered");
+  }
+
+  const { user, joinedOrg, token } = createSignup(payload, email, req);
+
   res.status(201).json({
     user: { id: user.id, email: user.email, name: user.name },
-    access_token: issueSession(user, req),
+    access_token: token,
     org_id: joinedOrg,
   });
 }
@@ -133,15 +138,29 @@ export function login(req, res) {
   });
 }
 
-export function logout(req, res) {
+export async function logout(req, res) {
   currentUser(req);
-  db().prepare("UPDATE session_token SET revoked_at = ? WHERE id = ?").run(nowIso(), req.sessionId);
+  if (req.authSource === "perp_db") {
+    await pgQuery(
+      "UPDATE auth.sessions SET is_active = false, logout_at = now() WHERE id = $1 AND is_active = true",
+      [req.sessionId],
+    );
+  } else {
+    db().prepare("UPDATE session_token SET revoked_at = ? WHERE id = ?").run(nowIso(), req.sessionId);
+  }
   res.json({ revoked: true });
 }
 
-export function revokeAll(req, res) {
+export async function revokeAll(req, res) {
   const user = currentUser(req);
-  revokeAllSessions(user.id);
+  if (req.authSource === "perp_db") {
+    await pgQuery(
+      "UPDATE auth.sessions SET is_active = false, logout_at = now() WHERE user_id = $1 AND is_active = true",
+      [req.externalIdentity.subject],
+    );
+  } else {
+    revokeAllSessions(user.id);
+  }
   res.json({ revoked_all: true });
 }
 
@@ -197,7 +216,7 @@ function invitationView(invite) {
   };
 }
 
-// 확인 전용: 토큰이 살아있는지, 어떤 조직인지, 내 이메일과 맞는지만 알려준다.
+// 확인 전용: 비밀 토큰이 살아있는지와 대상 조직을 알려준다.
 function inspectInvitation(token, email) {
   const invite = db().prepare("SELECT * FROM invitation WHERE token = ?").get(token);
   if (!invite) return { valid: false, reason: "not_found", message: "초대를 찾을 수 없습니다. 링크를 다시 확인하세요." };
@@ -220,34 +239,17 @@ function inspectInvitation(token, email) {
 
 export function listMyInvitations(req, res) {
   const user = currentUser(req);
-  const rows = db()
-    .prepare(
-      `SELECT * FROM invitation
-       WHERE lower(email) = ? AND status = 'pending' AND expires_at >= ?
-       ORDER BY created_at DESC`,
-    )
-    .all(user.email.toLowerCase(), nowIso());
-  res.json({ email: user.email, items: rows.map(invitationView) });
+  // 계정 이메일은 아직 검증되지 않았으므로 이메일 주소만으로 초대를 공개하지 않는다.
+  res.json({ email: user.email, items: [] });
 }
 
 export function verifyInvitation(req, res) {
   const payload = invitationTokenSchema.parse(req.body);
-  const user = currentUser(req);
-  res.json(inspectInvitation(extractInvitationToken(payload.token), user.email));
+  currentUser(req);
+  res.json(inspectInvitation(extractInvitationToken(payload.token)));
 }
 
-export function acceptInvitation(req, res) {
-  const payload = acceptInvitationSchema.parse(req.body);
-  const user = currentUser(req);
-
-  // 내 메일함에 뜬 초대는 id로, 직접 붙여넣은 링크는 토큰으로 받는다.
-  const invite = payload.invitation_id
-    ? db().prepare("SELECT * FROM invitation WHERE id = ?").get(payload.invitation_id)
-    : db()
-        .prepare("SELECT * FROM invitation WHERE token = ?")
-        .get(extractInvitationToken(payload.token ?? ""));
-  if (!invite) throw new ApiError("NOT_FOUND", "초대를 찾을 수 없습니다");
-
+const joinByInvitation = transaction((invite, user, requestId) => {
   const check = inspectInvitation(invite.token, user.email);
   if (!check.valid) throw new ApiError("VALIDATION_ERROR", check.message, { reason: check.reason });
 
@@ -266,15 +268,27 @@ export function acceptInvitation(req, res) {
     created_by: user.id,
   });
   update("invitation", invite.id, { status: "accepted" });
-
   audit.record({
     tenantId: invite.tenant_id,
     action: "member.invitation.accepted",
     resourceType: "membership",
     resourceId: user.id,
     actorId: user.id,
-    requestId: req.requestId,
+    requestId,
   });
+});
+
+export function acceptInvitation(req, res) {
+  const payload = acceptInvitationSchema.parse(req.body);
+  const user = currentUser(req);
+
+  if (payload.invitation_id) throw new ApiError("VALIDATION_ERROR", "초대 토큰이 필요합니다");
+  const invite = db()
+    .prepare("SELECT * FROM invitation WHERE token = ?")
+    .get(extractInvitationToken(payload.token ?? ""));
+  if (!invite) throw new ApiError("NOT_FOUND", "초대를 찾을 수 없습니다");
+
+  joinByInvitation(invite, user, req.requestId);
 
   res.status(201).json({ joined: true, ...invitationView({ ...invite, status: "accepted" }) });
 }
@@ -282,7 +296,13 @@ export function acceptInvitation(req, res) {
 export function me(req, res) {
   const user = currentUser(req);
   const memberships = db()
-    .prepare("SELECT * FROM membership WHERE user_id = ? AND status = 'active' AND deleted_at IS NULL")
+    .prepare(
+      `SELECT m.* FROM membership m
+       JOIN organization o ON o.id = m.org_id AND o.tenant_id = m.tenant_id
+       JOIN tenant t ON t.id = o.tenant_id
+       WHERE m.user_id = ? AND m.status = 'active' AND m.deleted_at IS NULL
+         AND o.deleted_at IS NULL AND t.status = 'active'`,
+    )
     .all(user.id);
 
   res.json({
@@ -302,5 +322,21 @@ export function me(req, res) {
         department_id: m.department_id,
       };
     }),
+  });
+}
+
+export function principal(req, res) {
+  if (!req.get("x-org-id")) {
+    throw new ApiError("VALIDATION_ERROR", "X-Org-Id 헤더가 필요합니다");
+  }
+  const resolved = resolvePrincipal(req);
+  res.json({
+    userId: resolved.userId,
+    tenantId: resolved.tenantId,
+    orgId: resolved.orgId,
+    membershipId: resolved.membershipId,
+    roles: resolved.roles,
+    permissions: [...resolved.permissions].sort(),
+    modules: [...enabledSet(req.organization.modules)].sort(),
   });
 }

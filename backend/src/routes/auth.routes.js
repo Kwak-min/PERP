@@ -11,6 +11,7 @@ authRouter.post("/logout", asyncRoute(controller.logout));
 authRouter.post("/sessions/revoke-all", asyncRoute(controller.revokeAll));
 authRouter.post("/password", asyncRoute(controller.changePassword));
 authRouter.get("/me", asyncRoute(controller.me));
+authRouter.get("/principal", asyncRoute(controller.principal));
 authRouter.get("/invitations", asyncRoute(controller.listMyInvitations));
 authRouter.post("/invitations/verify", asyncRoute(controller.verifyInvitation));
 authRouter.post("/invitations/accept", asyncRoute(controller.acceptInvitation));

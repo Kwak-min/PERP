@@ -7,7 +7,7 @@ export const addAttendeeSchema = z.object({
 });
 
 export const respondSchema = z.object({
-  accept: z.coerce.boolean(),
+  accept: z.enum(['true', 'false']).transform(value => value === 'true'),
 });
 
 export type AddAttendeeDto = z.infer<typeof addAttendeeSchema>;

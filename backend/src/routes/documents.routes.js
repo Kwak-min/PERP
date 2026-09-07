@@ -8,6 +8,8 @@ export const documentsRouter = Router();
 documentsRouter.post("/spaces", asyncRoute(controller.createSpace));
 documentsRouter.get("/spaces", asyncRoute(controller.listSpaces));
 documentsRouter.get("/search/query", asyncRoute(controller.searchDocuments));
+// 주의: "/graph" 는 "/:documentId" 보다 먼저 등록해야 한다.
+documentsRouter.get("/graph", asyncRoute(controller.graph));
 documentsRouter.post("/meetings", asyncRoute(controller.createMeeting));
 documentsRouter.get("/meetings/:meetingId", asyncRoute(controller.getMeeting));
 documentsRouter.post("/meetings/:meetingId/decisions", asyncRoute(controller.addDecision));

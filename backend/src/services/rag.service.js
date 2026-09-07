@@ -26,17 +26,43 @@ export function allowedSensitivity(principal) {
   return SENSITIVITY_RANK.internal;
 }
 
+export function canReadDocument(principal, document) {
+  const rank = Object.hasOwn(SENSITIVITY_RANK, document.sensitivity)
+    ? SENSITIVITY_RANK[document.sensitivity]
+    : undefined;
+  return (
+    document.tenant_id === principal.tenantId &&
+    document.org_id === principal.orgId &&
+    !document.deleted_at &&
+    !document.archived &&
+    rank !== undefined &&
+    rank <= allowedSensitivity(principal) &&
+    (document.visibility !== "private" || document.owner_id === principal.userId)
+  );
+}
+
+export function effectiveDataClass(requested, citations, memories) {
+  const classes = [
+    requested,
+    ...citations.map((item) => item.sensitivity),
+    ...memories.map((item) => item.sensitivity),
+  ];
+  return classes.reduce((highest, value) => {
+    const known = Object.hasOwn(SENSITIVITY_RANK, value);
+    const rank = known ? SENSITIVITY_RANK[value] : SENSITIVITY_RANK.confidential;
+    return rank > SENSITIVITY_RANK[highest] ? (known ? value : "confidential") : highest;
+  }, "public");
+}
+
 export function searchChunks(principal, query, limit = 5) {
   if (!principal.has("document.read")) return [];
-  const ceiling = allowedSensitivity(principal);
   const terms = query.replace(/,/g, " ").split(/\s+/).filter((t) => t.length >= 2);
 
   const chunks = listScoped("document_chunk", principal, [], { limit: 5000 });
   const scored = [];
   for (const chunk of chunks) {
-    if ((SENSITIVITY_RANK[chunk.sensitivity] ?? 1) > ceiling) continue;
     const document = db().prepare("SELECT * FROM document WHERE id = ?").get(chunk.document_id);
-    if (!document || document.deleted_at || document.archived) continue;
+    if (!document || !canReadDocument(principal, document)) continue;
     const haystack = chunk.content.toLowerCase();
     const score = terms.filter((t) => haystack.includes(t.toLowerCase())).length;
     if (score > 0) scored.push([score, chunk, document]);
@@ -52,6 +78,7 @@ export function searchChunks(principal, query, limit = 5) {
     date: document.updated_at ?? null,
     link: `/documents/${document.id}`,
     score,
+    sensitivity: document.sensitivity,
   }));
 }
 
@@ -84,6 +111,7 @@ export function searchVaultNotes(principal, query, limit = 5) {
     date: note.updated_at ?? null,
     link: `/vault/${note.id}`,
     score,
+    sensitivity: note.sensitivity,
   }));
 }
 

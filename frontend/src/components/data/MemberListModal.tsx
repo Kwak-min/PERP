@@ -45,7 +45,7 @@ export function MemberListModal({ session, fallback, onClose }: Props) {
   const searchRef = useRef<HTMLInputElement>(null);
   const dialogRef = useModalFocus<HTMLDivElement>(onClose);
   const [query, setQuery] = useState("");
-  const [members, setMembers] = useState<readonly Member[]>(fallbackMembers(fallback));
+  const [members, setMembers] = useState<readonly Member[]>(session ? [] : fallbackMembers(fallback));
   const [loading, setLoading] = useState(Boolean(session));
   const [error, setError] = useState<string | null>(null);
 
@@ -61,7 +61,7 @@ export function MemberListModal({ session, fallback, onClose }: Props) {
   useEffect(() => {
     if (!session) return;
     const controller = new AbortController();
-    apiRequest("/members?limit=500", { session, signal: controller.signal })
+    apiRequest(session.orgId?.startsWith("pg:") ? "/pg/members?limit=500" : "/members?limit=500", { session, signal: controller.signal })
       .then((payload) => {
         if (!controller.signal.aborted) setMembers(membersSchema.parse(payload).items);
       })
@@ -147,7 +147,7 @@ export function MemberListModal({ session, fallback, onClose }: Props) {
                     <strong>{member.title ?? member.department_id ?? "소속 미지정"}</strong>
                     <span>{member.roles.join(" · ") || "역할 미지정"}</span>
                   </span>
-                  <Badge tone={member.status === "active" ? "success" : "neutral"}>{member.status}</Badge>
+                  <Badge tone={member.status === "active" ? "success" : "neutral"}>{member.status === "active" ? "활성" : member.status === "inactive" ? "휴면" : member.status === "left" ? "탈퇴" : member.status}</Badge>
                 </button>
               </li>
             ))}

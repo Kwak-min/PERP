@@ -7,6 +7,8 @@ import { SectionCard } from "../components/ui/SectionCard";
 import type { ScreenDefinition } from "../routes/catalog";
 import { apiRequest, userMessageOf } from "../services/api";
 import { useSession } from "../store/session";
+import { isPgWorkspace } from "../services/workspace";
+import { ScreenPage } from "../pages/ScreenPage";
 
 const moduleSchema = z.object({
   key: z.string(),
@@ -19,6 +21,11 @@ type Module = z.infer<typeof moduleSchema>;
 
 // 조직 설정 > 모듈: 회사별 활성 모듈 토글. perp_db(org.company_modules) 저장.
 export function OrgModulesScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) {
+  const session = useSession();
+  return isPgWorkspace(session?.orgId) ? <PgOrgModulesScreen screen={screen} /> : <ScreenPage screen={screen} />;
+}
+
+function PgOrgModulesScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const session = useSession();
   const apiSession = useMemo(
     () => (session ? { token: session.token, orgId: session.orgId } : null),
