@@ -22,7 +22,7 @@ export const TABLES = [
     terminology_profile TEXT NOT NULL DEFAULT 'club',
     terminology_json TEXT NOT NULL DEFAULT '',
     currency TEXT NOT NULL DEFAULT 'KRW', timezone TEXT NOT NULL DEFAULT 'Asia/Seoul',
-    modules TEXT NOT NULL DEFAULT '')`,
+    modules TEXT NOT NULL DEFAULT '', enabled_features TEXT)`,
 
   `CREATE TABLE IF NOT EXISTS app_user (
     id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL,

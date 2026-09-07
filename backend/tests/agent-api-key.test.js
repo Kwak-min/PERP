@@ -30,7 +30,7 @@ describe("personal OpenRouter credentials through authenticated HTTP and wire ad
     const base = `http://127.0.0.1:${wire.address().port}`;
     process.env.OPENROUTER_BASE_URL = `${base}/external`;
     process.env.OLLAMA_BASE_URL = `${base}/local`;
-    process.env.OPENROUTER_API_KEY = "synthetic-server-key";
+    process.env.OPENROUTER_API_KEY = "";
     process.env.ORBITFLOW_AI_KEY_ENCRYPTION_KEY = randomBytes(32).toString("base64");
     server = await startTestServer();
     ({ env: config } = await import("../src/config/env.js"));
@@ -81,14 +81,14 @@ describe("personal OpenRouter credentials through authenticated HTTP and wire ad
   it("saves encrypted credentials and returns only owner metadata", async () => {
     const result = await save(owner);
     assert.equal(result.status, 200);
-    assert.deepEqual(result.body, { provider: "openrouter", configured: true, model: config.externalModel });
+    assert.deepEqual(result.body, { provider: "openrouter", configured: true, credential_mode: "personal", model: config.externalModel });
     const row = conn.prepare("SELECT * FROM ai_user_key WHERE user_id = ? AND deleted_at IS NULL").get(owner.userId);
     assert.ok(row.ciphertext && row.nonce && row.auth_tag);
     assert.ok(!JSON.stringify(row).includes(key));
     const audit = conn.prepare("SELECT * FROM audit_event WHERE actor_id = ?").all(owner.userId);
     assert.ok(!JSON.stringify(audit).includes(key));
-    assert.deepEqual((await request(member)).body, { provider: "openrouter", configured: false, model: config.externalModel });
-    assert.deepEqual((await request(other)).body, { provider: "openrouter", configured: false, model: config.externalModel });
+    assert.deepEqual((await request(member)).body, { provider: "openrouter", configured: false, credential_mode: "personal", model: config.externalModel });
+    assert.deepEqual((await request(other)).body, { provider: "openrouter", configured: false, credential_mode: "personal", model: config.externalModel });
   });
 
   it("rejects invalid key payloads without echoing submitted credentials", async () => {
@@ -128,7 +128,7 @@ describe("personal OpenRouter credentials through authenticated HTTP and wire ad
     assert.ok(sent.every((call) => call.body.messages.length === 2));
     assert.equal((await request(other, "/agent/api-key/test", { method: "POST" })).status, 409);
     const providers = await import("../src/services/ai-provider.service.js");
-    assert.equal(providers.REGISTRY.openrouter.apiKey, "synthetic-server-key");
+    assert.equal(providers.REGISTRY.openrouter.apiKey, "");
   });
 
   it("replaces the credential used by chat even when the server default is echo", async () => {
@@ -213,7 +213,7 @@ describe("personal OpenRouter credentials through authenticated HTTP and wire ad
     await save(owner);
     await save(member, memberKey);
     const result = await request(owner, "/agent/api-key", { method: "DELETE" });
-    assert.deepEqual(result.body, { provider: "openrouter", configured: false, model: config.externalModel });
+    assert.deepEqual(result.body, { provider: "openrouter", configured: false, credential_mode: "personal", model: config.externalModel });
     const rows = conn.prepare("SELECT ciphertext, nonce, auth_tag, deleted_at FROM ai_user_key WHERE user_id = ?").all(owner.userId);
     assert.ok(rows.every((row) => row.deleted_at && row.ciphertext === "" && row.nonce === "" && row.auth_tag === ""));
     assert.equal((await request(member)).body.configured, true);

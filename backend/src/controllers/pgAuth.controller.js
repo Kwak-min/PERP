@@ -3,6 +3,7 @@ import { z } from "zod";
 import { pgQuery, pgTransaction } from "../config/pg.js";
 import { currentUser } from "../middleware/auth.js";
 import { pgWorkspaces } from "../middleware/pgAccess.js";
+import { pgEnabledFeatures } from "../middleware/features.js";
 import { hashPassword, verifyPassword } from "../utils/crypto.js";
 import { ApiError } from "../utils/errors.js";
 
@@ -132,7 +133,11 @@ export async function signup(req, res) {
 
 // PG 회사만 반환한다. SQLite 소속과 숫자 ID/이메일로 합치지 않는다.
 export async function workspace(req, res) {
-  res.json({ organizations: await pgWorkspaces(req) });
+  const organizations = await pgWorkspaces(req);
+  res.json({ organizations: await Promise.all(organizations.map(async organization => ({
+    ...organization,
+    enabled_features: await pgEnabledFeatures(organization.org_id.slice(3), organization.modules),
+  }))) });
 }
 
 // POST /api/v1/pg/auth/login

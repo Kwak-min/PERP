@@ -14,6 +14,9 @@ import { KnowledgeGraphScreen } from "./KnowledgeGraphScreen";
 import { HomeBuilderScreen } from "./HomeBuilderScreen";
 import { OrgModulesScreen } from "./OrgModulesScreen";
 import { ReservationScreen } from "./ReservationScreen";
+import { RoleSettingsScreen } from './RoleSettingsScreen';
+import { SettingsScreen } from './SettingsScreen';
+import { ProjectTaskScreen } from './ProjectTaskScreen';
 
 export type ScreenComponent = ComponentType<Readonly<{ screen: ScreenDefinition }>>;
 
@@ -22,7 +25,13 @@ export type ScreenComponent = ComponentType<Readonly<{ screen: ScreenDefinition 
  */
 export const screenOverrides: Readonly<Record<string, ScreenComponent>> = {
   "ORG-001": OrgModulesScreen,
+  'ORG-002': OrgChartScreen,
   "ORG-003": OrgChartScreen,
+  'ORG-004': RoleSettingsScreen,
+  'PRJ-001': ProjectTaskScreen,
+  'PRJ-002': ProjectTaskScreen,
+  'TSK-001': ProjectTaskScreen,
+  'TSK-003': ProjectTaskScreen,
   "ORG-005": BranchSettingsScreen,
   "ORG-006": OrgLogScreen,
   "HR-002": AttendanceScreen,
@@ -33,6 +42,8 @@ export const screenOverrides: Readonly<Record<string, ScreenComponent>> = {
   "DOC-004": KnowledgeGraphScreen,
   "DASH-002": HomeBuilderScreen,
   "SET-002": ApiKeySettingsScreen,
+  'SET-003': SettingsScreen,
+  'ADM-001': SettingsScreen,
   // ── 예약 시스템 (통합 화면) ──────────────────────────────────
   "RSV-001": ReservationScreen,
 };

@@ -2,6 +2,7 @@ import { Router } from "express";
 
 import * as controller from "../controllers/auth.controller.js";
 import { asyncRoute } from "../middleware/error.js";
+import { reservationPrincipal } from "../controllers/reservationPrincipal.controller.js";
 
 export const authRouter = Router();
 
@@ -12,6 +13,7 @@ authRouter.post("/sessions/revoke-all", asyncRoute(controller.revokeAll));
 authRouter.post("/password", asyncRoute(controller.changePassword));
 authRouter.get("/me", asyncRoute(controller.me));
 authRouter.get("/principal", asyncRoute(controller.principal));
+authRouter.get("/reservation-principal", asyncRoute(reservationPrincipal));
 authRouter.get("/invitations", asyncRoute(controller.listMyInvitations));
 authRouter.post("/invitations/verify", asyncRoute(controller.verifyInvitation));
 authRouter.post("/invitations/accept", asyncRoute(controller.acceptInvitation));

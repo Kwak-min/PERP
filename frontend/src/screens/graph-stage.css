@@ -15,7 +15,14 @@
 .graph-stage__canvas:focus-visible { outline: 2px solid var(--of-primary); outline-offset: -2px; }
 .graph-note-picker { display: grid; gap: 8px; padding: 16px; border-top: 1px solid var(--of-border); font-size: 13px; }
 .graph-note-picker select { width: 100%; min-width: 0; min-height: 44px; }
+.graph-rag-limit { margin: 0; border-top: 1px solid var(--of-border); background: var(--of-warning-bg, #fffbeb); padding: 10px 16px; color: var(--of-text-muted); font-size: 12px; line-height: 1.6; }
 .graph-editor { min-width: 0; margin: 0; border: 0; padding: 0; }
+.graph-upload { position: relative; display: inline-flex; align-items: center; min-height: 32px; border: 1px solid var(--of-border); border-radius: var(--r-sm); background: var(--of-card); padding: 0 12px; color: var(--of-text); font-size: 12px; font-weight: 700; cursor: pointer; }
+.graph-upload:focus-within { outline: 2px solid var(--of-primary); outline-offset: 2px; }
+.graph-upload:has(input:disabled) { cursor: wait; opacity: 0.6; }
+.graph-upload input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+.graph-upload-project { display: grid; gap: 2px; color: var(--of-text-muted); font-size: 11px; font-weight: 700; }
+.graph-upload-project select { min-width: 150px; min-height: 32px; border: 1px solid var(--of-border); border-radius: var(--r-sm); background: var(--of-card); color: var(--of-text); }
 
 .graph-stage__empty {
   position: absolute;

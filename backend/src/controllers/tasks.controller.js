@@ -61,6 +61,8 @@ export function create(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("task.write");
   const payload = createSchema.parse(req.body);
+  // 연결 대상도 현재 테넌트/조직 소속이어야 한다.
+  if (payload.project_id) getScoped("project", principal, payload.project_id, "project");
 
   const task = insert("task", {
     tenant_id: principal.tenantId,
@@ -97,7 +99,7 @@ export function list(req, res) {
   if (req.query.project_id) filters.push({ sql: "project_id = ?", params: [req.query.project_id] });
   if (req.query.assignee_id) filters.push({ sql: "assignee_id = ?", params: [req.query.assignee_id] });
   if (req.query.status) filters.push({ sql: "status = ?", params: [req.query.status] });
-  const rows = listScoped("task", principal, filters, { limit: Number(req.query.limit ?? 50) });
+  const rows = listScoped("task", principal, filters, { limit: Number(req.query.limit ?? (req.query.project_id ? -1 : 50)) });
   res.json({ items: rows.map(view), next_cursor: null });
 }
 

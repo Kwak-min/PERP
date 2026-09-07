@@ -13,6 +13,8 @@ import type {
   UpdateReservationInput,
 } from "../screens/reservation/model";
 import { sessionStore } from "../store/session";
+import { z } from "zod";
+import { spaceSchema } from "../screens/reservation/model";
 
 const RESERVATION_API_BASE =
   import.meta.env.VITE_RESERVATION_API_URL ?? "http://localhost:8080";
@@ -76,6 +78,14 @@ export function createSpace(dto: CreateSpaceInput) {
     method: "POST",
     body: JSON.stringify(dto),
   });
+}
+
+export async function createTestSpaces() {
+  const raw = await rsvFetch<unknown>("/api/v1/spaces/test-spaces", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+  return z.object({ spaces: z.array(spaceSchema), createdCount: z.number().int().nonnegative() }).parse(raw);
 }
 
 export function updateSpace(id: number, dto: Partial<CreateSpaceInput>) {

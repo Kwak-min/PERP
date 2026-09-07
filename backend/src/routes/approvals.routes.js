@@ -2,8 +2,11 @@ import { Router } from "express";
 
 import * as controller from "../controllers/approvals.controller.js";
 import { asyncRoute } from "../middleware/error.js";
+import { requireFeature } from "../middleware/features.js";
 
 export const approvalsRouter = Router();
+
+approvalsRouter.use(requireFeature("approvals"));
 
 approvalsRouter.post("/forms", asyncRoute(controller.createForm));
 approvalsRouter.get("/forms", asyncRoute(controller.listForms));

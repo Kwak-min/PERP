@@ -50,6 +50,26 @@ export const spaceService = {
   create: (data: CreateSpaceDto, principal: OrganizationScope) =>
     prisma.space.create({ data: { ...data, ...organizationScope(principal) } }),
 
+  // 명시적 관리자 동작만 생성한다. 같은 회사의 동시 실행은 DB 트랜잭션 잠금으로 직렬화한다.
+  createTestSpaces: (principal: OrganizationScope) => prisma.$transaction(async tx => {
+    const scope = organizationScope(principal);
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${scope.tenantId}), hashtext(${scope.orgId}))`;
+    const names = Array.from({ length: 5 }, (_, index) => `테스트 공간 ${index + 1}`);
+    // 비활성 동명 공간도 보존한다. 삭제한 공간을 복구하거나 중복 생성하지 않는다.
+    const existing = await tx.space.findMany({ where: { ...scope, name: { in: names } }, orderBy: { id: 'asc' } });
+    const spaces = [];
+    let createdCount = 0;
+    for (const name of names) {
+      const found = existing.find(space => space.name === name);
+      if (found) spaces.push(found);
+      else {
+        spaces.push(await tx.space.create({ data: { ...scope, name, location: '테스트용', capacity: 1 } }));
+        createdCount++;
+      }
+    }
+    return { spaces, createdCount };
+  }),
+
   // 수정
   update: async (id: number, data: UpdateSpaceDto, principal: OrganizationScope) => {
     await spaceService.findById(id, principal);

@@ -18,11 +18,13 @@ import { tasksRouter } from "./tasks.routes.js";
 import { tenantsRouter } from "./tenants.routes.js";
 import { vaultRouter } from "./vault.routes.js";
 import { requireModule } from "../middleware/modules.js";
+import { settingsRouter } from './settings.routes.js';
 
 export const API_PREFIX = "/api/v1";
 
 const REGISTRY = [
   { path: "/auth", router: authRouter, module: null },
+  { path: '/settings', router: settingsRouter, module: null },
   { path: "/pg", router: pgRouter, module: null },
   { path: "/tenants", router: tenantsRouter, module: null },
   { path: "/members", router: membersRouter, module: null },
@@ -31,10 +33,10 @@ const REGISTRY = [
   { path: "/calendar", router: calendarRouter, module: "calendar" },
   { path: "/documents", router: documentsRouter, module: "documents" },
   { path: "/handovers", router: handoverRouter, module: "handover" },
-  { path: "/approvals", router: approvalsRouter, module: "approvals" },
+  { path: "/approvals", router: approvalsRouter, module: null },
   { path: "/finance", router: financeRouter, module: "finance" },
   { path: "/assets", router: assetsRouter, module: "assets" },
-  { path: "/hr", router: hrRouter, module: "hr" },
+  { path: "/hr", router: hrRouter, module: null },
   { path: "/agent", router: agentRouter, module: "agent" },
   { path: "/vault", router: vaultRouter, module: "agent" },
   { path: "/automations", router: automationsRouter, module: "automations" },

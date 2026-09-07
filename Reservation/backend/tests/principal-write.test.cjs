@@ -129,7 +129,10 @@ async function request(actor, route, method, body, headers = {}) {
 for (const label of ['owner', 'member']) {
   test(`real ERP ${label} principal can create and update its reservation`, async () => {
     const actor = actors[label];
-    if (label === 'owner') assert.deepEqual(actor.principal.permissions, ['*']);
+    if (label === 'owner') {
+      const { permissionsFor } = await import('../../../backend/src/config/rbac.js');
+      assert.deepEqual(actor.principal.permissions, [...permissionsFor(['owner'])].sort());
+    }
     else {
       assert.ok(actor.principal.permissions.includes('reservation.create'));
       assert.ok(!actor.principal.permissions.includes('*'));

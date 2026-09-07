@@ -48,7 +48,7 @@ try {
     if (path === "/pg/auth/workspace") body = { organizations: session.organizations };
     if (path === "/pg/members") { status = memberStatus; body = { items: memberItems }; }
     if (path === "/pg/members/departments") { status = departmentStatus; body = { items: departmentItems }; }
-    if (path === "/tenants/modules/catalog") body = { items: [{ key: "members", label: "Members", core: true, description: "Core" }] };
+    if (path === "/tenants/modules/catalog") body = { items: [{ key: "members", label: "Members", core: true, description: "Core" }], features: [] };
     if (path === "/tenants" && request.method() === "POST") { status = 201; body = { org_id: "isolated-new-org", name: "Explicit Company", type: "custom" }; }
     if (status !== 200 && status !== 201) body = { error: { code: status === 403 ? "FORBIDDEN" : "SERVICE_UNAVAILABLE", message: "ISOLATED_API_FAILURE", details: {}, request_id: "no-demo" } };
     return route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });

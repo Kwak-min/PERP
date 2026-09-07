@@ -1,10 +1,21 @@
 import { NextFunction, Request, Response } from 'express';
 import { spaceService } from './space.service';
-import { createSpaceSchema, updateSpaceSchema, spaceAvailabilitySchema } from './space.schema';
+import { createSpaceSchema, createTestSpacesSchema, updateSpaceSchema, spaceAvailabilitySchema } from './space.schema';
 import { sendSuccess } from '../../common/response';
 import { principalOf, requireSpaceAdmin } from '../../auth/principal';
 
 export const spaceController = {
+  createTestSpaces: async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const principal = principalOf(req);
+      requireSpaceAdmin(principal);
+      createTestSpacesSchema.parse(req.body);
+      sendSuccess(res, await spaceService.createTestSpaces(principal));
+    } catch (err) {
+      next(err);
+    }
+  },
+
   /**
    * @swagger
    * /api/v1/spaces:

@@ -10,7 +10,7 @@ async function login() {
   const result = await api(server.baseUrl, '/pg/auth/login', { method: 'POST', body: { email: fixture.users[0].email, password: 'password-1234' } });
   assert.equal(result.status, 200); return result.body.token;
 }
-const create = (token, body = { name: 'Native second company', modules: ['members', 'tasks', 'projects', 'approvals', 'finance', 'agent'] }) => api(server.baseUrl, '/pg/companies', { token, method: 'POST', body });
+const create = (token, body = { name: 'Native second company', modules: ['members', 'tasks', 'projects', 'approvals', 'finance', 'agent'], features: ['approvals'] }) => api(server.baseUrl, '/pg/companies', { token, method: 'POST', body });
 
 test('native company creation preserves primary identity and records discoverable scoped creator membership', async () => {
   // Given: 기존 PG 회사의 사용자. When: native 회사 추가. Then: primary 변경 없이 새 소속/권한이 commit된다.
@@ -94,6 +94,58 @@ test('native company accepts only explicit departments and rejects client-owned 
   assert.equal(fixture.state.companies.length, count);
 });
 
+test('native workspace preserves legacy feature availability when no settings row exists', async () => {
+  const token = await login();
+  fixture.state.modules.push(
+    { company_id: '77', module_key: 'hr' },
+    { company_id: '77', module_key: 'approvals' },
+  );
+  try {
+    const workspaces = await api(server.baseUrl, '/pg/auth/workspace', { token });
+    assert.equal(workspaces.status, 200);
+    const legacy = workspaces.body.organizations.find(org => org.org_id === 'pg:77');
+    assert.deepEqual(legacy.enabled_features, ['approvals', 'attendance', 'leave']);
+  } finally {
+    fixture.state.modules.splice(1);
+  }
+});
+
+test('native feature selection persists across login and gates each direct API independently', async () => {
+  const token = await login();
+  const created = await create(token, { name: 'Attendance only company', modules: [], features: ['attendance'] });
+  assert.equal(created.status, 201);
+  assert.deepEqual(created.body.enabled_features, ['attendance']);
+  const companyId = created.body.org_id.slice(3);
+  assert.deepEqual(fixture.state.featureSettings.find(row => row.company_id === companyId)?.enabled_features, ['attendance']);
+
+  const reloggedToken = await login();
+  assert.equal((await api(server.baseUrl, '/pg/hr/attendance', { token: reloggedToken, orgId: created.body.org_id })).status, 200);
+  for (const path of ['/pg/hr/leaves', '/pg/approvals']) {
+    const response = await api(server.baseUrl, path, { token: reloggedToken, orgId: created.body.org_id });
+    assert.equal(response.status, 403, path);
+    assert.equal(response.body.error.code, 'FEATURE_DISABLED', path);
+  }
+
+  const empty = await create(token, { name: 'No feature company', modules: ['hr'], features: [] });
+  assert.equal(empty.status, 201);
+  assert.deepEqual(fixture.state.featureSettings.find(row => row.company_id === empty.body.org_id.slice(3))?.enabled_features, []);
+  assert.ok(!fixture.state.modules.some(row => row.company_id === empty.body.org_id.slice(3) && row.module_key === 'approvals'));
+  for (const path of ['/pg/hr/attendance', '/pg/hr/leaves', '/pg/approvals']) {
+    const response = await api(server.baseUrl, path, { token, orgId: empty.body.org_id });
+    assert.equal(response.status, 403, path);
+    assert.equal(response.body.error.code, 'FEATURE_DISABLED', path);
+  }
+  assert.equal((await api(server.baseUrl, '/pg/hr/postings', { token, orgId: empty.body.org_id })).status, 200);
+});
+
+test('native company rejects unknown feature keys before transaction writes', async () => {
+  const token = await login(), count = fixture.state.companies.length;
+  const response = await create(token, { name: 'Unknown feature', features: ['not-a-feature'] });
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'VALIDATION_ERROR');
+  assert.equal(fixture.state.companies.length, count);
+});
+
 test('native company creation preserves authentication guards for invalid and expired sessions', async () => {
   // Given: 미인증/만료 세션. When: native 생성 요청. Then: 회사 쓰기 전에 거절한다.
   const count = fixture.state.companies.length;
@@ -105,8 +157,16 @@ test('native company creation preserves authentication guards for invalid and ex
 });
 
 test('native creation errors rollback rather than fallback to SQLite and missing migration is explicit', async () => {
-  // Given: membership 쓰기 실패/누락된 v5. When: native 생성. Then: 전체 rollback 및 명시 오류다.
+  // Given: 기능/소속 migration 누락 또는 membership 쓰기 실패. When: native 생성. Then: 전체 rollback 및 명시 오류다.
   const token = await login(), before = structuredClone(fixture.state.companies);
+  fixture.featureSchemaAvailable = false;
+  try {
+    const result = await create(token);
+    assert.equal(result.status, 503);
+    assert.equal(result.body.error.code, 'SERVICE_UNAVAILABLE');
+    assert.match(result.body.error.message, /perp_additions_v6\.sql/);
+  } finally { fixture.featureSchemaAvailable = true; }
+  assert.deepEqual(fixture.state.companies, before);
   fixture.failMembership = true;
   try { assert.equal((await create(token)).status, 500); } finally { fixture.failMembership = false; }
   assert.deepEqual(fixture.state.companies, before);

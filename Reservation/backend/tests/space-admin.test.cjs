@@ -55,7 +55,7 @@ after(async () => {
 });
 
 for (const [role, orgId, status] of [
-  ['org_admin', 'org-a', 201], ['owner', 'org-a', 201],
+  ['org_admin', 'org-a', 403], ['owner', 'org-a', 201], ['company_admin', 'org-a', 201],
   ['admin', 'org-a', 403], ['ADMIN', 'org-a', 403],
   ['OWNER', 'org-a', 403], ['ORG_ADMIN', 'org-a', 403],
   ['super_admin', 'org-a', 403], ['other_org_admin', 'org-a', 403],
