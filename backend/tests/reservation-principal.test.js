@@ -9,6 +9,7 @@ before(async () => {
   const login = await api(server.baseUrl, '/pg/auth/login', { method: 'POST', body: { email: fixture.users[0].email, password: 'password-1234' } });
   assert.equal(login.status, 200); token = login.body.token;
   fixture.state.modules.push({ company_id: '77', module_key: 'assets' });
+  fixture.state.permissions = [{ role_id: '1', code: 'reservation.manage' }];
 });
 after(async () => { await fixture.close(); await server.close(); });
 const principal = (orgId, bearer = token) => api(server.baseUrl, '/auth/reservation-principal', { token: bearer, orgId });
@@ -16,7 +17,7 @@ const principal = (orgId, bearer = token) => api(server.baseUrl, '/auth/reservat
 test('reservation principal preserves verified PG company roles and isolates identity without changing legacy auth', async () => {
   const response = await principal('pg:77');
   assert.equal(response.status, 200);
-  assert.deepEqual(response.body, { userId: 'pg:101', tenantId: 'pg:77', orgId: 'pg:77', membershipId: 'pg:77:101', roles: ['member'], permissions: ['task.read'], modules: response.body.modules });
+  assert.deepEqual(response.body, { userId: 'pg:101', tenantId: 'pg:77', orgId: 'pg:77', membershipId: 'pg:77:101', roles: ['member'], permissions: ['reservation.manage'], modules: response.body.modules });
   assert.ok(response.body.modules.includes('assets'));
   assert.equal((await api(server.baseUrl, '/auth/principal', { token, orgId: 'pg:77' })).status, 403);
   assert.deepEqual((await api(server.baseUrl, '/auth/me', { token })).body.organizations, []);
@@ -25,6 +26,21 @@ test('reservation principal preserves verified PG company roles and isolates ide
   fixture.state.roles[0].name = 'org_admin';
   assert.deepEqual((await principal('pg:77')).body.roles, ['org_admin']);
   fixture.state.roles[0].name = 'member';
+});
+
+test('reservation principal uses effective PG menus, not raw action permissions or role names', async () => {
+  const permissions = fixture.state.permissions;
+  try {
+    // 기존 회사 생성자의 메뉴는 원시 권한에 없어도 호환 규칙으로 계산된다.
+    fixture.state.roles[0].name = 'company_creator';
+    assert.equal((await principal('pg:77')).status, 200);
+    fixture.state.permissions = [...permissions, { role_id: '1', code: 'menu.configured' }];
+    assert.equal((await principal('pg:77')).status, 403);
+    fixture.state.permissions.push({ role_id: '1', code: 'menu.reservations' });
+    assert.equal((await principal('pg:77')).status, 200);
+    fixture.state.permissions = [{ role_id: '1', code: 'task.read' }];
+    assert.equal((await principal('pg:77')).status, 403);
+  } finally { fixture.state.permissions = permissions; fixture.state.roles[0].name = 'member'; }
 });
 
 test('reservation principal rejects foreign, suspended and inactive native companies and unauthenticated access', async () => {
