@@ -28,6 +28,7 @@ export async function installPgKeyFixture() {
       return { rows: (grants.get(scopeKey(values[0], values[1])) ?? []).map(code => ({ role: "configured", code })) };
     }
     if (sql.includes("FROM org.company_modules")) return { rows: (modules.get(values[0]) ?? []).map(module_key => ({ module_key })) };
+    if (sql === "SELECT enabled_features FROM org.company_feature_settings WHERE company_id = $1") return { rows: [] };
     if (sql.includes("SELECT name FROM org.companies")) return { rows: companies.has(values[0]) ? [{ name: companies.get(values[0]) }] : [] };
     if (sql.includes("FROM org.departments") || sql.includes("SELECT name FROM org.positions")) return { rows: [] };
     throw new Error(`Unexpected PG key fixture SQL: ${sql}`);
