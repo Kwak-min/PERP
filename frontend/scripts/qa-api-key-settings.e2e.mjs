@@ -10,6 +10,8 @@ import { api, createOwnerOrg, startTestServer } from "../../backend/tests/http.j
 import { installPgKeyFixture } from "../../backend/tests/pg-api-key-fixture.js";
 
 const pgMode = process.argv.includes("--pg");
+const sharedMode = process.argv.includes("--shared");
+const sharedSecret = "synthetic-browser-central-key";
 const calls = [];
 const keyRoutes = [];
 const serverErrors = [];
@@ -34,13 +36,18 @@ try {
   backend = await startTestServer();
   if (pgMode) pgFixture = await installPgKeyFixture();
   const owner = pgMode ? pgFixture.actor("101") : await createOwnerOrg(backend.baseUrl, ["agent"]);
-  const other = pgMode ? pgFixture.actor("102") : await createOwnerOrg(backend.baseUrl, ["agent"]);
+  const other = pgMode ? pgFixture.actor("102", sharedMode ? "88" : "77") : await createOwnerOrg(backend.baseUrl, ["agent"]);
   if (!pgMode) {
     const options = { ...owner, method: "POST" };
     await api(backend.baseUrl, "/vault/notes", { ...options, body: { title: "privacy fixture", content: "vault-context-must-not-be-sent" } });
     await api(backend.baseUrl, "/agent/memory", { ...options, body: { content: "memory-context-must-not-be-sent" } });
   }
   const { env } = await import("../../backend/src/config/env.js");
+  if (sharedMode) {
+    assert.equal((await api(backend.baseUrl, pgMode ? "/pg/agent/api-key" : "/agent/api-key", { ...owner, method: "PUT", body: { api_key: secret } })).status, 200);
+    env.openrouterApiKey = sharedSecret;
+    env.aiKeyEncryptionKey = "";
+  }
   staticServer = createServer(async (req, res) => {
     try {
       if (req.url.startsWith("/api/v1/")) {
@@ -84,6 +91,47 @@ try {
     page.waitForURL((url) => url.pathname === "/settings/ai-key", { timeout: 5000 }),
     page.getByRole("navigation", { name: "주 메뉴", exact: true }).getByRole("link", { name: "AI API 키", exact: true }).click(),
   ]);
+  if (sharedMode) {
+    const verifyShared = async (target) => {
+      await expect(target.getByTestId("api-key-status")).toHaveAttribute("data-credential-mode", "shared");
+      await expect(target.getByTestId("api-key-status")).toHaveAttribute("data-configured", "true");
+      await expect(target.locator("#openrouter-api-key")).toHaveCount(0);
+      await expect(target.locator(".api-key-settings form")).toHaveCount(0);
+      const [response] = await Promise.all([
+        target.waitForResponse(response => response.url().endsWith("/agent/api-key/test") && response.request().method() === "POST", { timeout: 15000 }),
+        target.getByTestId("shared-key-settings").getByRole("button").click(),
+      ]);
+      assert.equal(response.status(), 200);
+      assert.ok(!(await response.text()).includes(sharedSecret));
+      assert.equal(calls.at(-1).authorization, `Bearer ${sharedSecret}`);
+      const visible = await target.evaluate(() => JSON.stringify({ html: document.body.innerHTML, local: { ...localStorage }, session: { ...sessionStorage } }));
+      assert.ok(!visible.includes(sharedSecret) && !visible.includes(secret));
+    };
+    await verifyShared(page);
+    await page.reload();
+    await verifyShared(page);
+    for (const width of [375, 768, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      await verifyShared(page);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+      await page.screenshot({ path: fileURLToPath(new URL(`shared-${width}.png`, evidence)), fullPage: true });
+    }
+    const isolated = await browser.newContext();
+    const otherPage = await isolated.newPage();
+    otherPage.on("pageerror", error => pageErrors.push(error.message));
+    await otherPage.addInitScript(actor => sessionStorage.setItem("orbitflow.session.v1", JSON.stringify({
+      token: actor.token, orgId: actor.orgId, name: "Other", email: "other@example.com", mustChangePassword: false,
+      organizations: [{ org_id: actor.orgId, org_name: "Other Org", org_type: actor.orgId.startsWith("pg:") ? "perp_db" : "custom", roles: ["configured"] }],
+    })), other);
+    await otherPage.goto(`${appUrl}/settings/ai-key`);
+    await verifyShared(otherPage);
+    await otherPage.reload();
+    await verifyShared(otherPage);
+    await isolated.close();
+    assert.ok(calls.every(call => call.authorization === `Bearer ${sharedSecret}`));
+    assert.ok(!JSON.stringify(calls).includes("vault-context-must-not-be-sent"));
+    assert.ok(!JSON.stringify(calls).includes("memory-context-must-not-be-sent"));
+  } else {
   const status = page.getByTestId("api-key-status");
   await expect(status).toHaveAttribute("data-configured", "false", { timeout: 5000 });
   const input = page.getByLabel("OpenRouter API 키", { exact: true });
@@ -149,10 +197,11 @@ try {
   assert.equal((await action("DELETE", page.getByRole("button", { name: "삭제 확인", exact: true }))).status(), 200);
   await expect(status).toHaveAttribute("data-configured", "false");
   await expect(page.getByRole("button", { name: "연결 테스트", exact: true })).toBeDisabled();
+  }
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(serverErrors, []);
   assert.ok(keyRoutes.length > 0 && keyRoutes.every(path => path.startsWith(pgMode ? "/api/v1/pg/agent/api-key" : "/api/v1/agent/api-key")));
-  console.log(`${pgMode ? "PG_" : ""}API_KEY_CHROME_PASS save replace reload synthetic-use isolation config-error delete 375/768/1280`);
+  console.log(`${pgMode ? "PG_" : ""}API_KEY_CHROME_PASS ${sharedMode ? "shared two-companies reload no-personal-input synthetic-use no-secret-exposure" : "save replace reload synthetic-use isolation config-error delete"} 375/768/1280`);
   await context.close();
 } finally {
   if (browser) await browser.close();
