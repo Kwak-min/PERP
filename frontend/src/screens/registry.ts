@@ -24,6 +24,7 @@ export type ScreenComponent = ComponentType<Readonly<{ screen: ScreenDefinition 
  */
 export const screenOverrides: Readonly<Record<string, ScreenComponent>> = {
   "ORG-001": OrgModulesScreen,
+  'ORG-002': OrgChartScreen,
   "ORG-003": OrgChartScreen,
   'ORG-004': RoleSettingsScreen,
   "ORG-005": BranchSettingsScreen,
