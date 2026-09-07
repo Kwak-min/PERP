@@ -209,7 +209,23 @@ const MIGRATIONS = [
       addColumn(conn, "organization", "enabled_features TEXT");
     },
   },
-
+  {
+    version: 8,
+    up(conn) {
+      conn.exec(`
+        CREATE TABLE IF NOT EXISTS company_role (
+          id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, org_id TEXT NOT NULL,
+          name TEXT NOT NULL, scope TEXT NOT NULL DEFAULT 'self',
+          permissions_json TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL, created_by TEXT,
+          updated_at TEXT NOT NULL, updated_by TEXT,
+          version INTEGER NOT NULL DEFAULT 1, deleted_at TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_company_role_name
+          ON company_role(tenant_id, org_id, name) WHERE deleted_at IS NULL;
+      `);
+    },
+  },
 ];
 
 export function applyMigrations(conn) {

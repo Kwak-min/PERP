@@ -1,6 +1,7 @@
 import { pgQuery } from "../config/pg.js";
 import { CORE_MODULES } from "../config/modules.js";
 import { ApiError } from "../utils/errors.js";
+import { effectivePgPermissions, menuForApi } from '../config/menu-permissions.js';
 
 // PG 신원/회사는 운영 SQLite membership과 별개의 권한 경계다.
 export function pgIdentity(req) {
@@ -40,7 +41,8 @@ async function workspaceOf(userId, membership) {
   ]);
   return { org_id: `pg:${companyId}`, org_name: membership.name, org_type: "perp_db",
     roles: [...new Set(grants.rows.map(row => row.role))],
-    permissions: [...new Set(grants.rows.map(row => row.code).filter(code => code !== "*" && !code.startsWith("platform.")))],
+    permissions: [...new Set(grants.rows.map(row => row.code).filter(code => code && code !== '*' && code !== 'menu.configured' && !code.startsWith('platform.')))],
+    menu_permissions: effectivePgPermissions(grants.rows).filter(code => code.startsWith('menu.')),
     modules: [...new Set([...CORE_MODULES, ...modules.rows.map(row => row.module_key)])] };
 }
 
@@ -65,10 +67,12 @@ export async function resolvePgCompanyPrincipal(req) {
     source: "perp_db", userId, companyId, orgId: workspace.org_id,
     membership: { userId, companyId, departmentId: membership.department_id == null ? null : String(membership.department_id),
       positionId: membership.position_id == null ? null : String(membership.position_id) },
-    roles: workspace.roles, permissions: workspace.permissions, modules: workspace.modules,
-    has(code) { return workspace.permissions.includes(code); },
+    roles: workspace.roles, permissions: workspace.permissions, menus: workspace.menu_permissions, modules: workspace.modules, scope: 'all',
+    has(code) { return this.permissions.includes(code) || this.menus.includes(code); },
     require(code) { if (!this.has(code)) throw new ApiError("PERMISSION_DENIED", "이 PG 작업의 명시적 권한이 없습니다"); },
   };
+  const menu = menuForApi(req);
+  if (menu) req.pgCompanyPrincipal.require(menu);
   return req.pgCompanyPrincipal;
 }
 

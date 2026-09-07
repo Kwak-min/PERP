@@ -38,6 +38,8 @@ export type ScreenDefinition = Readonly<{
   section: ScreenSection;
   endpoint: string | null;
   module: string | null;
+  permission?: string;
+  feature?: 'attendance' | 'leave' | 'approvals';
   nav?: boolean;
   ai?: boolean;
   create?: CreateConfig;
@@ -54,15 +56,15 @@ export const publicRoutes = [
   "/onboarding/organization",
 ] as const;
 
-export const screens: readonly ScreenDefinition[] = [
-  { id: "DASH-001", path: "/", label: "나의 홈", description: "오늘의 업무와 조직 흐름을 한눈에 확인합니다.", section: "home", endpoint: "/pg/usage", module: null, nav: true },
+const screenCatalog: readonly ScreenDefinition[] = [
+  { id: "DASH-001", path: "/", label: "홈", description: "오늘의 업무와 조직 흐름을 한눈에 확인합니다.", section: "home", endpoint: "/pg/usage", module: null, nav: true },
   { id: "DASH-002", path: "/dashboard/org", label: "조직 대시보드", description: "조직의 핵심 운영 지표와 주의 항목을 봅니다.", section: "home", endpoint: "/pg/usage", module: "analytics" },
   { id: "ORG-002", path: "/members", label: "구성원", description: "구성원, 초대, 역할과 상태를 관리합니다.", section: "people", endpoint: "/pg/members", module: null, nav: true, create: { endpoint: "/pg/members", fields: [{ name: "email", label: "이메일", type: "text", required: true }, { name: "name", label: "이름", type: "text", required: true }, { name: "department_id", label: "부서", type: "select", optionsEndpoint: "/pg/departments/options" }, { name: "position_id", label: "직급", type: "select", optionsEndpoint: "/pg/positions/options" }, { name: "password", label: "초기 비밀번호(8자+)", type: "text", required: true }] } },
   { id: "ORG-003", path: "/org-chart", label: "조직도", description: "부서 구조와 책임자를 계층으로 확인합니다.", section: "people", endpoint: "/members/org-chart", module: null, nav: true },
   { id: "ORG-006", path: "/org-log", label: "조직 변경 로그", description: "조직도, 구성원과 브랜치에 일어난 변경을 시간순으로 확인합니다.", section: "people", endpoint: "/members/activity", module: null, nav: true },
   { id: "ORG-001", path: "/settings/organization", label: "조직 설정", description: "조직 정보, 용어와 활성 모듈을 설정합니다.", section: "admin", endpoint: "/tenants/current", module: null },
   { id: "ORG-005", path: "/settings/branches", label: "브랜치 설정", description: "부서 브랜치와 들어갈 수 있는 그룹을 설정합니다.", section: "admin", endpoint: "/pg/members/departments", module: null },
-  { id: "ORG-004", path: "/settings/roles", label: "역할과 권한", description: "역할별 권한 범위와 접근 결과를 점검합니다.", section: "admin", endpoint: "/pg/members", module: null },
+  { id: "ORG-004", path: "/settings/roles", label: "역할과 권한", description: "역할별 권한 범위와 접근 결과를 점검합니다.", section: "admin", endpoint: "/settings/roles", module: null },
   { id: "PRJ-001", path: "/projects", label: "프로젝트", description: "목표, 일정과 책임자를 중심으로 프로젝트를 운영합니다.", section: "work", endpoint: "/pg/projects", module: "projects", nav: true, create: { endpoint: "/pg/projects", fields: [{ name: "name", label: "이름", type: "text", required: true }, { name: "starts_on", label: "시작", type: "date" }, { name: "ends_on", label: "종료", type: "date" }, { name: "description", label: "설명", type: "textarea" }] } , deleteResource: "projects" , editResource: "projects" },
   { id: "PRJ-002", path: "/projects/:projectId", label: "프로젝트 상세", description: "프로젝트 진행률과 참여자, 최근 활동을 확인합니다.", section: "work", endpoint: null, module: "projects" },
   { id: "TSK-002", path: "/projects/:projectId/board", label: "프로젝트 보드", description: "업무 단계를 칸반 보드로 관리합니다.", section: "work", endpoint: "/tasks/board", module: "tasks" },
@@ -104,15 +106,32 @@ export const screens: readonly ScreenDefinition[] = [
   { id: "ANL-001", path: "/analytics", label: "분석", description: "KPI와 운영 보고서를 한 화면에서 비교합니다.", section: "operations", endpoint: "/analytics/dashboard", module: "analytics", nav: true },
   { id: "NOT-001", path: "/notifications", label: "알림", description: "업무, 승인과 운영 알림을 한곳에서 확인합니다.", section: "home", endpoint: "/pg/notifications", module: null },
   { id: "SET-001", path: "/settings/approval-forms", label: "결재 양식", description: "결재 입력 항목과 승인 경로를 설정합니다.", section: "admin", endpoint: "/approvals/forms", module: "approvals" },
-  { id: "SET-002", path: "/settings/ai-key", label: "AI API 키", description: "개인 OpenRouter 키를 암호화 저장하고 연결을 확인합니다.", section: "admin", endpoint: "/pg/agent/api-key", module: "agent", nav: true },
-  { id: "ADM-001", path: "/admin", label: "관리자 콘솔", description: "조직 운영, 보안과 시스템 상태를 관리합니다.", section: "admin", endpoint: "/pg/usage", module: null, nav: true },
+  { id: "SET-002", path: "/settings/ai-key", label: "AI API 키", description: "개인 OpenRouter 키를 암호화 저장하고 연결을 확인합니다.", section: "admin", endpoint: "/pg/agent/api-key", module: null },
+  { id: 'SET-003', path: '/settings', label: '설정', description: 'API, 역할, 조직 기능을 설정합니다.', section: 'admin', endpoint: null, module: null, nav: true },
+  { id: "ADM-001", path: "/admin", label: "설정", description: "조직 운영 설정으로 이동합니다.", section: "admin", endpoint: null, module: null },
   { id: "ADM-002", path: "/admin/audit", label: "감사로그", description: "변경 이력과 append-only 해시체인을 검증합니다.", section: "admin", endpoint: "/integrations/audit", module: "integrations" },
   { id: "ADM-003", path: "/admin/ai-policy", label: "AI 정책", description: "모델, 데이터 등급과 도구 실행 정책을 설정합니다.", section: "admin", endpoint: "/agent/profile", module: "agent" },
   { id: "ADM-004", path: "/admin/data", label: "데이터 관리", description: "가져오기, 내보내기와 보존 정책을 관리합니다.", section: "admin", endpoint: "/imports", module: null },
   { id: "ADM-005", path: "/admin/billing", label: "요금과 사용량", description: "플랜, AI 사용량과 비용을 확인합니다.", section: "admin", endpoint: "/agent/usage", module: "agent" },
   // ── 예약 시스템 (업무 섹션 통합 페이지) ──────────────────────────────────
-  { id: "RSV-001", path: "/reserve", label: "예약", description: "공간 검색 및 예약, 내 예약 현황, 대기열 및 관리를 한곳에서 처리합니다.", section: "work", endpoint: null, module: "reservations", nav: true },
+  { id: "RSV-001", path: "/reserve", label: "예약", description: "공간 검색 및 예약, 내 예약 현황, 대기열 및 관리를 한곳에서 처리합니다.", section: "work", endpoint: null, module: "assets", nav: true },
 ] as const;
+
+const menuById: Readonly<Record<string, string>> = {
+  'DASH-001': 'home', 'DASH-002': 'analytics', 'ORG-001': 'organization', 'ORG-004': 'roles', 'ORG-005': 'organization',
+  'HR-001': 'members', 'HR-002': 'attendance', 'HR-003': 'leave', 'HR-004': 'recruitment',
+  'DOC-004': 'knowledge', 'VLT-001': 'vault', 'VLT-002': 'vault_graph',
+  'SET-001': 'approvals', 'SET-002': 'api_keys', 'SET-003': 'settings',
+  'ADM-001': 'settings', 'ADM-002': 'organization', 'ADM-003': 'organization', 'ADM-004': 'imports', 'ADM-005': 'organization',
+};
+const menuByPrefix: Readonly<Record<string, string>> = { ORG: 'members', PRJ: 'projects', TSK: 'projects', CAL: 'calendar',
+  FIN: 'finance', AST: 'assets', DOC: 'documents', APR: 'approvals', HND: 'handover', AGT: 'agent', AUT: 'automations',
+  INT: 'integrations', ANL: 'analytics', NOT: 'notifications', RSV: 'reservations' };
+export const screens: readonly ScreenDefinition[] = screenCatalog.map(screen => ({ ...screen,
+  permission: `menu.${menuById[screen.id] ?? menuByPrefix[screen.id.split('-')[0]!] ?? 'settings'}`,
+  ...(screen.id === 'HR-002' ? { feature: 'attendance' as const } : screen.id === 'HR-003' ? { feature: 'leave' as const }
+    : screen.id === 'APR-001' || screen.id === 'SET-001' ? { feature: 'approvals' as const } : {}),
+}));
 
 export const allRoutePaths = [...publicRoutes, ...screens.map((screen) => screen.path)];
 
@@ -126,5 +145,5 @@ export const sectionLabels: Readonly<Record<ScreenSection, string>> = {
   knowledge: "지식",
   personal: "개인",
   ai: "AI",
-  admin: "관리",
+  admin: "설정",
 };

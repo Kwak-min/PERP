@@ -86,10 +86,10 @@ try {
     token: actor.token, orgId: actor.orgId, name: "Fixture", email: "fixture@example.com", mustChangePassword: false,
     organizations: [{ org_id: actor.orgId, org_name: actor.orgId.startsWith("pg:") ? "PG 회사 77" : "Test Org", org_type: actor.orgId.startsWith("pg:") ? "perp_db" : "custom", roles: ["configured"] }],
   })), owner);
-  await page.goto(pgMode ? `${appUrl}/settings/ai-key` : appUrl);
+  await page.goto(pgMode ? `${appUrl}/settings/ai-key` : `${appUrl}/settings`);
   if (!pgMode) await Promise.all([
     page.waitForURL((url) => url.pathname === "/settings/ai-key", { timeout: 5000 }),
-    page.getByRole("navigation", { name: "주 메뉴", exact: true }).getByRole("link", { name: "AI API 키", exact: true }).click(),
+    page.locator('.settings-links a[href="/settings/ai-key"]').click(),
   ]);
   if (sharedMode) {
     const verifyShared = async (target) => {

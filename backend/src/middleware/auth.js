@@ -1,5 +1,6 @@
 import { db } from "../config/db.js";
-import { permissionsFor, widestScope } from "../config/rbac.js";
+import { legacyRoleGrants } from '../services/company-roles.service.js';
+import { menuForApi } from '../config/menu-permissions.js';
 import { ApiError } from "../utils/errors.js";
 import { tokenFingerprint } from "../utils/crypto.js";
 
@@ -70,7 +71,7 @@ export function resolvePrincipal(req) {
   if (!org) throw new ApiError("NOT_FOUND", "organization not found");
 
   const roles = (membership.roles ?? "").split(",").filter(Boolean);
-  const permissions = permissionsFor(roles);
+  const { permissions, scope } = legacyRoleGrants({ tenantId: org.tenant_id, orgId: org.id }, roles);
 
   req.organization = org;
   req.principal = {
@@ -82,7 +83,7 @@ export function resolvePrincipal(req) {
     roles,
     permissions,
     departmentIds: membership.department_id ? [membership.department_id] : [],
-    scope: widestScope(roles),
+    scope,
     has(permission) {
       return permissions.has("*") || permissions.has(permission);
     },
@@ -92,6 +93,8 @@ export function resolvePrincipal(req) {
       }
     },
   };
+  const menu = menuForApi(req);
+  if (menu) req.principal.require(menu);
   return req.principal;
 }
 

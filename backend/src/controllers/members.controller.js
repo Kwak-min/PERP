@@ -1,14 +1,9 @@
 import { z } from "zod";
 
 import { db } from "../config/db.js";
-import {
-  MASKED_FIELDS,
-  ROLE_TEMPLATES,
-  SCOPE_ORDER,
-  permissionsFor,
-  widestScope,
-} from "../config/rbac.js";
+import { MASKED_FIELDS } from "../config/rbac.js";
 import { resolvePrincipal } from "../middleware/auth.js";
+import { assignLegacyRoles, assertLegacyLastAdmin, assertDelegation, legacyRoleDefinitions, legacyRoleGrants, resolveRoleKeys } from '../services/company-roles.service.js';
 import { bumpVersion, getScoped, hardDelete, insert, listScoped, newId, nowIso, softDelete, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
 import { notify } from "../services/notification.service.js";
@@ -82,30 +77,13 @@ const fieldDecisionSchema = z.object({
   comment: z.string().default(""),
 });
 
-function assertKnownRoles(roles) {
-  for (const role of roles) {
-    if (!Object.hasOwn(ROLE_TEMPLATES, role)) {
-      throw new ApiError("VALIDATION_ERROR", `unknown role: ${role}`);
-    }
-  }
+function assertKnownRoles(roles, principal) {
+  resolveRoleKeys(legacyRoleDefinitions(principal), roles);
 }
 
 function assertCanDelegateRoles(principal, roles) {
-  principal.require("role.assign");
-  assertKnownRoles(roles);
-
-  const actorPermissions = permissionsFor(principal.roles);
-  const actorScope = SCOPE_ORDER.indexOf(principal.scope);
-  for (const role of roles) {
-    const template = ROLE_TEMPLATES[role];
-    const delegatesPlatformAccess = template.permissions.some((permission) => permission.startsWith("platform."));
-    const exceedsPermissions = template.permissions.some(
-      (permission) => !actorPermissions.has("*") && !actorPermissions.has(permission),
-    );
-    if (delegatesPlatformAccess || exceedsPermissions || SCOPE_ORDER.indexOf(template.scope) > actorScope) {
-      throw new ApiError("PERMISSION_DENIED", `role delegation denied: ${role}`);
-    }
-  }
+  principal.require('role.assign');
+  assertDelegation(principal, resolveRoleKeys(legacyRoleDefinitions(principal), roles));
 }
 
 function maskRecord(principal, data, ownerId) {
@@ -338,8 +316,8 @@ export function simulatePermissions(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("role.assign");
   const payload = simulationSchema.parse(req.body);
-  assertKnownRoles(payload.roles);
-  const effective = permissionsFor(payload.roles);
+  assertKnownRoles(payload.roles, principal);
+  const { permissions: effective, scope } = legacyRoleGrants(principal, payload.roles);
   const requested =
     payload.permissions.length > 0
       ? [...new Set(payload.permissions)]
@@ -350,7 +328,7 @@ export function simulatePermissions(req, res) {
   const denied = requested.filter((permission) => !granted.includes(permission));
   res.json({
     roles: payload.roles,
-    scope: widestScope(payload.roles),
+    scope,
     granted,
     denied,
     matrix: requested.map((permission) => ({
@@ -540,32 +518,7 @@ export function resetPassword(req, res) {
 export function setRoles(req, res) {
   const principal = resolvePrincipal(req);
   const payload = rolesSchema.parse(req.body);
-  assertCanDelegateRoles(principal, payload.roles);
-
-  const membership = db()
-    .prepare("SELECT * FROM membership WHERE id = ? AND tenant_id = ? AND org_id = ?")
-    .get(req.params.membershipId, principal.tenantId, principal.orgId);
-  if (!membership) throw notFound("membership");
-
-  const before = (membership.roles ?? "").split(",").filter(Boolean);
-  assertCanDelegateRoles(principal, before);
-  const updated = bumpVersion("membership", membership, { roles: payload.roles.join(",") }, principal.userId);
-
-  audit.record({
-    tenantId: principal.tenantId,
-    action: "member.roles.changed",
-    resourceType: "membership",
-    resourceId: membership.id,
-    actorId: principal.userId,
-    before: { roles: before },
-    after: { roles: payload.roles },
-    requestId: req.requestId,
-  });
-
-  res.json({
-    membership_id: updated.id,
-    roles: (updated.roles ?? "").split(",").filter(Boolean),
-  });
+  res.json(assignLegacyRoles(principal, req.params.membershipId, payload.roles, req.requestId));
 }
 
 export function setStatus(req, res) {
@@ -578,6 +531,9 @@ export function setStatus(req, res) {
     .get(req.params.membershipId, principal.tenantId, principal.orgId);
   if (!membership) throw notFound("membership");
 
+  const currentRoles = (membership.roles ?? '').split(',').filter(Boolean);
+  assertDelegation(principal, resolveRoleKeys(legacyRoleDefinitions(principal), currentRoles));
+  assertLegacyLastAdmin(principal, membership.id, currentRoles, payload.status === 'active');
   const before = membership.status;
   const patch = { status: payload.status };
   if (payload.status === "left") {
@@ -640,9 +596,7 @@ export function listRoles(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("member.read");
   res.json({
-    items: Object.entries(ROLE_TEMPLATES)
-      .filter(([key]) => key !== "platform_admin")
-      .map(([key, value]) => ({ key, label: value.label, scope: value.scope })),
+    items: legacyRoleDefinitions(principal).map(({ key, label, scope }) => ({ key, label, scope })),
   });
 }
 
@@ -650,7 +604,7 @@ export function createDepartment(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("department.write");
   const payload = departmentSchema.parse(req.body);
-  assertKnownRoles(payload.access_roles ?? []);
+  assertKnownRoles(payload.access_roles ?? [], principal);
   const department = insert("department", {
     tenant_id: principal.tenantId,
     org_id: principal.orgId,
@@ -686,7 +640,7 @@ export function setDepartmentAccess(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("department.write");
   const payload = accessSchema.parse(req.body);
-  assertKnownRoles(payload.access_roles);
+  assertKnownRoles(payload.access_roles, principal);
   const department = db()
     .prepare("SELECT * FROM department WHERE id = ? AND tenant_id = ? AND org_id = ?")
     .get(req.params.departmentId, principal.tenantId, principal.orgId);

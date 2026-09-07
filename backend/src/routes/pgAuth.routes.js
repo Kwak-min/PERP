@@ -8,6 +8,7 @@ import { pgRoute, pgRecordRoute } from "../middleware/pgAccess.js";
 import { asyncRoute } from "../middleware/error.js";
 import { withPgFeature } from "../middleware/features.js";
 import { pgAgentKeyRouter } from "./pg-agent-key.routes.js";
+import { decidePgApproval } from '../controllers/pgApprovalDecision.controller.js';
 
 // perp_db (PostgreSQL) 슬라이스 라우터. strangler-fig: 기존 SQLite 라우트와 분리.
 // 마운트 지점: /api/v1/pg
@@ -57,6 +58,7 @@ pgRouter.get("/tasks", asyncRoute(pgRoute(mod.tasks, "task.read", "tasks")));
 pgRouter.post("/tasks", asyncRoute(pgRoute(mod.createTask, "task.write", "tasks")));
 pgRouter.get("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.approvals), "approval.decide", null)));
 pgRouter.post("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.createApproval), "approval.request", null)));
+pgRouter.post('/approvals/:id/decide', asyncRoute(pgRoute(withPgFeature('approvals', decidePgApproval), 'approval.decide', null)));
 pgRouter.get("/documents", asyncRoute(pgRoute(mod.documents, "document.read", "documents")));
 pgRouter.post("/documents", asyncRoute(pgRoute(mod.createDocument, "document.write", "documents")));
 pgRouter.get("/calendar", asyncRoute(pgRoute(mod.calendar, "event.read", "calendar")));
