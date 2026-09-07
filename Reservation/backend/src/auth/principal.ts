@@ -28,8 +28,8 @@ export function organizationScope(principal: OrganizationScope): OrganizationSco
 }
 
 export function requireSpaceAdmin(principal: Principal): void {
-  if (!principal.roles.some(role => role === 'owner' || role === 'org_admin')) {
-    throw new ForbiddenError('공간 관리는 조직 관리자만 이용할 수 있습니다.');
+  if (!principal.permissions.includes('*') && !principal.permissions.includes('reservation.manage')) {
+    throw new ForbiddenError('공간을 관리할 권한이 없습니다.');
   }
 }
 
@@ -44,7 +44,7 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
   const orgId = req.get('x-org-id');
   if (!authorization?.startsWith('Bearer ') || !orgId) return next(new AppError(401, '검증된 ERP 세션이 필요합니다.'));
   try {
-    const response = await axios.get(`${process.env.ERP_API_URL ?? 'http://localhost:8000/api/v1'}/auth/principal`, {
+    const response = await axios.get(`${process.env.ERP_API_URL ?? 'http://localhost:8000/api/v1'}/auth/reservation-principal`, {
       headers: { Authorization: authorization, 'X-Org-Id': orgId }, timeout: 3000, validateStatus: () => true,
     });
     if (response.status === 401) return next(new AppError(401, '검증된 ERP 세션이 필요합니다.'));

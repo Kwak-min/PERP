@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { SectionCard } from "../components/ui/SectionCard";
 import type { ScreenDefinition } from "../routes/catalog";
 import { useSession } from "../store/session";
+import { useAccess } from "../hooks/useWorkspaceAccess";
 import {
   addWaitlist,
   cancelReservation,
   cancelWaitlist,
   createReservation,
   createSpace,
+  createTestSpaces,
   deleteSpace,
   getMyReservations,
   getMyWaitlist,
@@ -61,12 +64,23 @@ type SpaceAdminModalState =
 
 export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const session = useSession();
-  const userRoles = session?.organizations.find((org) => org.org_id === session.orgId)?.roles ?? [];
+  // 회사 전환 시 이전 회사의 목록/모달/진행 중 응답을 새 화면에 재사용하지 않는다.
+  return <ReservationWorkspace key={`${session?.orgId}:${session?.token}`} screen={screen} />;
+}
+
+function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>) {
+  const session = useSession();
+  const organization = session?.organizations.find((org) => org.org_id === session.orgId);
+  const access = useAccess();
   const isAdmin = Boolean(
-    userRoles.some((role) => role === "owner" || role === "org_admin")
+    access && access.org_id === session?.orgId && access.modules.includes("assets")
+      && (access.permissions.includes("*") || access.permissions.includes("reservation.manage"))
   );
 
-  const [activeTab, setActiveTab] = useState<MainTab>("spaces");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = searchParams.get("tab");
+  const activeTab: MainTab = tab === "admin" || tab === "my" || tab === "waitlist" ? tab : "spaces";
+  const setActiveTab = (next: MainTab) => setSearchParams({ tab: next });
 
   // ── Tab 1: 공간 검색 & 예약 상태 ──────────────────────────────────────
   const [spaces, setSpaces] = useState<Space[]>([]);
@@ -206,10 +220,10 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
       void loadMyReservations();
     } else if (activeTab === "waitlist") {
       void loadWaitlist();
-    } else if (activeTab === "admin") {
+    } else if (activeTab === "admin" && isAdmin) {
       void loadAdminSpaces();
     }
-  }, [activeTab, selectedSpaceId, loadSpaces, loadMyReservations, loadWaitlist, loadAdminSpaces]);
+  }, [activeTab, selectedSpaceId, loadSpaces, loadMyReservations, loadWaitlist, loadAdminSpaces, isAdmin]);
 
   // 타임테이블 날짜/슬롯단위 변경 시 로드
   useEffect(() => {
@@ -312,6 +326,23 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
     await updateSpace(id, dto);
     setAdminNotice("공간이 수정되었습니다.");
     await loadAdminSpaces();
+  };
+
+  const handleCreateTestSpaces = async () => {
+    if (!confirm(`선택한 회사 "${organization?.org_name}"에 테스트 공간 1~5를 등록하시겠습니까? 같은 이름의 기존 공간은 변경하지 않습니다.`)) return;
+    try {
+      setAdminBusy(true);
+      setAdminError(null);
+      setAdminNotice(null);
+      const result = await createTestSpaces();
+      const inactiveCount = result.spaces.filter(space => !space.isActive).length;
+      setAdminNotice(`${result.createdCount}개 등록, ${5 - result.createdCount}개 기존 공간 유지.${inactiveCount ? ` 비활성 ${inactiveCount}개는 복구하지 않았습니다.` : ""}`);
+      await loadAdminSpaces();
+    } catch (e: unknown) {
+      setAdminError(e instanceof Error ? e.message : "테스트 공간 등록에 실패했습니다.");
+    } finally {
+      setAdminBusy(false);
+    }
   };
 
   const handleDeleteSpace = async (space: Space) => {
@@ -758,16 +789,22 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
           <>
             <div style={{ marginBottom: "1.25rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={{ fontSize: "0.875rem", color: "var(--of-text-muted, #475569)" }}>
-              공간을 등록하고 관리합니다.
+              선택한 회사: {organization?.org_name} · 공간을 등록하고 관리합니다.
             </span>
-            <Button tone="primary" onClick={() => setAdminModal({ type: "create" })}>
-              + 공간 등록
-            </Button>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              <Link className="button button--ghost" to="/settings">설정</Link>
+              <Button tone="neutral" onClick={() => void handleCreateTestSpaces()} disabled={adminBusy || adminLoading}>
+                테스트 공간 1~5 등록
+              </Button>
+              <Button tone="primary" onClick={() => setAdminModal({ type: "create" })} disabled={adminBusy}>
+                + 공간 등록
+              </Button>
+            </div>
           </div>
 
-          {adminError && <div className="rsv-error-banner">{adminError}</div>}
+          {adminError && <div className="rsv-error-banner" role="alert">{adminError}</div>}
           {adminNotice && (
-            <div className="rsv-success-banner" style={{ cursor: "pointer" }} onClick={() => setAdminNotice(null)}>
+            <div className="rsv-success-banner" role="status" style={{ cursor: "pointer" }} onClick={() => setAdminNotice(null)}>
               ✓ {adminNotice}
             </div>
           )}
@@ -845,7 +882,7 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
           <div className="rsv-empty" style={{ padding: "4rem 1rem" }}>
             <div className="rsv-empty-icon">🔒</div>
             <div className="rsv-empty-text" style={{ fontSize: "1rem", fontWeight: 600, marginTop: "0.5rem" }}>
-              공간 등록 및 관리는 관리자(Admin) 계정만 이용할 수 있습니다.
+              공간 등록 및 관리 권한이 필요합니다.
             </div>
             <p style={{ fontSize: "0.85rem", color: "var(--of-text-muted, #475569)", marginTop: "0.25rem" }}>
               일반 사용자 계정은 회의실 검색, 예약, 내 예약 현황 및 대기열 기능을 이용하실 수 있습니다.
@@ -951,7 +988,7 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
       )}
 
       {/* 공간 관리 탭: 공간 등록 모달 */}
-      {adminModal?.type === "create" && (
+      {isAdmin && adminModal?.type === "create" && (
         <SpaceFormModal
           onSubmit={handleCreateSpace}
           onClose={() => setAdminModal(null)}
@@ -959,7 +996,7 @@ export function ReservationScreen({ screen }: Readonly<{ screen: ScreenDefinitio
       )}
 
       {/* 공간 관리 탭: 공간 수정 모달 */}
-      {adminModal?.type === "edit" && (
+      {isAdmin && adminModal?.type === "edit" && (
         <SpaceFormModal
           existing={adminModal.space}
           onSubmit={(dto) => handleUpdateSpace(adminModal.space.id, dto)}

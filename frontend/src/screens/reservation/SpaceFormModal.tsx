@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { CreateSpaceInput } from "./model";
 
 interface SpaceFormModalProps {
@@ -9,6 +9,7 @@ interface SpaceFormModalProps {
 
 export function SpaceFormModal({ existing, onSubmit, onClose }: Readonly<SpaceFormModalProps>) {
   const isEdit = Boolean(existing);
+  const formId = useId();
 
   const [name, setName] = useState(existing?.name ?? "");
   const [location, setLocation] = useState(existing?.location ?? "");
@@ -35,8 +36,8 @@ export function SpaceFormModal({ existing, onSubmit, onClose }: Readonly<SpaceFo
   const handleSubmit = async () => {
     if (!name.trim()) { setError("이름은 필수입니다."); return; }
     if (!location.trim()) { setError("위치는 필수입니다."); return; }
-    const cap = parseInt(capacity, 10);
-    if (isNaN(cap) || cap < 1) { setError("수용인원은 1명 이상이어야 합니다."); return; }
+    const cap = Number(capacity);
+    if (!Number.isInteger(cap) || cap < 1) { setError("수용인원은 1명 이상의 정수여야 합니다."); return; }
 
     try {
       setBusy(true);
@@ -58,39 +59,40 @@ export function SpaceFormModal({ existing, onSubmit, onClose }: Readonly<SpaceFo
 
   return (
     <div className="rsv-modal-backdrop" onClick={onClose}>
-      <div className="rsv-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="rsv-modal" role="dialog" aria-modal="true" aria-labelledby={`${formId}-title`} onClick={(e) => e.stopPropagation()}>
         <div className="rsv-modal-header">
-          <h2 className="rsv-modal-title">{isEdit ? "공간 수정" : "공간 등록"}</h2>
+          <h2 id={`${formId}-title`} className="rsv-modal-title">{isEdit ? "공간 수정" : "공간 등록"}</h2>
           <button className="rsv-modal-close" onClick={onClose} aria-label="닫기">✕</button>
         </div>
 
         {error && <div className="rsv-error-banner">{error}</div>}
 
         <div className="rsv-form-group">
-          <label>공간 이름 *</label>
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="예: 회의실 A" autoFocus />
+          <label htmlFor={`${formId}-name`}>공간 이름 *</label>
+          <input id={`${formId}-name`} type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="예: 회의실 A" autoFocus />
         </div>
 
         <div className="rsv-form-row">
           <div className="rsv-form-group">
-            <label>위치 *</label>
-            <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="예: 본관 3층" />
+            <label htmlFor={`${formId}-location`}>위치 *</label>
+            <input id={`${formId}-location`} type="text" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="예: 본관 3층" />
           </div>
           <div className="rsv-form-group">
-            <label>층</label>
-            <input type="text" value={floor} onChange={(e) => setFloor(e.target.value)} placeholder="예: 3F" />
+            <label htmlFor={`${formId}-floor`}>층</label>
+            <input id={`${formId}-floor`} type="text" value={floor} onChange={(e) => setFloor(e.target.value)} placeholder="예: 3F" />
           </div>
         </div>
 
         <div className="rsv-form-group">
-          <label>수용인원 *</label>
-          <input type="number" min={1} value={capacity} onChange={(e) => setCapacity(e.target.value)} placeholder="10" />
+          <label htmlFor={`${formId}-capacity`}>수용인원 *</label>
+          <input id={`${formId}-capacity`} type="number" min={1} value={capacity} onChange={(e) => setCapacity(e.target.value)} placeholder="10" />
         </div>
 
         <div className="rsv-form-group">
-          <label>편의시설</label>
+          <label htmlFor={`${formId}-amenities`}>편의시설</label>
           <div style={{ display: "flex", gap: "0.5rem" }}>
             <input
+              id={`${formId}-amenities`}
               type="text"
               value={amenityInput}
               onChange={(e) => setAmenityInput(e.target.value)}
