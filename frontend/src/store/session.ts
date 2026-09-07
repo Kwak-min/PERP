@@ -34,8 +34,9 @@ function restore(): SessionState | null {
   }
 }
 
-let current: SessionState | null =
-  typeof window === "undefined" ? null : restore();
+let current: SessionState | null = typeof window === "undefined" ? null : restore();
+let currentPersistent =
+  typeof window !== "undefined" && localStorage.getItem(STORAGE_KEY) !== null;
 
 function emit(): void {
   for (const listener of listeners) listener();
@@ -49,6 +50,7 @@ export const sessionStore = {
   },
   set(next: SessionState, persistent = true): void {
     current = sessionSchema.parse(next);
+    currentPersistent = persistent;
     const value = JSON.stringify(current);
     if (persistent) {
       localStorage.setItem(STORAGE_KEY, value);
@@ -61,10 +63,11 @@ export const sessionStore = {
   },
   patch(next: Partial<SessionState>): void {
     if (!current) return;
-    this.set({ ...current, ...next });
+    this.set({ ...current, ...next }, currentPersistent);
   },
   clear(): void {
     current = null;
+    currentPersistent = false;
     localStorage.removeItem(STORAGE_KEY);
     sessionStorage.removeItem(STORAGE_KEY);
     emit();
@@ -75,6 +78,7 @@ if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     if (event.key !== STORAGE_KEY) return;
     current = restore();
+    currentPersistent = localStorage.getItem(STORAGE_KEY) !== null;
     emit();
   });
 }

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { apiRequest } from "./api";
+import { ApiError, apiRequest } from "./api";
 import type { Organization, SessionState } from "../store/session";
 
 // --- perp_db (PostgreSQL) 인증 슬라이스 연동 ---
@@ -20,6 +20,12 @@ const pgLoginSchema = z.object({
   user: pgUserSchema,
 });
 
+const legacyLoginSchema = z.object({
+  access_token: z.string(),
+  must_change_password: z.boolean().catch(false),
+  user: z.object({ id: z.string(), email: z.string(), name: z.string() }),
+});
+
 // 레거시(SQLite) 소속 조직. 온보딩으로 만든 조직은 여기에 남고,
 // perp_db 세션 브리지 덕분에 같은 토큰으로 조회된다.
 const legacyMeSchema = z.object({
@@ -28,56 +34,26 @@ const legacyMeSchema = z.object({
       z.object({
         org_id: z.string(),
         org_name: z.string(),
-        org_type: z.string().nullable().catch(null),
-        roles: z.array(z.string()).catch([]),
+        org_type: z.string().nullable(),
+        roles: z.array(z.string()),
       }),
-    )
-    .catch([]),
+    ),
 });
 
-/** 이 계정이 실제로 들어갈 수 있는 조직 전부(perp_db 소속 회사 + 레거시 소속). */
+/** 검증된 계정의 운영 조직 소속만 조회한다. 조회 실패는 빈 소속과 구분한다. */
 export async function organizationsOf(token: string): Promise<readonly Organization[]> {
-  try {
-    const parsed = legacyMeSchema.parse(
-      await apiRequest("/auth/me", { session: { token, orgId: null } }),
-    );
-    return parsed.organizations;
-  } catch {
-    // 레거시 소속이 없거나 조회에 실패해도 로그인 자체는 막지 않는다.
-    return [];
-  }
-}
-
-function mergeOrganizations(
-  first: readonly Organization[],
-  second: readonly Organization[],
-): readonly Organization[] {
-  const merged = [...first];
-  for (const org of second) {
-    if (!merged.some((item) => item.org_id === org.org_id)) merged.push(org);
-  }
-  return merged;
+  const parsed = legacyMeSchema.parse(
+    await apiRequest("/auth/me", { session: { token, orgId: null } }),
+  );
+  return parsed.organizations;
 }
 
 async function toSessionState(
   token: string,
   user: z.infer<typeof pgUserSchema>,
 ): Promise<SessionState> {
-  const roles = [
-    ...(user.is_admin ? ["admin"] : []),
-    ...(user.position ? [user.position.name] : []),
-  ];
-  const fromPg: readonly Organization[] = user.company
-    ? [
-        {
-          org_id: user.company.id,
-          org_name: user.company.name,
-          org_type: null,
-          roles,
-        },
-      ]
-    : [];
-  const organizations = mergeOrganizations(fromPg, await organizationsOf(token));
+  // PG 회사/직책/관리자 값은 운영 조직 소속이나 역할이 아니다.
+  const organizations = await organizationsOf(token);
   return {
     token,
     // 한 곳뿐이면 바로 들어가고, 없거나 여러 곳이면 /welcome 에서 고르게 한다.
@@ -90,12 +66,30 @@ async function toSessionState(
 }
 
 export async function login(email: string, password: string): Promise<SessionState> {
-  const payload = pgLoginSchema.parse(
-    await apiRequest("/pg/auth/login", {
-      method: "POST",
-      body: { email, password },
-    }),
-  );
+  let payload: z.infer<typeof pgLoginSchema>;
+  try {
+    payload = pgLoginSchema.parse(
+      await apiRequest("/pg/auth/login", { method: "POST", body: { email, password } }),
+    );
+  } catch (error) {
+    if (!(error instanceof ApiError && error.code === "SERVICE_UNAVAILABLE")) {
+      throw error;
+    }
+    // PG 장애 때도 레거시 계정은 별도 비밀번호 검증을 통과해야 한다.
+    const payload = legacyLoginSchema.parse(
+      await apiRequest("/auth/login", { method: "POST", body: { email, password } }),
+    );
+    return {
+      token: payload.access_token,
+      // 레거시 로그인은 소속이 하나여도 사용자가 선택하도록 한다.
+      orgId: null,
+      name: payload.user.name,
+      email: payload.user.email,
+      mustChangePassword: payload.must_change_password,
+      organizations: [...await organizationsOf(payload.access_token)],
+    };
+  }
+  // 소속 조회 장애는 PG 로그인 장애가 아니며 다른 인증 저장소로 전환하지 않는다.
   return await toSessionState(payload.token, payload.user);
 }
 
@@ -110,5 +104,26 @@ export async function signup(
   const payload = pgLoginSchema.parse(
     await apiRequest("/pg/auth/signup", { method: "POST", body }),
   );
-  return await toSessionState(payload.token, payload.user);
+  let session = await toSessionState(payload.token, payload.user);
+  if (invitationToken) {
+    await apiRequest("/auth/invitations/accept", {
+      method: "POST",
+      session: { token: payload.token, orgId: null },
+      body: { token: invitationToken },
+    });
+    const organizations = await organizationsOf(payload.token);
+    session = {
+      ...session,
+      organizations: [...organizations],
+      orgId: organizations.length === 1 ? organizations[0]!.org_id : null,
+    };
+  }
+  return session;
+}
+
+export async function logout(token: string, orgId: string | null): Promise<void> {
+  await apiRequest("/auth/logout", {
+    method: "POST",
+    session: { token, orgId },
+  });
 }

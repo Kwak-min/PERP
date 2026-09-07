@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { db } from "../config/db.js";
+import { db, transaction } from "../config/db.js";
 import { CORE_MODULES, MODULE_CATALOG, OPTIONAL_MODULES } from "../config/modules.js";
 import { ORG_TEMPLATES } from "../config/org-templates.js";
 import { currentUser, resolvePrincipal } from "../middleware/auth.js";
@@ -95,30 +95,31 @@ export function createOrg(req, res) {
       ? payload.departments
       : template.departments;
 
-  const tenantId = newId();
-  db()
+  const selected = validateSelection(
+    payload.modules === null || payload.modules === undefined ? template.modules : payload.modules,
+  );
+
+  const created = transaction(() => {
+    const tenantId = newId();
+    db()
     .prepare(
       `INSERT INTO tenant (id, name, type, status, plan_id, timezone, currency, created_at)
        VALUES (?, ?, ?, 'active', 'free', ?, ?, ?)`,
     )
     .run(tenantId, payload.name, payload.type, payload.timezone, payload.currency, nowIso());
 
-  const selected = validateSelection(
-    payload.modules === null || payload.modules === undefined ? template.modules : payload.modules,
-  );
-
-  const org = insert("organization", {
-    tenant_id: tenantId,
-    name: payload.name,
-    type: payload.type,
-    terminology_profile: payload.type,
-    terminology_json: isCustom ? JSON.stringify(terminology) : "",
-    currency: payload.currency,
-    timezone: payload.timezone,
-    fiscal_year_start: payload.fiscal_year_start,
-    modules: selected.join(","),
-    created_by: user.id,
-  });
+    const org = insert("organization", {
+      tenant_id: tenantId,
+      name: payload.name,
+      type: payload.type,
+      terminology_profile: payload.type,
+      terminology_json: isCustom ? JSON.stringify(terminology) : "",
+      currency: payload.currency,
+      timezone: payload.timezone,
+      fiscal_year_start: payload.fiscal_year_start,
+      modules: selected.join(","),
+      created_by: user.id,
+    });
 
   insert("membership", {
     tenant_id: tenantId,
@@ -154,11 +155,14 @@ export function createOrg(req, res) {
     requestId: req.requestId,
   });
 
+    return { tenantId, org };
+  })();
+
   res.status(201).json({
-    tenant_id: tenantId,
-    org_id: org.id,
-    name: org.name,
-    type: org.type,
+    tenant_id: created.tenantId,
+    org_id: created.org.id,
+    name: created.org.name,
+    type: created.org.type,
     modules: selected,
     terminology,
   });

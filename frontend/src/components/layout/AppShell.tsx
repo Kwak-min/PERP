@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useAppContext } from "../../context/AppContext";
 import { navigation, sectionLabels } from "../../routes/catalog";
-import { apiRequest } from "../../services/api";
+import { logout as revokeSession } from "../../services/auth";
 import { sessionStore, useSession } from "../../store/session";
 import { demoStore, useDemoMode } from "../../store/demo";
 import { Button } from "../ui/Button";
@@ -31,10 +31,7 @@ export function AppShell() {
 
   async function logout(): Promise<void> {
     try {
-      await apiRequest("/auth/logout", {
-        method: "POST",
-        session: { token: activeSession.token, orgId: activeSession.orgId },
-      });
+      await revokeSession(activeSession.token, activeSession.orgId);
     } finally {
       sessionStore.clear();
       navigate("/login");

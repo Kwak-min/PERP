@@ -2,38 +2,53 @@ import { useEffect, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 
 import { organizationsOf } from "../services/auth";
+import { userMessageOf } from "../services/api";
+import { Button } from "../components/ui/Button";
 import { sessionStore, useSession, type Organization } from "../store/session";
 
 export function WelcomePage() {
   const session = useSession();
   const navigate = useNavigate();
-  const [organizations, setOrganizations] = useState<readonly Organization[]>(
-    session?.organizations ?? [],
-  );
+  const [organizations, setOrganizations] = useState<readonly Organization[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const token = session?.token ?? null;
 
   // 로그인 이후에 만들어졌거나 초대를 수락한 조직도 여기서 다시 확인한다.
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
+    setOrganizations(null);
+    setError(null);
     void organizationsOf(token).then((found) => {
-      if (cancelled || found.length === 0) return;
-      setOrganizations((current) => {
-        const merged = [...current];
-        for (const org of found) {
-          if (!merged.some((item) => item.org_id === org.org_id)) merged.push(org);
-        }
-        return merged;
-      });
+      if (cancelled) return;
+      setOrganizations(found);
+      sessionStore.patch({ organizations: [...found] });
+    }).catch((caught: unknown) => {
+      if (!cancelled) setError(userMessageOf(caught));
     });
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, attempt]);
 
   if (!session) return <Navigate to="/login" replace />;
   if (session.mustChangePassword) return <Navigate to="/change-password" replace />;
   if (session.orgId) return <Navigate to="/" replace />;
+
+  if (error || organizations === null) {
+    return (
+      <section className="auth-card auth-card--wide">
+        <h2>소속 조직 확인</h2>
+        {error ? (
+          <>
+            <p role="alert">{error}</p>
+            <Button onClick={() => setAttempt((value) => value + 1)}>다시 확인</Button>
+          </>
+        ) : <p role="status">소속 조직을 확인하고 있습니다.</p>}
+      </section>
+    );
+  }
 
   function enter(orgId: string): void {
     sessionStore.patch({ orgId });
