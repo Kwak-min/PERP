@@ -7,6 +7,7 @@ import type { ScreenDefinition } from "../routes/catalog";
 import { apiRequest, userMessageOf } from "../services/api";
 import { useSession } from "../store/session";
 import { NoteEditor } from "./vault/NoteEditor";
+import { NoteAnalysisPanel } from "./vault/NoteAnalysisPanel";
 import {
   ALPHA_MIN,
   buildScene,
@@ -25,6 +26,7 @@ import {
   type Camera,
   type GraphNode,
   type Scene,
+  type VaultGraph,
 } from "./vault/graph3d";
 import {
   EMPTY_DRAFT,
@@ -61,6 +63,8 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
   const selectedId = useRef<string | null>(null);
 
   const [stats, setStats] = useState({ nodes: 0, links: 0, orphans: 0, unresolved: 0 });
+  const [graphEdges, setGraphEdges] = useState<VaultGraph["edges"]>([]);
+  const [pendingAnalysis, setPendingAnalysis] = useState(0);
   const [selected, setSelected] = useState<{ id: string; title: string; version: number } | null>(null);
   const [draft, setDraft] = useState<NoteDraft>(EMPTY_DRAFT);
   const [folders, setFolders] = useState<readonly string[]>([]);
@@ -104,13 +108,17 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
       const [a, b] = linkEnds(scene, l);
       const near = selectedRef.current === a || selectedRef.current === b;
       const fog = (depthAlpha(scene, a, camera.distance) + depthAlpha(scene, b, camera.distance)) / 2;
-      ctx.strokeStyle = near ? `rgba(79,70,229,${(0.55 + fog * 0.4).toFixed(3)})` : `rgba(100,116,139,${(fog * 0.32).toFixed(3)})`;
+      const inferred = scene.linkKinds[l] === "ai_similarity";
+      ctx.setLineDash(inferred ? [5, 4] : []);
+      ctx.strokeStyle = inferred ? `rgba(13,148,136,${(0.4 + fog * 0.5).toFixed(3)})` : near ? `rgba(79,70,229,${(0.55 + fog * 0.4).toFixed(3)})` : `rgba(100,116,139,${(fog * 0.32).toFixed(3)})`;
       ctx.lineWidth = near ? 1.8 : 1;
+      const offset = inferred ? 3 : 0;
       ctx.beginPath();
-      ctx.moveTo(projected(scene, a, 0), projected(scene, a, 1));
-      ctx.lineTo(projected(scene, b, 0), projected(scene, b, 1));
+      ctx.moveTo(projected(scene, a, 0) + offset, projected(scene, a, 1) + offset);
+      ctx.lineTo(projected(scene, b, 0) + offset, projected(scene, b, 1) + offset);
       ctx.stroke();
     }
+    ctx.setLineDash([]);
 
     // 노드 — 먼 것부터(화가 알고리즘). 본체 + 좌상단 하이라이트로 구체감을 낸다.
     const palette = paletteRef.current;
@@ -234,8 +242,13 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
     graphRequest.current = controller;
     setGraphLoading(true);
     try {
-      const graph = graphSchema.parse(await apiRequest(`${vaultBase}/graph`, { session: apiSession, signal: controller.signal }));
+      let graph = graphSchema.parse(await apiRequest(`${vaultBase}/graph`, { session: apiSession, signal: controller.signal }));
+      if (graph.analysis?.some(item => item.state === "pending")) {
+        graph = graphSchema.parse(await apiRequest(`${vaultBase}/graph?wait=1`, { session: apiSession, signal: controller.signal }));
+      }
       if (controller.signal.aborted) return;
+      setGraphEdges(graph.edges);
+      setPendingAnalysis(graph.analysis?.filter(item => item.state === "pending").length ?? 0);
       const scene = buildScene(graph);
       const box = canvasRef.current?.getBoundingClientRect();
       if (box) { scene.width = box.width; scene.height = box.height; }
@@ -281,6 +294,8 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
     const canvas = canvasRef.current;
     canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
     setNodeOptions([]);
+    setGraphEdges([]);
+    setPendingAnalysis(0);
     setStats({ nodes: 0, links: 0, orphans: 0, unresolved: 0 });
     void loadGraph();
     return () => {
@@ -366,6 +381,9 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
         setSelected({ id: updated.id, title: updated.title, version: updated.version });
         setNotice(`${updated.title} 노트를 저장했습니다. 링크를 다시 그립니다.`);
       }
+      // 저장은 끝났다. 느린 로컬 추론 때문에 다음 편집까지 잠그지 않는다.
+      mutationRequest.current = null;
+      setSaving(false);
       await loadGraph();
     } catch (caught) {
       if (!controller.signal.aborted) setError(userMessageOf(caught));
@@ -508,10 +526,13 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
           subtitle={`노드 ${stats.nodes} · 연결 ${stats.links} · 고립 ${stats.orphans}${stats.unresolved > 0 ? ` · 끊어진 링크 ${stats.unresolved}` : ""}`}
           foot="드래그/방향키: 회전 · 휠/+/-: 확대 · Home: 맞춤 · 아래 목록: 노트 선택"
         >
+          <p className="graph-note-picker">실선: 직접 위키 링크 · 청록 점선: AI 추론 (확정 관계가 아님)</p>
+          {pendingAnalysis > 0 && <p role="status">AI 분석 대기 {pendingAnalysis}개 · 새로고침으로 상태를 확인하세요.</p>}
           <div className="graph-stage">
             <canvas
               ref={canvasRef}
               className="graph-stage__canvas"
+              data-ai-links={graphEdges.filter(edge => edge.kind === "ai_similarity").length}
               style={{ visibility: graphLoading || (layoutBusy && reducedMotion.current) ? "hidden" : "visible" }}
               role="application"
               aria-label="개인 노트 3D 그래프"
@@ -586,8 +607,8 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
             )}
             {!graphLoading && !error && stats.nodes === 0 && (
               <p className="graph-stage__empty">
-                아직 노트가 없습니다. 개인 노트 화면에서 노트를 만들고 <code>[[다른 노트 제목]]</code> 으로 연결하면
-                여기에 3D 로 나타납니다.
+                아직 노트가 없습니다. 노트를 저장하면 로컬 AI가 비슷한 노트의 연결을 분석합니다.
+                <code>[[다른 노트 제목]]</code> 으로 직접 연결할 수도 있습니다.
               </p>
             )}
           </div>
@@ -615,6 +636,17 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
           {loadingNote && <p role="status">노트를 불러오는 중…</p>}
           {selected ? (
             <fieldset className="graph-editor" data-note-id={selected.id} disabled={busy}>
+            {apiSession && <NoteAnalysisPanel noteId={selected.id} version={selected.version} base={vaultBase} session={apiSession} onSettled={loadGraph} />}
+            <ul aria-label="선택 노트 연결">
+              {graphEdges.filter(edge => edge.source === selected.id || edge.target_id === selected.id).map((edge, index) => {
+                const related = edge.source === selected.id ? edge.target_id : edge.source;
+                const title = nodeOptions.find(node => node.id === related)?.title ?? edge.target_title;
+                return <li key={`${edge.source}:${edge.target_id}:${index}`} data-edge-kind={edge.kind ?? "manual"} data-related-note-id={related ?? ""}>
+                  {edge.kind === "ai_similarity" ? `AI 추론 · ${((edge.score ?? 0) * 100).toFixed(1)}% 코사인 유사도` : "직접 위키 링크"}: {title}
+                  {edge.provenance && <small> · {edge.provenance.model} · v{edge.provenance.source_version}/v{edge.provenance.target_version}</small>}
+                </li>;
+              })}
+            </ul>
             <NoteEditor
               key={selected.id}
               storage={vaultBase === "/pg/vault" ? "pg" : "legacy"}

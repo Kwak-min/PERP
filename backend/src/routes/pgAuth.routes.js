@@ -37,6 +37,8 @@ pgRouter.patch("/members/:membershipId/assignment", asyncRoute(pgRoute(members.a
 pgRouter.get("/vault/graph", asyncRoute(pgRoute(mod.vaultGraph)));
 pgRouter.get("/vault/notes", asyncRoute(pgRoute(mod.vaultNotes)));
 pgRouter.get("/vault/notes/:id", asyncRoute(pgRoute(mod.vaultNote)));
+pgRouter.get("/vault/notes/:id/analysis", asyncRoute(pgRoute(mod.vaultAnalysis)));
+pgRouter.post("/vault/notes/:id/analysis", asyncRoute(pgRoute(mod.vaultAnalysis)));
 pgRouter.post("/vault/notes", asyncRoute(pgRoute(mod.vaultCreateNote)));
 pgRouter.patch("/vault/notes/:id", asyncRoute(pgRoute(mod.vaultUpdateNote)));
 pgRouter.delete("/vault/notes/:id", asyncRoute(pgRoute(mod.vaultDeleteNote)));

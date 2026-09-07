@@ -5,6 +5,7 @@ import { MODULE_CATALOG, OPTIONAL_MODULES } from "../config/modules.js";
 import { hashPassword } from "../utils/crypto.js";
 import { isCompanyMember } from "../services/pg-company.service.js";
 import { ApiError } from "../utils/errors.js";
+import { CANDIDATE_LIMIT, pgVaultScope, vaultSemantic } from "../services/vault-semantic.service.js";
 
 // perp_db(PostgreSQL) 모듈 read 슬라이스.
 // strangler-fig 1단계: 홈/프로젝트/캘린더/재무/HR 화면을 실데이터로 전환.
@@ -506,11 +507,24 @@ const noteInput = z.object({
 }).strict();
 const notePatch = noteInput.partial().extend({ version: z.number().int().nonnegative() }).strict();
 const noteId = z.string().regex(/^\d+$/);
-async function ownedNotes(userId) {
+async function ownedNotes(userId, bounded = false) {
   const { rows } = await pgQuery(
     `SELECT ${noteFields} FROM notes.notes n JOIN notes.vaults v ON v.id = n.vault_id
-     WHERE v.owner_id = $1 ORDER BY n.updated_at DESC, n.id`, [userId]);
+     WHERE v.owner_id = $1 ORDER BY n.updated_at DESC, n.id${bounded ? " LIMIT $2" : ""}`, bounded ? [userId, CANDIDATE_LIMIT + 1] : [userId]);
   return rows.map(toNote);
+}
+function analyzeVault(identity, note) {
+  return vaultSemantic.schedule(pgVaultScope(identity), note, () => ownedNotes(identity.userId, true));
+}
+export async function vaultAnalysis(req, res) {
+  const identity = resolveUser(req);
+  const { rows } = await pgQuery(`SELECT ${noteFields} FROM notes.notes n JOIN notes.vaults v ON v.id = n.vault_id
+    WHERE n.id = $1 AND v.owner_id = $2`, [noteId.parse(req.params.id), identity.userId]);
+  if (!rows[0]) throw new ApiError("NOT_FOUND", "노트를 찾을 수 없습니다");
+  const note = toNote(rows[0]), scope = pgVaultScope(identity);
+  if (req.method === "POST") analyzeVault(identity, note);
+  if (req.query.wait === "1") await vaultSemantic.wait(scope, note.id);
+  res.json(vaultSemantic.status(scope, note));
 }
 
 // 목록과 그래프는 같은 소유자 전체 노트를 읽으며 GET은 저장소를 만들지 않는다.
@@ -522,8 +536,10 @@ export async function vaultNotes(req, res) {
 }
 
 export async function vaultGraph(req, res) {
-  const { userId } = resolveUser(req);
-  const items = await ownedNotes(userId);
+  const identity = resolveUser(req);
+  const scope = pgVaultScope(identity);
+  if (req.query.wait === "1") await vaultSemantic.wait(scope);
+  const items = await ownedNotes(identity.userId);
   const byTitle = new Map();
   for (const note of items) {
     const key = note.title.trim().toLowerCase();
@@ -543,7 +559,10 @@ export async function vaultGraph(req, res) {
       if (target) { connected.add(note.id); connected.add(target); }
     }
   }
-  res.json({ nodes: items.map(({ id, title, folder }) => ({ id, title, folder })), edges,
+  const semantic = vaultSemantic.graph(scope, items);
+  edges.push(...semantic.edges);
+  for (const edge of semantic.edges) { connected.add(edge.source); connected.add(edge.target_id); }
+  res.json({ nodes: items.map(({ id, title, folder }) => ({ id, title, folder })), edges, analysis: semantic.analysis,
     orphans: items.filter(note => !connected.has(note.id)).map(note => note.id) });
 }
 
@@ -557,7 +576,8 @@ export async function vaultNote(req, res) {
     [noteId.parse(req.params.id), userId],
   );
   if (!rows[0]) throw new ApiError("NOT_FOUND", "노트를 찾을 수 없습니다");
-  res.json(toNote(rows[0]));
+  const note = toNote(rows[0]);
+  res.json({ ...note, analysis: vaultSemantic.status(pgVaultScope(resolveUser(req)), note) });
 }
 
 // POST /api/v1/pg/vault/notes
@@ -570,7 +590,8 @@ export async function vaultCreateNote(req, res) {
      VALUES ($1, $2, $3, $4) RETURNING id, title, content_md, folder_path, xmin::text AS version`,
     [vaultId, body.folder, body.title, body.content],
   );
-  res.status(201).json(toNote(rows[0]));
+  const note = toNote(rows[0]);
+  res.status(201).json({ ...note, analysis: analyzeVault(resolveUser(req), note) });
 }
 
 // PATCH /api/v1/pg/vault/notes/:id
@@ -595,7 +616,9 @@ export async function vaultUpdateNote(req, res) {
     if (!owned.rows[0]) throw new ApiError("NOT_FOUND", "노트를 찾을 수 없습니다");
     throw new ApiError("VERSION_CONFLICT", "다른 창에서 노트가 변경되었습니다. 새 내용을 확인하세요");
   }
-  res.json(toNote(result.rows[0]));
+  const note = toNote(result.rows[0]), identity = resolveUser(req);
+  vaultSemantic.invalidate(pgVaultScope(identity), note.id, note.version);
+  res.json({ ...note, analysis: analyzeVault(identity, note) });
 }
 
 // DELETE /api/v1/pg/vault/notes/:id
@@ -607,6 +630,7 @@ export async function vaultDeleteNote(req, res) {
     [req.params.id, userId],
   );
   if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "노트를 찾을 수 없습니다");
+  vaultSemantic.invalidate(pgVaultScope(resolveUser(req)), req.params.id);
   res.json({ ok: true });
 }
 

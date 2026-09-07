@@ -37,7 +37,7 @@ export async function startPgGraphFixture() {
     if(sql.includes("FROM notes.notes n JOIN notes.vaults v")){
       assert.match(sql,/v\.owner_id\s*=\s*\$[12]/);
       if(sql.includes("n.id = $1")){const row=notes.get(String(values[0]));return{rows:row?.owner===values[1]?[{...row}]:[]};}
-      return{rows:[...notes.values()].filter(row=>row.owner===values[0]).map(row=>({...row}))};
+      return{rows:[...notes.values()].filter(row=>row.owner===values[0]).slice(0,sql.includes("LIMIT $2")?values[1]:undefined).map(row=>({...row}))};
     }
     throw new Error(`Unexpected PG graph fixture SQL: ${sql}`);
   };
