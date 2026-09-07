@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 
 import { StateBoundary } from "../components/common/StateBoundary";
+import { CalendarSurface } from "../components/data/CalendarSurface";
 import { isOperationalScreen, OperationalSurface } from "../components/data/OperationalSurface";
 import { CreateFormModal } from "../components/common/CreateFormModal";
 import { Badge } from "../components/ui/Badge";
@@ -353,6 +354,11 @@ function downloadCsv(name: string, table: TableData): void {
 }
 
 export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
+  if (screen.id === "CAL-001" || screen.id === "CAL-002") return <CalendarSurface screen={screen} />;
+  return <GenericScreenPage screen={screen} />;
+}
+
+function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const session = useSession();
   const location = useLocation();
   const params = useParams();

@@ -1,4 +1,8 @@
+import { Link } from "react-router-dom";
+
 export type CalendarEvent = Readonly<{
+  id?: string;
+  href?: string;
   day: number;
   time?: string;
   title: string;
@@ -35,8 +39,19 @@ export function MonthCalendar({
     byDay.set(event.day, [...(byDay.get(event.day) ?? []), event]);
   }
 
+  function renderEvent(event: CalendarEvent, index: number) {
+    const content = <>{event.time && <b>{event.time}</b>}{event.title}</>;
+    const props = {
+      className: `calendar__event calendar__event--${event.tone ?? "primary"}`,
+      title: `${event.time ?? ""} ${event.title}`.trim(),
+      "aria-label": `${event.day}일 ${event.time ?? ""} ${event.title}`.trim(),
+    };
+    return event.href ? <Link key={event.id ?? index} to={event.href} {...props}>{content}</Link>
+      : <span key={event.id ?? index} {...props}>{content}</span>;
+  }
+
   return (
-    <div className="calendar">
+    <div className="calendar" role="region" aria-label={`${year}년 ${month + 1}월 달력`}>
       <div className="calendar__head">
         {WEEKDAYS.map((label) => (
           <span key={label} className={label === "토" || label === "일" ? "calendar__weekend" : ""}>
@@ -52,26 +67,19 @@ export function MonthCalendar({
           return (
             <div
               key={index}
+              data-date={day === null ? undefined : `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`}
+              aria-current={isToday ? "date" : undefined}
               className={`calendar__cell${day === null ? " calendar__cell--muted" : ""}${isToday ? " calendar__cell--today" : ""}`}
             >
               {day !== null && (
                 <>
                   <span className={`calendar__date${isWeekend ? " calendar__weekend" : ""}`}>{day}</span>
                   <div className="calendar__events">
-                    {dayEvents.slice(0, 3).map((event, eventIndex) => (
-                      <span
-                        key={`${event.title}-${event.time ?? ""}-${eventIndex}`}
-                        className={`calendar__event calendar__event--${event.tone ?? "primary"}`}
-                        title={`${event.time ?? ""} ${event.title}`.trim()}
-                        role="listitem"
-                        aria-label={`${day}일 ${event.time ?? ""} ${event.title}`.trim()}
-                      >
-                        {event.time && <b>{event.time}</b>}
-                        {event.title}
-                      </span>
-                    ))}
+                    {dayEvents.slice(0, 3).map(renderEvent)}
                     {dayEvents.length > 3 && (
-                      <span className="calendar__more">{dayEvents.length - 3}건 더</span>
+                      <details className="calendar__overflow"><summary className="calendar__more">{dayEvents.length - 3}건 더</summary>
+                        {dayEvents.slice(3).map(renderEvent)}
+                      </details>
                     )}
                   </div>
                 </>
