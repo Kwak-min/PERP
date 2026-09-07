@@ -34,18 +34,11 @@ export function SignupPage() {
     setBusy(true);
     setError(null);
     try {
-      const companyName = String(form.get("company_name") ?? "").trim();
-      if (!invitation && !companyName) {
-        setError("회사명을 입력해 주세요.");
-        setBusy(false);
-        return;
-      }
       const session = await signup(
         String(form.get("email")),
         name,
         String(form.get("password")),
         invitation ?? undefined,
-        companyName || undefined,
       );
       sessionStore.set(session);
       navigate(session.orgId ? "/" : "/welcome", { replace: true });
@@ -60,13 +53,10 @@ export function SignupPage() {
     <section className="auth-card" aria-labelledby="signup-title">
       <span className="eyebrow">{invitation ? "INVITATION" : "GET STARTED"}</span>
       <h2 id="signup-title">{invitation ? "조직 초대 수락" : "계정 만들기"}</h2>
-      <p className="auth-card__intro">기본 정보를 입력하면 바로 조직을 만들 수 있습니다.</p>
+      <p className="auth-card__intro">계정을 만든 뒤 새 조직을 만들거나 초대 링크로 참여할 수 있습니다.</p>
       {error && <div className="form-error" role="alert">{error}</div>}
       <form className="form-stack" onSubmit={submit}>
         <label>이름<input name="name" required autoComplete="name" /></label>
-        {!invitation && (
-          <label>회사명<input name="company_name" required autoComplete="organization" placeholder="예: 마이컴퍼니" /></label>
-        )}
         <label>이메일<input name="email" type="email" required autoComplete="email" /></label>
         <label>
           비밀번호

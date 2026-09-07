@@ -118,11 +118,9 @@ export async function signup(
   name: string,
   password: string,
   invitationToken?: string,
-  companyName?: string,
 ): Promise<SessionState> {
   const body: Record<string, string> = { email, name, password };
   if (invitationToken) body.invitation_token = invitationToken;
-  if (companyName) body.company_name = companyName;
   const payload = pgLoginSchema.parse(
     await apiRequest("/pg/auth/signup", { method: "POST", body }),
   );
