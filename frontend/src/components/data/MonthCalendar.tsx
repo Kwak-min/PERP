@@ -27,11 +27,15 @@ export function MonthCalendar({
   month,
   events,
   today,
+  selectedDay,
+  onSelectDay,
 }: Readonly<{
   year: number;
   month: number;
   events: readonly CalendarEvent[];
   today?: number;
+  selectedDay?: number;
+  onSelectDay?: (day: number) => void;
 }>) {
   const cells = buildGrid(year, month);
   const byDay = new Map<number, CalendarEvent[]>();
@@ -46,7 +50,7 @@ export function MonthCalendar({
       title: `${event.time ?? ""} ${event.title}`.trim(),
       "aria-label": `${event.day}일 ${event.time ?? ""} ${event.title}`.trim(),
     };
-    return event.href ? <Link key={event.id ?? index} to={event.href} {...props}>{content}</Link>
+    return event.href && !onSelectDay ? <Link key={event.id ?? index} to={event.href} {...props}>{content}</Link>
       : <span key={event.id ?? index} {...props}>{content}</span>;
   }
 
@@ -64,10 +68,23 @@ export function MonthCalendar({
           const dayEvents = day ? (byDay.get(day) ?? []) : [];
           const isWeekend = index % 7 >= 5;
           const isToday = day !== null && day === today;
+          const date = day === null ? undefined : `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+          if (day !== null && onSelectDay) return (
+            <button key={index} type="button" data-date={date} aria-current={isToday ? "date" : undefined}
+              aria-label={`${year}년 ${month + 1}월 ${day}일, 일정 ${dayEvents.length}건`}
+              aria-pressed={day === selectedDay} aria-controls="calendar-selected-day" onClick={() => onSelectDay(day)}
+              className={`calendar__cell calendar__cell--selectable${isToday ? " calendar__cell--today" : ""}${day === selectedDay ? " calendar__cell--selected" : ""}`}>
+              <span className={`calendar__date${isWeekend ? " calendar__weekend" : ""}`}>{day}{day === selectedDay && <span className="calendar__selection-mark" aria-hidden="true">선택</span>}</span>
+              <span className="calendar__events">
+                {dayEvents.slice(0, 3).map(renderEvent)}
+                {dayEvents.length > 3 && <span className="calendar__more">{dayEvents.length - 3}건 더</span>}
+              </span>
+            </button>
+          );
           return (
             <div
               key={index}
-              data-date={day === null ? undefined : `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`}
+              data-date={date}
               aria-current={isToday ? "date" : undefined}
               className={`calendar__cell${day === null ? " calendar__cell--muted" : ""}${isToday ? " calendar__cell--today" : ""}`}
             >

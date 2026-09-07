@@ -20,15 +20,30 @@ export function monthWindow(shown: Date): Readonly<{ from: string; to: string }>
   return { from: new Date(shown.getFullYear(), shown.getMonth(), 1).toISOString(), to: new Date(shown.getFullYear(), shown.getMonth() + 1, 1).toISOString() };
 }
 
+function overlapsDay(event: CalendarRecord, dayStart: Date, dayEnd: Date): boolean {
+  const start = Date.parse(event.start_at), end = Date.parse(event.end_at);
+  return start < dayEnd.getTime() && (end > dayStart.getTime() || (start === end && start >= dayStart.getTime()));
+}
+
+function compareEvents(a: CalendarRecord, b: CalendarRecord): number {
+  return Date.parse(a.start_at) - Date.parse(b.start_at) || a.id.localeCompare(b.id);
+}
+
+export function calendarRecordsForDate(records: readonly CalendarRecord[], date: Date): readonly CalendarRecord[] {
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const end = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
+  return records.filter(event => overlapsDay(event, start, end)).sort(compareEvents);
+}
+
 export function calendarCells(records: readonly CalendarRecord[], shown: Date): readonly CalendarEvent[] {
   const cells: CalendarEvent[] = [];
   const year = shown.getFullYear(), month = shown.getMonth();
   const days = new Date(year, month + 1, 0).getDate();
-  for (const event of [...records].sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at) || a.id.localeCompare(b.id))) {
-    const start = new Date(event.start_at), end = new Date(event.end_at);
+  for (const event of [...records].sort(compareEvents)) {
+    const start = new Date(event.start_at);
     for (let day = 1; day <= days; day += 1) {
       const dayStart = new Date(year, month, day), dayEnd = new Date(year, month, day + 1);
-      if (start >= dayEnd || (end <= dayStart && !(start.getTime() === end.getTime() && start >= dayStart))) continue;
+      if (!overlapsDay(event, dayStart, dayEnd)) continue;
       cells.push({ id: event.id, day, title: event.title, href: `/calendar/${encodeURIComponent(event.id)}`,
         time: start >= dayStart ? start.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false }) : "계속" });
     }
