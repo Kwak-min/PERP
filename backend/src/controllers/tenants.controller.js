@@ -31,8 +31,9 @@ const updateSchema = z.object({
   name: z.string().optional(),
   fiscal_year_start: z.number().int().min(1).max(12).optional(),
   modules: z.array(z.string()).optional(),
+  features: z.array(z.string()).optional(),
   terminology: z.record(z.string()).optional(),
-});
+}).strict();
 
 export function effectiveTerminology(org) {
   const base = { ...(ORG_TEMPLATES[org.type]?.terminology ?? {}) };
@@ -210,6 +211,7 @@ export function updateOrg(req, res) {
     name: org.name,
     fiscal_year_start: org.fiscal_year_start,
     modules: org.modules,
+    enabled_features: enabledFeatures(org.enabled_features, org.modules),
     terminology: effectiveTerminology(org),
   };
 
@@ -217,6 +219,11 @@ export function updateOrg(req, res) {
   if (payload.name !== undefined) patch.name = payload.name;
   if (payload.fiscal_year_start !== undefined) patch.fiscal_year_start = payload.fiscal_year_start;
   if (payload.modules !== undefined) patch.modules = validateSelection(payload.modules).join(",");
+  if (payload.features !== undefined) {
+    const features = validateFeatureSelection(payload.features);
+    patch.enabled_features = features.join(",");
+    patch.modules = modulesForFeatures((patch.modules ?? org.modules ?? "").split(",").filter(Boolean), features).join(",");
+  }
   if (payload.terminology !== undefined) {
     const merged = effectiveTerminology(org);
     for (const [key, value] of Object.entries(payload.terminology)) {
@@ -225,29 +232,34 @@ export function updateOrg(req, res) {
     patch.terminology_json = JSON.stringify(merged);
   }
 
-  const updated = bumpVersion("organization", org, patch, principal.userId);
+  const updated = transaction(() => {
+    const updated = bumpVersion("organization", org, patch, principal.userId);
 
-  audit.record({
-    tenantId: principal.tenantId,
-    action: "organization.updated",
-    resourceType: "organization",
-    resourceId: org.id,
-    actorId: principal.userId,
-    before,
-    after: {
-      name: updated.name,
-      fiscal_year_start: updated.fiscal_year_start,
-      modules: updated.modules,
-      terminology: effectiveTerminology(updated),
-    },
-    requestId: req.requestId,
-  });
+    audit.record({
+      tenantId: principal.tenantId,
+      action: "organization.updated",
+      resourceType: "organization",
+      resourceId: org.id,
+      actorId: principal.userId,
+      before,
+      after: {
+        name: updated.name,
+        fiscal_year_start: updated.fiscal_year_start,
+        modules: updated.modules,
+        enabled_features: enabledFeatures(updated.enabled_features, updated.modules),
+        terminology: effectiveTerminology(updated),
+      },
+      requestId: req.requestId,
+    });
+    return updated;
+  })();
 
   res.json({
     org_id: updated.id,
     name: updated.name,
     version: updated.version,
     modules: [...enabledSet(updated.modules)].sort(),
+    enabled_features: enabledFeatures(updated.enabled_features, updated.modules),
     terminology: effectiveTerminology(updated),
   });
 }
