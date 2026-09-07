@@ -2,9 +2,7 @@ import { z } from "zod";
 
 import { pgQuery, pgTransaction } from "../config/pg.js";
 import { currentUser } from "../middleware/auth.js";
-import { pgWorkspaces, pgMembershipError } from "../middleware/pgAccess.js";
-import { grantCompanyCreator } from "../services/pg-company.service.js";
-import { OPTIONAL_MODULES } from "../config/modules.js";
+import { pgWorkspaces } from "../middleware/pgAccess.js";
 import { hashPassword, verifyPassword } from "../utils/crypto.js";
 import { ApiError } from "../utils/errors.js";
 
@@ -68,12 +66,11 @@ const signupSchema = z.object({
   password: z.string().min(8, "비밀번호는 8자 이상이어야 합니다"),
   phone: z.string().trim().optional(),
   invitation_token: z.string().min(1).optional(),
-  company_name: z.string().trim().min(1, "회사명을 입력하세요"),
 });
 
 // POST /api/v1/pg/auth/signup
 // 신규 계정을 auth.users 에 저장한다. (즉시 승인 정책: approval_status='approved')
-// 가입 시 회사(작업공간)와 직급을 만들고 관리자(대표)로 지정한다. 부서는 사용자가 별도로 추가한다.
+// 회사·소속·역할은 만들지 않는다. 회사 생성은 별도 온보딩에서 명시적으로 요청한다.
 // 로그인과 동일하게 세션을 생성해 토큰을 반환 → 가입 직후 자동 로그인.
 export async function signup(req, res) {
   const parsed = signupSchema.safeParse(req.body ?? {});
@@ -82,7 +79,7 @@ export async function signup(req, res) {
       issues: parsed.error.issues,
     });
   }
-  const { email, name, password, phone, company_name } = parsed.data;
+  const { email, name, password, phone } = parsed.data;
   const ip = clientIp(req);
   const userAgent = req.get("user-agent") ?? null;
 
@@ -97,43 +94,18 @@ export async function signup(req, res) {
 
   const passwordHash = hashPassword(password);
 
-  // 회사·기본 설정·사용자·세션·가입 기록을 같은 PG 트랜잭션으로 생성한다.
+  // 일반 사용자·세션·가입 기록만 같은 PG 트랜잭션으로 생성한다.
   const { userId, session } = await pgTransaction(async (client) => {
-    const { rows: comp } = await client.query(
-      `INSERT INTO org.companies (name, ceo_name) VALUES ($1, $2) RETURNING id`,
-      [company_name, name],
-    );
-    const companyId = comp[0].id;
-
-    const { rows: pos } = await client.query(
-      `INSERT INTO org.positions (company_id, name, rank_level) VALUES
-         ($1, '대표', 50), ($1, '이사', 40), ($1, '팀장', 20), ($1, '사원', 10)
-       RETURNING id, name`,
-      [companyId],
-    );
-    const ceoPositionId = pos.find((p) => p.name === "대표")?.id ?? pos[0].id;
-
-    // 기본 활성 모듈(전체 옵션) 세팅
-    await client.query(
-      `INSERT INTO org.company_modules (company_id, module_key)
-       SELECT $1, k FROM unnest($2::text[]) AS k
-       ON CONFLICT DO NOTHING`,
-      [companyId, OPTIONAL_MODULES],
-    );
-
-    // 즉시 승인 + 관리자(대표)
+    // 즉시 승인하되 회사 배정과 관리자 권한은 부여하지 않는다.
     const { rows: u } = await client.query(
       `INSERT INTO auth.users
          (company_id, department_id, position_id, email, name, phone,
           password_hash, approval_status, is_admin, approved_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'approved', true, now())
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'approved', false, now())
        RETURNING id`,
-      [companyId, null, ceoPositionId, email, name, phone ?? null, passwordHash],
+      [null, null, null, email, name, phone ?? null, passwordHash],
     );
     const createdUserId = u[0].id;
-    await client.query(`INSERT INTO org.company_memberships (company_id, user_id, department_id, position_id, created_by)
-      VALUES ($1, $2, $3, $4, $2)`, [companyId, createdUserId, null, ceoPositionId]);
-    await grantCompanyCreator(client, companyId, createdUserId);
     const { rows: sessionRows } = await client.query(
       `INSERT INTO auth.sessions (user_id, ip_address, user_agent)
        VALUES ($1, $2, $3)
@@ -146,7 +118,7 @@ export async function signup(req, res) {
       [createdUserId, email, ip],
     );
     return { userId: createdUserId, session: sessionRows[0] };
-  }).catch(error => { throw pgMembershipError(error); });
+  });
 
   const summary = await loadUserSummary(userId);
 

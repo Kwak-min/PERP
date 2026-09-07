@@ -30,13 +30,13 @@ export async function installCompanyFixture() {
       return { rows: s ? [{ ...data.users.find(user => user.id === s.user_id), session_id: s.id, login_at: s.login_at }] : [] };
     }
     if (text.includes('WHERE lower(email) = lower($1)')) {
-      const user = data.users.find(row => row.email === values[0]);
+      const user = data.users.find(row => row.email.toLowerCase() === values[0].toLowerCase());
       if (text.startsWith('SELECT 1 FROM auth.users')) return { rows: user ? [user] : [] };
       if (!user) throw Object.assign(new Error('PG unavailable fixture for legacy accounts'), { code: 'ECONNREFUSED' });
       return { rows: [user] };
     }
     if (text.includes('INSERT INTO auth.users')) {
-      const user = { id: String(101 + data.users.length), company_id: values[0], department_id: values[1], position_id: values[2], email: values[3], name: values[4], password_hash: values[5], account_status: 'active', approval_status: 'approved', is_admin: false };
+      const user = { id: String(101 + data.users.length), company_id: values[0], department_id: values[1], position_id: values[2], email: values[3], name: values[4], password_hash: values[text.includes('phone') ? 6 : 5], account_status: 'active', approval_status: /VALUES \([^']*'([^']+)'/.exec(text)?.[1], is_admin: /'approved', true/.test(text) };
       data.users.push(user); return { rows: [user], rowCount: 1 };
     }
     if (text.includes('INSERT INTO auth.sessions')) {
