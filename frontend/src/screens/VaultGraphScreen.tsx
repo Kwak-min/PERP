@@ -30,7 +30,7 @@ import {
   EMPTY_DRAFT,
   draftOf,
   noteDetailSchema,
-  noteListSchema,
+  noteSchema,
   tagsOf,
   type NoteDraft,
 } from "./vault/model";
@@ -49,18 +49,28 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
   const paletteRef = useRef<ReadonlyMap<string, string>>(new Map());
   const selectedRef = useRef<number>(-1);
   const hoverRef = useRef<number>(-1);
-  const spinRef = useRef<boolean>(true);
+  const reducedMotion = useRef(window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  const spinRef = useRef<boolean>(!reducedMotion.current);
   const frameRef = useRef<number>(0);
   const fittedRef = useRef<boolean>(false);
   const pointerRef = useRef<Pointer>({ down: false, x: 0, y: 0, moved: 0 });
   const openRequest = useRef<AbortController | null>(null);
+  const graphRequest = useRef<AbortController | null>(null);
+  const mutationRequest = useRef<AbortController | null>(null);
+  const selectionEpoch = useRef(0);
+  const selectedId = useRef<string | null>(null);
 
   const [stats, setStats] = useState({ nodes: 0, links: 0, orphans: 0, unresolved: 0 });
   const [selected, setSelected] = useState<{ id: string; title: string; version: number } | null>(null);
   const [draft, setDraft] = useState<NoteDraft>(EMPTY_DRAFT);
   const [folders, setFolders] = useState<readonly string[]>([]);
-  const [spin, setSpin] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [spin, setSpin] = useState(!reducedMotion.current);
+  const [loadingNote, setLoadingNote] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [graphLoading, setGraphLoading] = useState(true);
+  const [layoutBusy, setLayoutBusy] = useState(false);
+  const [nodeOptions, setNodeOptions] = useState<readonly GraphNode[]>([]);
+  const busy = loadingNote || saving;
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -68,6 +78,8 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
     () => (session?.orgId ? { token: session.token, orgId: session.orgId } : null),
     [session?.token, session?.orgId],
   );
+
+  const vaultBase = session?.orgId?.startsWith("pg:") ? "/pg/vault" : "/vault";
 
   const draw = useCallback((): void => {
     const canvas = canvasRef.current;
@@ -190,16 +202,21 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
     frameRef.current = 0;
     if (!scene) return;
 
-    if (scene.alpha > ALPHA_MIN) {
-      stepScene(scene);
-      if (!fittedRef.current && scene.alpha < 0.35) {
-        cameraRef.current.distance = fitDistance(scene);
-        fittedRef.current = true;
-      }
+    const steps = reducedMotion.current || scene.count > 400 ? 8 : 1;
+    for (let i = 0; i < steps && scene.alpha > ALPHA_MIN; i += 1) stepScene(scene);
+    if (!fittedRef.current) {
+      cameraRef.current.distance = fitDistance(scene);
+      if (scene.alpha <= ALPHA_MIN) fittedRef.current = true;
     }
-    if (spinRef.current) cameraRef.current.yaw += 0.0035;
+    if (spinRef.current && !pointerRef.current.down) cameraRef.current.yaw += 0.0035;
 
-    draw();
+    // 모션 감소에서는 배치 중간 프레임을 표시하지 않고 완성된 3D 배치만 보여준다.
+    if (!reducedMotion.current || scene.alpha <= ALPHA_MIN) draw();
+    const canvas = canvasRef.current;
+    if (canvas && scene.alpha <= ALPHA_MIN && canvas.dataset.layout !== "settled") {
+      canvas.dataset.layout = "settled";
+      setLayoutBusy(false);
+    }
 
     if (scene.alpha > ALPHA_MIN || spinRef.current || pointerRef.current.down) {
       frameRef.current = requestAnimationFrame(tick);
@@ -212,34 +229,80 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
 
   const loadGraph = useCallback(async (): Promise<void> => {
     if (!apiSession) return;
+    graphRequest.current?.abort();
+    const controller = new AbortController();
+    graphRequest.current = controller;
+    setGraphLoading(true);
     try {
-      const graph = graphSchema.parse(await apiRequest("/vault/graph", { session: apiSession }));
+      const graph = graphSchema.parse(await apiRequest(`${vaultBase}/graph`, { session: apiSession, signal: controller.signal }));
+      if (controller.signal.aborted) return;
       const scene = buildScene(graph);
+      const box = canvasRef.current?.getBoundingClientRect();
+      if (box) { scene.width = box.width; scene.height = box.height; }
       nodesRef.current = graph.nodes;
+      setNodeOptions(graph.nodes);
+      setFolders([...new Set(graph.nodes.map(node => node.folder))].sort());
       paletteRef.current = folderPalette(graph.nodes);
       sceneRef.current = scene;
-      selectedRef.current = -1;
+      selectedRef.current = graph.nodes.findIndex(node => node.id === selectedId.current);
+      hoverRef.current = -1;
       fittedRef.current = false;
+      if (canvasRef.current) canvasRef.current.dataset.layout = "settling";
+      setLayoutBusy(true);
       setStats({
         nodes: graph.nodes.length,
         links: scene.linkCount,
-        orphans: graph.orphans.length,
+        orphans: Array.from(scene.degree).filter(degree => degree === 0).length,
         unresolved: scene.unresolved,
       });
       setError(null);
       kick();
     } catch (caught) {
-      setError(userMessageOf(caught));
+      if (!controller.signal.aborted) setError(userMessageOf(caught));
+    } finally {
+      if (graphRequest.current === controller) {
+        graphRequest.current = null;
+        setGraphLoading(false);
+      }
     }
-  }, [apiSession, kick]);
+  }, [apiSession, vaultBase, kick]);
 
   useEffect(() => {
+    selectedId.current = null;
+    selectionEpoch.current += 1;
+    setSelected(null);
+    setDraft(EMPTY_DRAFT);
+    setLoadingNote(false);
+    setSaving(false);
+    setNotice(null);
+    sceneRef.current = null;
+    nodesRef.current = [];
+    selectedRef.current = -1;
+    const canvas = canvasRef.current;
+    canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    setNodeOptions([]);
+    setStats({ nodes: 0, links: 0, orphans: 0, unresolved: 0 });
     void loadGraph();
-    if (!apiSession) return;
-    void apiRequest("/vault/notes?limit=100", { session: apiSession })
-      .then((data) => setFolders(noteListSchema.parse(data).folders))
-      .catch(() => setFolders([]));
-  }, [apiSession, loadGraph]);
+    return () => {
+      openRequest.current?.abort();
+      graphRequest.current?.abort();
+      mutationRequest.current?.abort();
+      openRequest.current = null;
+      graphRequest.current = null;
+      mutationRequest.current = null;
+    };
+  }, [loadGraph]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const changed = (): void => {
+      reducedMotion.current = media.matches;
+      if (media.matches) { spinRef.current = false; setSpin(false); }
+      kick();
+    };
+    media.addEventListener("change", changed);
+    return () => media.removeEventListener("change", changed);
+  }, [kick]);
 
   const openNode = useCallback(
     async (index: number): Promise<void> => {
@@ -248,11 +311,18 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
       openRequest.current?.abort();
       const controller = new AbortController();
       openRequest.current = controller;
-      setBusy(true);
+      selectionEpoch.current += 1;
+      selectedId.current = node.id;
+      selectedRef.current = index;
+      setSelected(null);
+      setDraft(EMPTY_DRAFT);
+      setLoadingNote(true);
       setError(null);
+      setNotice(null);
+      kick();
       try {
         const detail = noteDetailSchema.parse(
-          await apiRequest(`/vault/notes/${node.id}`, { session: apiSession, signal: controller.signal }),
+          await apiRequest(`${vaultBase}/notes/${node.id}`, { session: apiSession, signal: controller.signal }),
         );
         if (controller.signal.aborted) return;
         setSelected({ id: detail.id, title: detail.title, version: detail.version });
@@ -262,57 +332,76 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
       } finally {
         if (openRequest.current === controller) {
           openRequest.current = null;
-          setBusy(false);
+          setLoadingNote(false);
         }
       }
     },
-    [apiSession],
+    [apiSession, vaultBase, kick],
   );
 
   async function save(): Promise<void> {
-    if (!apiSession || !selected || draft.title.trim() === "") return;
-    setBusy(true);
+    if (!apiSession || !selected || busy || mutationRequest.current || draft.title.trim() === "") return;
+    const epoch = selectionEpoch.current;
+    const controller = new AbortController();
+    mutationRequest.current = controller;
+    setSaving(true);
     setError(null);
     try {
-      const updated = noteDetailSchema.parse(
-        await apiRequest(`/vault/notes/${selected.id}`, {
+      const updated = noteSchema.parse(
+        await apiRequest(`${vaultBase}/notes/${selected.id}`, {
           method: "PATCH",
           session: apiSession,
+          signal: controller.signal,
           body: {
             title: draft.title.trim(),
             content: draft.content,
             folder: draft.folder.trim() || "/",
-            tags: tagsOf(draft),
-            pinned: draft.pinned,
-            agent_enabled: draft.agent_enabled,
+            ...(vaultBase === "/vault" ? { tags: tagsOf(draft), pinned: draft.pinned, agent_enabled: draft.agent_enabled } : {}),
             version: selected.version,
           },
         }),
       );
-      setSelected({ id: updated.id, title: updated.title, version: updated.version });
-      setNotice(`${updated.title} 노트를 저장했습니다. 링크를 다시 그립니다.`);
+      if (controller.signal.aborted) return;
+      if (selectionEpoch.current === epoch) {
+        setSelected({ id: updated.id, title: updated.title, version: updated.version });
+        setNotice(`${updated.title} 노트를 저장했습니다. 링크를 다시 그립니다.`);
+      }
       await loadGraph();
     } catch (caught) {
-      setError(userMessageOf(caught));
+      if (!controller.signal.aborted) setError(userMessageOf(caught));
     } finally {
-      setBusy(false);
+      if (mutationRequest.current === controller) {
+        mutationRequest.current = null;
+        setSaving(false);
+      }
     }
   }
 
   async function remove(): Promise<void> {
-    if (!apiSession || !selected) return;
-    setBusy(true);
+    if (!apiSession || !selected || busy || mutationRequest.current) return;
+    const epoch = selectionEpoch.current;
+    const controller = new AbortController();
+    mutationRequest.current = controller;
+    setSaving(true);
     setError(null);
     try {
-      await apiRequest(`/vault/notes/${selected.id}`, { method: "DELETE", session: apiSession });
-      setSelected(null);
-      setDraft(EMPTY_DRAFT);
-      setNotice("노트를 삭제했습니다.");
+      await apiRequest(`${vaultBase}/notes/${selected.id}`, { method: "DELETE", session: apiSession, signal: controller.signal });
+      if (controller.signal.aborted) return;
+      if (selectionEpoch.current === epoch) {
+        selectedId.current = null;
+        selectedRef.current = -1;
+        setSelected(null);
+        setDraft(EMPTY_DRAFT);
+        setNotice("노트를 삭제했습니다.");
+      }
       await loadGraph();
     } catch (caught) {
-      setError(userMessageOf(caught));
+      if (!controller.signal.aborted) setError(userMessageOf(caught));
     } finally {
-      setBusy(false);
+      if (mutationRequest.current === controller) {
+        mutationRequest.current = null;
+        setSaving(false);
+      }
     }
   }
 
@@ -325,6 +414,12 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
       const box = canvas.getBoundingClientRect();
       canvas.width = Math.max(1, Math.round(box.width * ratio));
       canvas.height = Math.max(1, Math.round(box.height * ratio));
+      const scene = sceneRef.current;
+      if (scene) {
+        scene.width = box.width;
+        scene.height = box.height;
+        cameraRef.current.distance = fitDistance(scene);
+      }
       kick();
     };
     const observer = new ResizeObserver(resize);
@@ -334,7 +429,10 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
     const onWheel = (event: WheelEvent): void => {
       event.preventDefault();
       const camera = cameraRef.current;
-      camera.distance = Math.min(6000, Math.max(160, camera.distance * (event.deltaY > 0 ? 1.12 : 0.89)));
+      const scene = sceneRef.current;
+      if (!scene || event.deltaY === 0) return;
+      fittedRef.current = true;
+      camera.distance = Math.min(fitDistance(scene) * 4, Math.max(160, camera.distance * (event.deltaY > 0 ? 1.12 : 0.89)));
       kick();
     };
     canvas.addEventListener("wheel", onWheel, { passive: false });
@@ -366,6 +464,7 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
         <div className="screen-header__actions">
           <Button
             tone={spin ? "primary" : "neutral"}
+            aria-pressed={spin}
             size="small"
             onClick={() => {
               spinRef.current = !spinRef.current;
@@ -381,6 +480,7 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
             onClick={() => {
               const scene = sceneRef.current;
               if (!scene) return;
+              fittedRef.current = true;
               cameraRef.current = { yaw: 0.6, pitch: 0.35, distance: fitDistance(scene) };
               kick();
             }}
@@ -406,14 +506,35 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
           padded={false}
           title="지식 그래프"
           subtitle={`노드 ${stats.nodes} · 연결 ${stats.links} · 고립 ${stats.orphans}${stats.unresolved > 0 ? ` · 끊어진 링크 ${stats.unresolved}` : ""}`}
-          foot="드래그: 회전 · 휠: 확대 · 클릭: 노트 열기"
+          foot="드래그/방향키: 회전 · 휠/+/-: 확대 · Home: 맞춤 · 아래 목록: 노트 선택"
         >
           <div className="graph-stage">
             <canvas
               ref={canvasRef}
               className="graph-stage__canvas"
+              style={{ visibility: graphLoading || (layoutBusy && reducedMotion.current) ? "hidden" : "visible" }}
               role="application"
               aria-label="개인 노트 3D 그래프"
+              aria-busy={graphLoading || layoutBusy}
+              tabIndex={0}
+              onKeyDown={(event) => {
+                const scene = sceneRef.current;
+                if (!scene) return;
+                const camera = cameraRef.current;
+                switch (event.key) {
+                  case "ArrowLeft": camera.yaw -= 0.12; break;
+                  case "ArrowRight": camera.yaw += 0.12; break;
+                  case "ArrowUp": camera.pitch = Math.max(-1.45, camera.pitch - 0.12); break;
+                  case "ArrowDown": camera.pitch = Math.min(1.45, camera.pitch + 0.12); break;
+                  case "+": case "=": camera.distance = Math.max(160, camera.distance * 0.89); break;
+                  case "-": camera.distance = Math.min(fitDistance(scene) * 4, camera.distance * 1.12); break;
+                  case "Home": cameraRef.current = { yaw: 0.6, pitch: 0.35, distance: fitDistance(scene) }; break;
+                  default: return;
+                }
+                event.preventDefault();
+                fittedRef.current = true;
+                kick();
+              }}
               onPointerDown={(event) => {
                 event.currentTarget.setPointerCapture(event.pointerId);
                 const point = localPoint(event);
@@ -438,6 +559,7 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
                 pointer.x = point.x;
                 pointer.y = point.y;
                 const camera = cameraRef.current;
+                fittedRef.current = true;
                 camera.yaw += dx * 0.008;
                 camera.pitch = Math.max(-1.45, Math.min(1.45, camera.pitch + dy * 0.008));
                 kick();
@@ -453,21 +575,36 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
                 if (!scene) return;
                 const point = localPoint(event);
                 const hit = pickNode(scene, point.x, point.y);
-                selectedRef.current = hit;
-                kick();
                 if (hit >= 0) void openNode(hit);
               }}
               onPointerCancel={() => {
                 pointerRef.current.down = false;
               }}
             />
-            {stats.nodes === 0 && (
+            {(graphLoading || (layoutBusy && reducedMotion.current)) && (
+              <p className="graph-stage__empty" role="status">그래프를 불러오고 배치하는 중…</p>
+            )}
+            {!graphLoading && !error && stats.nodes === 0 && (
               <p className="graph-stage__empty">
                 아직 노트가 없습니다. 개인 노트 화면에서 노트를 만들고 <code>[[다른 노트 제목]]</code> 으로 연결하면
                 여기에 3D 로 나타납니다.
               </p>
             )}
           </div>
+          <label className="graph-note-picker">
+            노트 선택
+            <select
+              aria-label="그래프 노트 선택"
+              value={selectedId.current ?? ""}
+              onChange={(event) => {
+                const index = nodesRef.current.findIndex(node => node.id === event.target.value);
+                if (index >= 0) void openNode(index);
+              }}
+            >
+              <option value="" disabled>노트를 선택하세요</option>
+              {nodeOptions.map(node => <option key={node.id} value={node.id}>{node.title} · {node.folder}</option>)}
+            </select>
+          </label>
         </SectionCard>
 
         <SectionCard
@@ -475,8 +612,12 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
           title={selected ? selected.title : "노트 미리보기"}
           subtitle={selected ? "고치고 저장하면 그래프가 다시 그려집니다" : "그래프에서 노드를 눌러 선택하세요"}
         >
+          {loadingNote && <p role="status">노트를 불러오는 중…</p>}
           {selected ? (
+            <fieldset className="graph-editor" data-note-id={selected.id} disabled={busy}>
             <NoteEditor
+              key={selected.id}
+              storage={vaultBase === "/pg/vault" ? "pg" : "legacy"}
               draft={draft}
               editingId={selected.id}
               folders={folders}
@@ -485,12 +626,16 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
               onSave={() => void save()}
               onDelete={() => void remove()}
               onReset={() => {
+                openRequest.current?.abort();
+                selectedId.current = null;
+                selectionEpoch.current += 1;
                 selectedRef.current = -1;
                 setSelected(null);
                 setDraft(EMPTY_DRAFT);
                 kick();
               }}
             />
+            </fieldset>
           ) : (
             <p className="vault-empty">
               노드를 클릭하면 내용이 여기에 열립니다. 편집·미리보기 탭으로 마크다운을 확인하고 바로 저장할 수 있습니다.

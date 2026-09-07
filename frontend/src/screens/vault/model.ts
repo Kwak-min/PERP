@@ -8,7 +8,7 @@ export const noteSchema = z.object({
   sensitivity: z.string().catch("personal"),
   agent_enabled: z.boolean().catch(true),
   pinned: z.boolean().catch(false),
-  version: z.number().catch(1),
+  version: z.number().int().nonnegative(),
   updated_at: z.string().catch(""),
 });
 
@@ -19,7 +19,7 @@ export const noteListSchema = z.object({
 });
 
 export const noteDetailSchema = noteSchema.extend({
-  content: z.string().catch(""),
+  content: z.string(),
   backlinks: z.array(z.unknown()).catch([]),
 });
 

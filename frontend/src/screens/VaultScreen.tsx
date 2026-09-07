@@ -12,6 +12,7 @@ import {
   draftOf,
   noteDetailSchema,
   noteListSchema,
+  noteSchema,
   tagsOf,
   type Note,
   type NoteDraft,
@@ -25,11 +26,14 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
   const [folders, setFolders] = useState<readonly string[]>([]);
   const [query, setQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingVersion, setEditingVersion] = useState(0);
   const [draft, setDraft] = useState<NoteDraft>(EMPTY_DRAFT);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const openRequest = useRef<AbortController | null>(null);
+  const scopeRequest = useRef(new AbortController());
+  const vaultBase = session?.orgId?.startsWith("pg:") ? "/pg/vault" : "/vault";
 
   const apiSession = useMemo(
     () => (session?.orgId ? { token: session.token, orgId: session.orgId } : null),
@@ -38,18 +42,29 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
 
   const reload = useCallback(async (): Promise<void> => {
     if (!apiSession) return;
+    const controller = scopeRequest.current;
     try {
-      const data = noteListSchema.parse(await apiRequest("/pg/vault/notes?limit=100", { session: apiSession }));
+      const data = noteListSchema.parse(await apiRequest(`${vaultBase}/notes?limit=100`, { session: apiSession, signal: controller.signal }));
+      if (controller.signal.aborted) return;
       setNotes(data.items);
       setFolders(data.folders);
       setError(null);
     } catch (caught) {
-      setError(userMessageOf(caught));
+      if (!controller.signal.aborted) setError(userMessageOf(caught));
     }
-  }, [apiSession]);
+  }, [apiSession, vaultBase]);
 
   useEffect(() => {
+    scopeRequest.current = new AbortController();
+    setNotes([]);
+    setFolders([]);
+    setEditingId(null);
+    setEditingVersion(0);
+    setDraft(EMPTY_DRAFT);
+    setBusy(false);
+    setNotice(null);
     void reload();
+    return () => { scopeRequest.current.abort(); openRequest.current?.abort(); };
   }, [reload]);
 
   const visible = useMemo(() => {
@@ -65,7 +80,7 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
   }, [notes, query]);
 
   async function open(noteId: string): Promise<void> {
-    if (!apiSession) return;
+    if (!apiSession || busy) return;
     openRequest.current?.abort();
     const controller = new AbortController();
     openRequest.current = controller;
@@ -73,66 +88,74 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
     setError(null);
     try {
       const detail = noteDetailSchema.parse(
-        await apiRequest(`/pg/vault/notes/${noteId}`, { session: apiSession, signal: controller.signal }),
+        await apiRequest(`${vaultBase}/notes/${noteId}`, { session: apiSession, signal: controller.signal }),
       );
       if (controller.signal.aborted) return;
       setEditingId(detail.id);
+      setEditingVersion(detail.version);
       setDraft(draftOf(detail));
     } catch (caught) {
       if (!controller.signal.aborted) setError(userMessageOf(caught));
     } finally {
       if (openRequest.current === controller) {
         openRequest.current = null;
-        setBusy(false);
+        if (!controller.signal.aborted) setBusy(false);
       }
     }
   }
 
   async function save(): Promise<void> {
-    if (!apiSession || draft.title.trim() === "") return;
+    if (!apiSession || busy || draft.title.trim() === "") return;
+    const controller = scopeRequest.current;
     setBusy(true);
     setError(null);
     const body = {
       title: draft.title.trim(),
       content: draft.content,
       folder: draft.folder.trim() || "/",
-      tags: tagsOf(draft),
-      pinned: draft.pinned,
-      agent_enabled: draft.agent_enabled,
+      ...(vaultBase === "/vault" ? { tags: tagsOf(draft), pinned: draft.pinned, agent_enabled: draft.agent_enabled } : {}),
     };
     try {
       if (editingId) {
-        await apiRequest(`/pg/vault/notes/${editingId}`, { method: "PATCH", session: apiSession, body });
+        const updated = noteSchema.parse(await apiRequest(`${vaultBase}/notes/${editingId}`, {
+          method: "PATCH", session: apiSession, signal: controller.signal, body: { ...body, version: editingVersion },
+        }));
+        if (controller.signal.aborted) return;
+        setEditingVersion(updated.version);
         setNotice(`${body.title} 노트를 저장했습니다.`);
       } else {
-        const created = noteDetailSchema.parse(
-          await apiRequest("/pg/vault/notes", { method: "POST", session: apiSession, body }),
+        const created = noteSchema.parse(
+          await apiRequest(`${vaultBase}/notes`, { method: "POST", session: apiSession, body, signal: controller.signal }),
         );
+        if (controller.signal.aborted) return;
         setEditingId(created.id);
+        setEditingVersion(created.version);
         setNotice(`${body.title} 노트를 만들었습니다.`);
       }
       await reload();
     } catch (caught) {
-      setError(userMessageOf(caught));
+      if (!controller.signal.aborted) setError(userMessageOf(caught));
     } finally {
-      setBusy(false);
+      if (!controller.signal.aborted) setBusy(false);
     }
   }
 
   async function remove(): Promise<void> {
-    if (!apiSession || !editingId) return;
+    if (!apiSession || !editingId || busy) return;
+    const controller = scopeRequest.current;
     setBusy(true);
     setError(null);
     try {
-      await apiRequest(`/pg/vault/notes/${editingId}`, { method: "DELETE", session: apiSession });
+      await apiRequest(`${vaultBase}/notes/${editingId}`, { method: "DELETE", session: apiSession, signal: controller.signal });
+      if (controller.signal.aborted) return;
       setEditingId(null);
       setDraft(EMPTY_DRAFT);
       setNotice("노트를 삭제했습니다.");
       await reload();
     } catch (caught) {
-      setError(userMessageOf(caught));
+      if (!controller.signal.aborted) setError(userMessageOf(caught));
     } finally {
-      setBusy(false);
+      if (!controller.signal.aborted) setBusy(false);
     }
   }
 
@@ -152,7 +175,9 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
           <Button
             tone="neutral"
             size="small"
+            disabled={busy}
             onClick={() => {
+              setEditingVersion(0);
               setEditingId(null);
               setDraft(EMPTY_DRAFT);
             }}
@@ -196,6 +221,7 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
                 <li key={note.id}>
                   <button
                     type="button"
+                    disabled={busy}
                     className={note.id === editingId ? "vault-list__item vault-list__item--on" : "vault-list__item"}
                     onClick={() => void open(note.id)}
                   >
@@ -218,6 +244,7 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
           subtitle={editingId ? "내용을 고치고 저장하세요" : "제목과 내용을 적으면 바로 저장됩니다"}
         >
           <NoteEditor
+            storage={vaultBase === "/pg/vault" ? "pg" : "legacy"}
             draft={draft}
             editingId={editingId}
             folders={folders}

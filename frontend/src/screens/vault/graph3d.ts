@@ -39,6 +39,8 @@ export type Scene = {
   readonly k: number;
   alpha: number;
   unresolved: number;
+  width: number;
+  height: number;
 };
 
 export const ALPHA_MIN = 0.02;
@@ -76,10 +78,11 @@ export function lighten(hex: string, amount: number): string {
 export function buildScene(graph: VaultGraph): Scene {
   const count = graph.nodes.length;
   const index = new Map<string, number>();
-  const byTitle = new Map<string, number>();
+  const byTitle = new Map<string, number | undefined>();
   graph.nodes.forEach((node, i) => {
     index.set(node.id, i);
-    if (!byTitle.has(node.title)) byTitle.set(node.title, i);
+    const title = node.title.trim().toLowerCase();
+    byTitle.set(title, byTitle.has(title) ? undefined : i);
   });
 
   const pairs: number[] = [];
@@ -87,7 +90,7 @@ export function buildScene(graph: VaultGraph): Scene {
   let unresolved = 0;
   for (const edge of graph.edges) {
     const a = index.get(edge.source);
-    const b = index.get(edge.target_id ?? "") ?? byTitle.get(edge.target_title);
+    const b = edge.target_id === null ? byTitle.get(edge.target_title.trim().toLowerCase()) : index.get(edge.target_id);
     if (a === undefined || b === undefined) {
       unresolved += 1;
       continue;
@@ -108,7 +111,7 @@ export function buildScene(graph: VaultGraph): Scene {
   }
 
   const k = 46 + 3 * Math.sqrt(Math.max(count, 1));
-  const radius = k * Math.cbrt(Math.max(count, 2));
+  const radius = count === 1 ? 0 : k * Math.cbrt(Math.max(count, 2));
   const pos = new Float32Array(count * 3);
   for (let i = 0; i < count; i += 1) {
     const y = count === 1 ? 0 : 1 - (i / (count - 1)) * 2;
@@ -132,12 +135,14 @@ export function buildScene(graph: VaultGraph): Scene {
     k,
     alpha: 1,
     unresolved,
+    width: 900,
+    height: 600,
   };
 }
 
 /**
  * 3D Fruchterman-Reingold 한 스텝.
- * 반발 k^2/d, 인력 d^2/k, 중심 복원 0.4%, 스텝 상한 k*alpha, 냉각 0.985 (alpha 1 -> 0.02 = 약 257 스텝).
+ * 반발 k^2/d, 인력 d^2/k, 중심 복원 2% (고립 노드가 연결 군집을 화면 밖으로 밀지 않도록), 스텝 상한 k*alpha, 냉각 0.985 (alpha 1 -> 0.02 = 약 257 스텝).
  * 프레임당 할당 없음(disp 재사용). count<=400 에서 O(n^2) 로 충분하다.
  */
 export function stepScene(scene: Scene): void {
@@ -165,7 +170,7 @@ export function stepScene(scene: Scene): void {
         dz = ((i * 17 + j) % 13) - 6;
         d2 = dx * dx + dy * dy + dz * dz + 0.01;
       }
-      const f = (k * k) / (d2 * Math.sqrt(d2)); // 성분에 곱하면 크기 k^2/d
+      const f = (k * k) / d2; // 성분에 곱하면 크기 k^2/d
       const fx = dx * f;
       const fy = dy * f;
       const fz = dz * f;
@@ -205,9 +210,9 @@ export function stepScene(scene: Scene): void {
     const dz = at(disp, ix + 2);
     const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
     const s = len > maxStep ? maxStep / len : 1;
-    pos[ix] = (at(pos, ix) + dx * s) * 0.996;
-    pos[ix + 1] = (at(pos, ix + 1) + dy * s) * 0.996;
-    pos[ix + 2] = (at(pos, ix + 2) + dz * s) * 0.996;
+    pos[ix] = (at(pos, ix) + dx * s) * 0.98;
+    pos[ix + 1] = (at(pos, ix + 1) + dy * s) * 0.98;
+    pos[ix + 2] = (at(pos, ix + 2) + dz * s) * 0.98;
   }
 
   scene.alpha *= 0.985;
@@ -230,6 +235,10 @@ export function focalOf(height: number): number {
 
 /** 월드 -> 카메라(yaw,pitch,distance) -> 화면. proj 와 order(먼 것부터)를 갱신한다. */
 export function projectScene(scene: Scene, camera: Camera, width: number, height: number): void {
+  scene.width = width;
+  scene.height = height;
+  // 카메라는 구면 밖에 둔다. 뒤쪽 노드를 근평면에 붙여 그리는 왜곡을 방지한다.
+  camera.distance = Math.max(camera.distance, boundingRadius(scene) + 40);
   const cy = Math.cos(camera.yaw);
   const sy = Math.sin(camera.yaw);
   const cp = Math.cos(camera.pitch);
@@ -248,7 +257,7 @@ export function projectScene(scene: Scene, camera: Camera, width: number, height
     const z1 = -x * sy + z * cy;
     const y2 = y * cp - z1 * sp;
     const z2 = y * sp + z1 * cp;
-    const depth = Math.max(40, z2 + camera.distance);
+    const depth = z2 + camera.distance;
     const scale = focal / depth;
     const px = i * 4;
     proj[px] = ox + x1 * scale;
@@ -293,7 +302,9 @@ export function screenRadius(scene: Scene, i: number): number {
 
 /** 그래프 전체가 화면을 알맞게 채우는 카메라 거리. */
 export function fitDistance(scene: Scene): number {
-  return Math.min(6000, boundingRadius(scene) * 2.2 + scene.k * 2.6);
+  const half = Math.max(1, (Math.min(scene.width, scene.height) - 80) / 2);
+  const radius = boundingRadius(scene) + 24;
+  return Math.max(160, radius * Math.hypot(1, focalOf(scene.height) / half));
 }
 
 /** 깊이 안개: 가까울수록 1, 멀수록 흐려진다. */
