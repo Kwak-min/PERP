@@ -16,6 +16,7 @@ import { OrgModulesScreen } from "./OrgModulesScreen";
 import { ReservationScreen } from "./ReservationScreen";
 import { RoleSettingsScreen } from './RoleSettingsScreen';
 import { SettingsScreen } from './SettingsScreen';
+import { ProjectTaskScreen } from './ProjectTaskScreen';
 
 export type ScreenComponent = ComponentType<Readonly<{ screen: ScreenDefinition }>>;
 
@@ -27,6 +28,10 @@ export const screenOverrides: Readonly<Record<string, ScreenComponent>> = {
   'ORG-002': OrgChartScreen,
   "ORG-003": OrgChartScreen,
   'ORG-004': RoleSettingsScreen,
+  'PRJ-001': ProjectTaskScreen,
+  'PRJ-002': ProjectTaskScreen,
+  'TSK-001': ProjectTaskScreen,
+  'TSK-003': ProjectTaskScreen,
   "ORG-005": BranchSettingsScreen,
   "ORG-006": OrgLogScreen,
   "HR-002": AttendanceScreen,

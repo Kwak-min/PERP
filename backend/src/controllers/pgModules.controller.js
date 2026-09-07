@@ -277,17 +277,20 @@ export async function approvals(req, res) {
 
 // GET /api/v1/pg/tasks — 업무 (project.tasks)
 export async function tasks(req, res) {
+  const filter = z.object({ project_id: z.string().regex(/^[1-9]\d*$/).optional(), task_id: z.string().regex(/^[1-9]\d*$/).optional() }).parse(req.query);
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT t.id AS __id, t.title AS 업무, p.name AS 프로젝트, u.name AS 담당,
-            t.status AS status, t.due_on AS 기한
+    `SELECT t.id AS __id, t.project_id, t.title AS 업무, p.name AS 프로젝트, u.name AS 담당,
+            t.status AS status, t.due_on AS 기한, t.description
        FROM project.tasks t
        JOIN project.projects p ON p.id = t.project_id
        LEFT JOIN auth.users u ON u.id = t.assignee_id
       WHERE p.company_id = $1
+        ${filter.project_id ? "AND t.project_id = $2" : ""}
+        ${filter.task_id ? `AND t.id = $${filter.project_id ? 3 : 2}` : ""}
       ORDER BY t.sort_order, t.id DESC`,
-    [companyId],
+    [companyId, ...(filter.project_id ? [filter.project_id] : []), ...(filter.task_id ? [filter.task_id] : [])],
   );
   res.json({ items: rows });
 }
@@ -400,7 +403,7 @@ const EDITABLE = {
   settlements: { table: "accounting.settlements", scope: "company",
     fields: [["title", "text"], ["amount", "num"]] },
   tasks: { table: "project.tasks", scope: "project",
-    fields: [["title", "text"], ["due_on", "date"]] },
+    fields: [["title", "text"], ["due_on", "date"], ["status", "taskStatus"]] },
   documents: { table: "project.documents", scope: "project",
     fields: [["title", "text"], ["content_md", "text"]] },
   dues: { table: "accounting.dues_charges", scope: "company",
@@ -449,7 +452,9 @@ export async function updateRecord(req, res) {
   for (const [col, type] of def.fields) {
     if (!(col in body)) continue;
     let value = body[col];
-    if (type === "num") {
+    if (type === "taskStatus") {
+      value = z.enum(["todo", "in_progress", "done", "blocked", "cancelled"]).parse(value);
+    } else if (type === "num") {
       value = value === "" || value === null ? null : Number(value);
       if (value !== null && !Number.isFinite(value)) throw new ApiError("VALIDATION_ERROR", `${col} 숫자 오류`);
     } else {

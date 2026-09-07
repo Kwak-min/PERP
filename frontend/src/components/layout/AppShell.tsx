@@ -10,7 +10,7 @@ import { Button } from "../ui/Button";
 import { AgentPanel } from "./AgentPanel";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
-const mobilePaths = ['/', '/tasks', '/calendar', '/settings'];
+const mobilePaths = ['/', '/projects', '/calendar', '/settings'];
 
 export function AppShell() {
   const session = useSession();
@@ -99,7 +99,7 @@ export function AppShell() {
                 ? "/members"
                 : /문서|자료|규정|계약/.test(term)
                   ? "/documents"
-                  : "/tasks";
+                  : "/projects";
               navigate(`${target}?q=${encodeURIComponent(term)}`);
             }}
           >
