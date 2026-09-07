@@ -34,7 +34,7 @@ export function requireSpaceAdmin(principal: Principal): void {
 }
 
 export function requireReservationWrite(principal: Principal): void {
-  if (!principal.permissions.includes('reservation.create')) {
+  if (!principal.permissions.includes('*') && !principal.permissions.includes('reservation.create')) {
     throw new ForbiddenError('예약을 변경할 권한이 없습니다.');
   }
 }
