@@ -229,6 +229,48 @@ describe("member provisioning credentials and bounded role delegation", { timeou
     assert.equal((await request({ token: claimed.body.access_token }, "/members")).status, 200);
   });
 
+  it("denies org_admin reset of an unclaimed owner without changing credentials or sessions, but permits owner reset", async () => {
+    const email = emailFor("unclaimed-owner");
+    const provisioned = await request(owner, "/members/provision", "POST", {
+      email, name: "Unclaimed owner", roles: ["owner"],
+    });
+    assert.equal(provisioned.status, 201);
+    const login = await api(server.baseUrl, "/auth/login", {
+      method: "POST", body: { email, password: provisioned.body.temporary_password },
+    });
+    assert.equal(login.status, 200);
+    const userId = provisioned.body.user_id;
+    const resetRoute = `/members/${provisioned.body.membership_id}/reset-password`;
+    const beforeUser = db().prepare("SELECT * FROM app_user WHERE id = ?").get(userId);
+    const beforeSessions = db().prepare("SELECT * FROM session_token WHERE user_id = ? ORDER BY id").all(userId);
+    assert.equal(beforeUser.must_change_password, 1);
+    assert.ok(beforeSessions.some((session) => !session.revoked_at));
+
+    const denied = await request(actors.org_admin, resetRoute, "POST");
+    assert.deepEqual({
+      status: denied.status,
+      code: denied.body.error?.code,
+      passwordDisclosed: "temporary_password" in denied.body,
+      credentialsUnchanged: db().prepare("SELECT password_hash FROM app_user WHERE id = ?").get(userId).password_hash === beforeUser.password_hash,
+      sessionsUnchanged: JSON.stringify(db().prepare("SELECT * FROM session_token WHERE user_id = ? ORDER BY id").all(userId)) === JSON.stringify(beforeSessions),
+    }, {
+      status: 403, code: "PERMISSION_DENIED", passwordDisclosed: false,
+      credentialsUnchanged: true, sessionsUnchanged: true,
+    });
+    assert.deepEqual(db().prepare("SELECT * FROM app_user WHERE id = ?").get(userId), beforeUser);
+    assert.equal((await request({ token: login.body.access_token }, "/auth/me")).status, 200);
+
+    const reset = await request(owner, resetRoute, "POST");
+    assert.equal(reset.status, 200);
+    assert.equal(typeof reset.body.temporary_password, "string");
+    assert.notEqual(db().prepare("SELECT password_hash FROM app_user WHERE id = ?").get(userId).password_hash, beforeUser.password_hash);
+    assert.equal((await request({ token: login.body.access_token }, "/auth/me")).status, 401);
+    const relogin = await api(server.baseUrl, "/auth/login", {
+      method: "POST", body: { email, password: reset.body.temporary_password },
+    });
+    assert.equal(relogin.status, 200);
+  });
+
   it("does not let member.write reset an owner's global credentials", async () => {
     const membership = db().prepare("SELECT id FROM membership WHERE org_id = ? AND user_id = ?")
       .get(owner.orgId, owner.userId);

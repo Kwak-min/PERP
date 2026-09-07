@@ -496,6 +496,7 @@ export function resetPassword(req, res) {
     )
     .get(req.params.membershipId, principal.tenantId, principal.orgId);
   if (!membership) throw notFound("membership");
+  assertCanDelegateRoles(principal, (membership.roles ?? "").split(",").filter(Boolean));
   const user = db().prepare("SELECT * FROM app_user WHERE id = ?").get(membership.user_id);
   if (!user) throw notFound("user");
 
