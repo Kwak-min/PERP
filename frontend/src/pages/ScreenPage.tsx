@@ -518,13 +518,6 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
         </div>
       )}
 
-      {screen.id === "ADM-001" && (
-        <SectionCard title="예약 공간 관리">
-          <p>선택한 회사의 공간 등록과 테스트 공간 1~5 생성을 관리합니다. 자산 모듈과 조직 소유자(owner) 또는 조직 관리자(org_admin) 역할이 필요합니다.</p>
-          <Link className="button button--primary" to="/reserve?tab=admin">예약 공간 관리</Link>
-        </SectionCard>
-      )}
-
       <section className="stat-grid" aria-label={`${screen.label} 지표`}>
         {stats.map((stat, index) => (
           <StatCard

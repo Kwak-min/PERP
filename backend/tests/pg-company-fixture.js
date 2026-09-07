@@ -79,17 +79,37 @@ export async function installCompanyFixture() {
     }
     if (text.includes('INSERT INTO org.permissions')) return { rows: [], rowCount: values[0].length };
     if (text.includes('INSERT INTO org.roles')) {
-      const role = { id: String(data.roles.length + 1), company_id: values[0], name: 'company_creator' };
+      const role = { id: String(data.roles.length + 1), company_id: values[0], name: values[1] ?? 'company_creator', is_system: text.includes('true'), scope: values[2] ?? 'all' };
       data.roles.push(role); return { rows: [role], rowCount: 1 };
+    }
+    if (text.startsWith('DELETE FROM org.role_permissions')) {
+      data.permissions = data.permissions.filter(p => p.role_id !== values[0]); return { rows: [], rowCount: 1 };
     }
     if (text.includes('INSERT INTO org.role_permissions')) {
       for (const code of values[1]) data.permissions.push({ role_id: values[0], code });
       return { rows: [], rowCount: values[1].length };
     }
+    if (text.startsWith('DELETE FROM org.user_roles ur USING')) {
+      data.grants = data.grants.filter(g => !(g.user_id === values[1] && data.roles.some(r => r.id === g.role_id && r.company_id === values[0])));
+      return { rows: [], rowCount: 1 };
+    }
     if (text.includes('INSERT INTO org.user_roles')) {
       data.grants.push({ user_id: values[0], role_id: values[1] }); return { rows: [], rowCount: 1 };
     }
-    if (text.includes('INSERT INTO org.company_events')) { data.events.push(values); return { rows: [], rowCount: 1 }; }
+    if (text.includes('INSERT INTO org.company_events') || text.includes('INSERT INTO org.role_change_events')) { data.events.push(values); return { rows: [], rowCount: 1 }; }
+    if (text.startsWith('SELECT id FROM org.companies') && text.endsWith('FOR UPDATE')) {
+      return { rows: data.companies.filter(c => c.id === values[0] && c.is_active) };
+    }
+    if (text.startsWith('SELECT r.id, r.name')) {
+      return { rows: data.roles.filter(r => r.company_id === values[0]).map(r => ({ ...r,
+        permissions: data.permissions.filter(p => p.role_id === r.id).map(p => p.code) })) };
+    }
+    if (text.startsWith('SELECT m.user_id, u.name')) {
+      return { rows: data.memberships.filter(m => m.company_id === values[0] && m.status === 'active')
+        .filter(m => data.users.some(u => u.id === m.user_id && u.account_status === 'active' && u.approval_status === 'approved'))
+        .map(m => ({ ...data.users.find(u => u.id === m.user_id), user_id: m.user_id,
+          roles: data.roles.filter(r => r.company_id === m.company_id && data.grants.some(g => g.user_id === m.user_id && g.role_id === r.id)).map(r => r.id) })) };
+    }
     if (text.startsWith('SELECT DISTINCT p.code')) {
       const roles = data.roles.filter(role => role.company_id === values[1] && data.grants.some(grant => grant.user_id === values[0] && grant.role_id === role.id));
       return { rows: roles.flatMap(role => data.permissions.filter(p => p.role_id === role.id).map(p => ({ code: p.code, role: role.name }))) };

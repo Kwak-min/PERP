@@ -88,7 +88,7 @@ export const PG_CREATOR_PERMISSIONS = [
   "event.read", "event.write", "approval.decide", "approval.request", "transaction.read", "transaction.write",
   "budget.read", "budget.write", "dues.read", "dues.write", "settlement.create", "asset.read", "asset.write",
   "notification.read", "agent.chat", "agent.policy.manage", "automation.manage", "attendance.read", "attendance.write",
-  "leave.approve", "recruitment.manage",
+  "leave.approve", "recruitment.manage", "reservation.create", "reservation.manage",
 ];
 
 const RECORD_ACCESS = {
