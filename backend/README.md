@@ -55,6 +55,60 @@ PG 세션 만료는 기존 `auth.sessions.login_at`과 `ORBITFLOW_SESSION_TTL`�
 등 실제 값은 커밋, 이미지, 로그, frontend `VITE_*` 변수에 넣지 않습니다. 운영에서는
 개발 fallback 값에 의존하지 말고 Secret Manager에서 revision별로 주입합니다.
 
+## 개인 AI API 키
+
+설정 메뉴의 **AI API 키** (`/settings/ai-key`)에서 개인 OpenRouter 키를 저장·교체·삭제하고
+연결 테스트를 실행합니다. 연결 테스트는 짧은 합성 문장만 전송하며 소액 과금될 수
+있습니다. 문서, 기억, 개인 Vault는 조회하지 않습니다. 일반 대화 패널은 Vault 제외
+계약 정비 전까지 비활성 상태이며, 키 등록만으로 대화 UI가 활성화되지는 않습니다.
+
+서버의 `ORBITFLOW_AI_KEY_ENCRYPTION_KEY`에 암호학적 난수 32바이트를 Base64로
+인코딩한 값을 Secret Manager에서 주입해야 합니다. 로컬에서 생성하는 예:
+
+```bash
+node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64'))"
+```
+
+생성값은 비밀 설정에 직접 보관하고 채팅·커밋·로그·`VITE_*`에 넣지 않습니다. 매 기동마다
+새로 생성하면 기존 키를 복호화할 수 없습니다. 미설정/잘못된 길이/인증 태그 불일치는
+저장 또는 사용을 503으로 차단합니다. 마스터 키를 바꾸려면 기존 값을 안전하게 유지한
+계획된 이전이 필요하며, 이 버전에는 재암호화 도구가 없으므로 기존 개인 키를 삭제하고
+새 마스터 키에서 다시 입력해야 합니다. 삭제는 암호화 설정이 없어도 가능합니다.
+
+SQLite additive migration v6의 `ai_user_key`는 AES-256-GCM 암호문, 매 저장마다 새로운
+96비트 nonce, 인증 태그만 저장합니다. 인증 부가정보는 tenant/org/운영 user/provider에
+묶여 다른 소유자의 암호문을 복사해도 사용할 수 없습니다. PG 로그인도 `auth_identity`의
+운영 사용자 UUID를 키 소유자로 사용하며 외부 숫자 ID/이메일로 다른 사용자의 키를 선택하지 않습니다.
+PG 회사 선택에서는 실제 PG 회사 권한을 검증한 뒤 `pg:<company_id>` 저장 namespace를
+사용합니다. 이것은 SQLite 조직/소속 생성이나 역할 승격이 아니며 SQLite membership이
+없는 PG 사용자도 명시적 권한이 있으면 이용할 수 있습니다. 키는 선택 조직/회사별 개인
+설정이며 관리자라도 다른 사용자의 키나 등록 상태를 조회하지 못합니다.
+
+- `GET /api/v1/agent/api-key`: `{provider, configured, model}`만 반환합니다. 등록됨은 연결
+  성공을 뜻하지 않습니다. `model`은 `ORBITFLOW_EXTERNAL_MODEL`입니다.
+- `PUT /api/v1/agent/api-key`: `{api_key: string}`만 허용하며 기존 키를 교체합니다.
+- `DELETE /api/v1/agent/api-key`: 암호문/nonce/tag를 비우고 soft-delete합니다.
+- `POST /api/v1/agent/api-key/test`: 본인 저장 키로만 실제 HTTP 요청합니다. 실패 시 로컬
+  폴백을 연결 성공으로 보고하지 않습니다.
+
+PG 회사 선택 시 동일한 계약을 `/api/v1/pg/agent/api-key` 및 `/test`에서 제공합니다.
+프런트엔드는 선택된 `pg:` 회사를 기준으로 PG 경로를 사용하고, 레거시 조직 선택은
+기존 `/agent/api-key` 경로를 사용합니다. 실패 시 다른 조직/저장소로 폴백하지 않습니다.
+
+레거시 API는 운영 조직 소속, agent 모듈과 `agent.chat` 권한을 요구합니다. PG API는
+검증된 PG 세션과 정확한 `X-Org-Id: pg:<company_id>`, PG 회사에 기록된 `agent.chat`
+권한 및 agent 모듈을 요구합니다. `is_admin` 또는 레거시 owner 권한만으로 PG 권한을
+부여하지 않습니다. 개인 키가 있으면
+허용된 AI 요청에서 서버 기본 키보다 우선하며, 삭제 후에는 서버 기본 설정을 따릅니다.
+민감·기밀·알 수 없는 데이터 등급 또는 로컬 모델 정책은 항상 로컬만 사용합니다.
+키 저장은 개인 노트의 외부 전송 동의가 아닙니다. 노트 의미 분석은 별도의 로컬 경로를
+사용하며, 외부 분석을 추가하려면 명시적 전송 동의와 서버 측 등급 정책을 지켜야 합니다.
+
+운영 입력 화면과 API는 HTTPS로 제공하고, 프록시/APM에서 요청 본문과 Authorization
+헤더를 수집하지 마십시오. 감사로그는 등록/삭제 메타데이터만 기록합니다. 삭제해도 과거
+암호화 백업/WAL의 복사본이 자동 소거되지는 않으므로 유출 의심 시 OpenRouter에서도 키를
+폐기하고 조직의 백업 보존 정책을 적용하십시오.
+
 ## 검증
 
 ```bash

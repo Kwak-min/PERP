@@ -8,6 +8,7 @@ import * as audit from "../services/audit.service.js";
 import { createApproval } from "../services/approval.service.js";
 import { buildPreview, execute, rollback } from "../services/agent-executor.service.js";
 import * as providers from "../services/ai-provider.service.js";
+import { completeForUser } from "../services/ai-key.service.js";
 import * as rag from "../services/rag.service.js";
 import { verifyPassword } from "../utils/crypto.js";
 import { ApiError, notFound } from "../utils/errors.js";
@@ -91,11 +92,11 @@ export async function chat(req, res) {
   const memories = rag.recallMemories(principal);
   const context = rag.buildContext(citations, memories);
   const dataClass = rag.effectiveDataClass(payload.data_class, citations, memories);
-  const result = await providers.complete(
+  const result = await completeForUser(principal, {
     dataClass,
-    `${rag.SYSTEM_POLICY}\n\n${context}`,
-    payload.message,
-  );
+    system: `${rag.SYSTEM_POLICY}\n\n${context}`,
+    user: payload.message,
+  });
 
   const answer = {
     conclusion: result.text ? result.text.slice(0, 2000) : "근거가 되는 데이터를 찾지 못했습니다.",

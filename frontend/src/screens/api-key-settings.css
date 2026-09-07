@@ -1,0 +1,11 @@
+.api-key-settings { max-width: 768px; }
+.api-key-settings__summary { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 16px; }
+.api-key-settings__summary span { overflow-wrap: anywhere; }
+.api-key-settings .form-stack { gap: 8px; }
+.api-key-settings .form-stack p { margin: 0 0 8px; color: var(--of-text-muted); }
+.api-key-settings__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.api-key-settings__actions .button { min-height: 44px; }
+.api-key-settings__confirmation { padding: 16px; margin-top: 16px; border: 1px solid var(--of-border-strong); border-radius: var(--r-md); background: var(--of-surface-muted); }
+.api-key-settings__confirmation p { margin: 0 0 12px; }
+.api-key-settings__policy { display: grid; gap: 12px; margin: 0; padding-left: 16px; color: var(--of-text-muted); line-height: 1.6; }
+.api-key-settings .screen-notice { overflow-wrap: anywhere; }

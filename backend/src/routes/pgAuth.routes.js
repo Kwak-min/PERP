@@ -6,11 +6,13 @@ import * as members from "../controllers/pgMembers.controller.js";
 import * as mod from "../controllers/pgModules.controller.js";
 import { pgRoute, pgRecordRoute } from "../middleware/pgAccess.js";
 import { asyncRoute } from "../middleware/error.js";
+import { pgAgentKeyRouter } from "./pg-agent-key.routes.js";
 
 // perp_db (PostgreSQL) 슬라이스 라우터. strangler-fig: 기존 SQLite 라우트와 분리.
 // 마운트 지점: /api/v1/pg
 export const pgRouter = Router();
 
+pgRouter.use("/agent/api-key", pgAgentKeyRouter);
 pgRouter.get("/health", asyncRoute(controller.health));
 pgRouter.post("/auth/signup", asyncRoute(controller.signup));
 pgRouter.post("/companies", asyncRoute(createCompany));

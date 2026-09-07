@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import * as controller from "../controllers/agent.controller.js";
+import * as keyController from "../controllers/agent-key.controller.js";
 import { asyncRoute } from "../middleware/error.js";
 
 export const agentRouter = Router();
@@ -20,6 +21,11 @@ agentRouter.get("/actions", asyncRoute(controller.listActions));
 agentRouter.post("/actions", asyncRoute(controller.previewAction));
 agentRouter.post("/actions/:actionId/execute", asyncRoute(controller.executeAction));
 agentRouter.post("/actions/:actionId/rollback", asyncRoute(controller.rollbackAction));
+
+agentRouter.get("/api-key", asyncRoute(keyController.getKey));
+agentRouter.put("/api-key", asyncRoute(keyController.putKey));
+agentRouter.delete("/api-key", asyncRoute(keyController.deleteKey));
+agentRouter.post("/api-key/test", asyncRoute(keyController.testKey));
 
 agentRouter.get("/profile", asyncRoute(controller.getProfile));
 agentRouter.put("/profile", asyncRoute(controller.putProfile));

@@ -50,6 +50,7 @@ const expected = [
   "/projects/:projectId/board",
   "/projects/:projectId/timeline",
   "/reserve",
+  "/settings/ai-key",
   "/settings/approval-forms",
   "/settings/branches",
   "/settings/integrations",

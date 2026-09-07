@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 
 import type { ScreenDefinition } from "../routes/catalog";
 import { AttendanceScreen } from "./AttendanceScreen";
+import { ApiKeySettingsScreen } from "./ApiKeySettingsScreen";
 import { BranchSettingsScreen } from "./BranchSettingsScreen";
 import { LeaveScreen } from "./LeaveScreen";
 import { OrgChartScreen } from "./OrgChartScreen";
@@ -31,6 +32,7 @@ export const screenOverrides: Readonly<Record<string, ScreenComponent>> = {
   "VLT-002": VaultGraphScreen,
   "DOC-004": KnowledgeGraphScreen,
   "DASH-002": HomeBuilderScreen,
+  "SET-002": ApiKeySettingsScreen,
   // ── 예약 시스템 (통합 화면) ──────────────────────────────────
   "RSV-001": ReservationScreen,
 };
