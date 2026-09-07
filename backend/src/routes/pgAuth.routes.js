@@ -59,6 +59,12 @@ pgRouter.post("/tasks", asyncRoute(pgRoute(mod.createTask, "task.write", "tasks"
 pgRouter.get("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.approvals), "approval.decide", null)));
 pgRouter.post("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.createApproval), "approval.request", null)));
 pgRouter.post('/approvals/:id/decide', asyncRoute(pgRoute(withPgFeature('approvals', decidePgApproval), 'approval.decide', null)));
+pgRouter.get("/documents/graph", asyncRoute(pgRoute(mod.pgDocumentsGraph, "document.read", "documents")));
+pgRouter.post("/documents/upload", asyncRoute(pgRoute(mod.pgUploadDocument, "document.write", "documents")));
+pgRouter.get("/documents/:id/analysis", asyncRoute(pgRoute(mod.pgDocumentAnalysis, "document.read", "documents")));
+pgRouter.post("/documents/:id/analysis", asyncRoute(pgRoute(mod.pgDocumentAnalysis, "document.read", "documents")));
+pgRouter.get("/documents/:id", asyncRoute(pgRoute(mod.pgDocumentDetail, "document.read", "documents")));
+pgRouter.patch("/documents/:id", asyncRoute(pgRoute(mod.pgPatchDocument, "document.write", "documents")));
 pgRouter.get("/documents", asyncRoute(pgRoute(mod.documents, "document.read", "documents")));
 pgRouter.post("/documents", asyncRoute(pgRoute(mod.createDocument, "document.write", "documents")));
 pgRouter.get("/calendar", asyncRoute(pgRoute(mod.calendar, "event.read", "calendar")));

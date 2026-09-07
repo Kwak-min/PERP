@@ -8,7 +8,8 @@ export const documentsRouter = Router();
 documentsRouter.post("/spaces", asyncRoute(controller.createSpace));
 documentsRouter.get("/spaces", asyncRoute(controller.listSpaces));
 documentsRouter.get("/search/query", asyncRoute(controller.searchDocuments));
-// 주의: "/graph" 는 "/:documentId" 보다 먼저 등록해야 한다.
+documentsRouter.post("/upload", asyncRoute(controller.uploadDocument));
+// 주의: 정적·analysis 경로는 "/:documentId" 보다 먼저 등록해야 한다.
 documentsRouter.get("/graph", asyncRoute(controller.graph));
 documentsRouter.post("/meetings", asyncRoute(controller.createMeeting));
 documentsRouter.get("/meetings/:meetingId", asyncRoute(controller.getMeeting));
@@ -16,6 +17,8 @@ documentsRouter.post("/meetings/:meetingId/decisions", asyncRoute(controller.add
 documentsRouter.post("/meetings/:meetingId/decisions/confirm", asyncRoute(controller.confirmDecisions));
 documentsRouter.post("", asyncRoute(controller.createDocument));
 documentsRouter.get("", asyncRoute(controller.listDocuments));
+documentsRouter.get("/:documentId/analysis", asyncRoute(controller.documentAnalysis));
+documentsRouter.post("/:documentId/analysis", asyncRoute(controller.documentAnalysis));
 documentsRouter.get("/:documentId", asyncRoute(controller.getDocument));
 documentsRouter.patch("/:documentId", asyncRoute(controller.patchDocument));
 documentsRouter.delete("/:documentId", asyncRoute(controller.archiveDocument));

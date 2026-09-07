@@ -6,6 +6,7 @@ import { Button } from "../components/ui/Button";
 import { SectionCard } from "../components/ui/SectionCard";
 import type { ScreenDefinition } from "../routes/catalog";
 import { apiRequest, userMessageOf } from "../services/api";
+import { isPgWorkspace } from "../services/workspace";
 import { useSession } from "../store/session";
 import { MarkdownView } from "./vault/MarkdownView";
 import {
@@ -27,14 +28,26 @@ import {
 } from "./vault/graph3d";
 import {
   SENSITIVITY_LABEL,
+  documentAnalysisSchema,
   documentDetailSchema,
   knowledgeGraphSchema,
+  uploadedDocumentSchema,
+  type KnowledgeEdge,
   type KnowledgeNode,
 } from "./knowledge/model";
 
 import "./graph-stage.css";
 
 type Pointer = { down: boolean; x: number; y: number; moved: number };
+
+function base64Of(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
+}
 
 export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const session = useSession();
@@ -52,6 +65,10 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
   const openRequest = useRef<AbortController | null>(null);
 
   const [stats, setStats] = useState({ documents: 0, spaces: 0, chunks: 0, restricted: 0 });
+  const [graphEdges, setGraphEdges] = useState<readonly KnowledgeEdge[]>([]);
+  const [pendingAnalysis, setPendingAnalysis] = useState(0);
+  const [uploadProjects, setUploadProjects] = useState<readonly { id: string; title: string }[]>([]);
+  const [uploadProjectId, setUploadProjectId] = useState("");
   const [selected, setSelected] = useState<KnowledgeNode | null>(null);
   const [detail, setDetail] = useState<{ content: string; version: number; revisions: number } | null>(null);
   const [editing, setEditing] = useState(false);
@@ -64,6 +81,8 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
     () => (session?.orgId ? { token: session.token, orgId: session.orgId } : null),
     [session?.token, session?.orgId],
   );
+  const pgWorkspace = isPgWorkspace(session?.orgId);
+  const documentBase = pgWorkspace ? "/pg/documents" : "/documents";
 
   const draw = useCallback((): void => {
     const canvas = canvasRef.current;
@@ -85,15 +104,20 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
       const [a, b] = linkEnds(scene, l);
       const near = selectedRef.current === a || selectedRef.current === b;
       const fog = (depthAlpha(scene, a, camera.distance) + depthAlpha(scene, b, camera.distance)) / 2;
-      ctx.strokeStyle = near
-        ? `rgba(79,70,229,${(0.55 + fog * 0.4).toFixed(3)})`
-        : `rgba(100,116,139,${(fog * 0.3).toFixed(3)})`;
+      const inferred = scene.linkKinds[l] === "ai_similarity";
+      ctx.setLineDash(inferred ? [5, 4] : []);
+      ctx.strokeStyle = inferred
+        ? `rgba(13,148,136,${(0.4 + fog * 0.5).toFixed(3)})`
+        : near
+          ? `rgba(79,70,229,${(0.55 + fog * 0.4).toFixed(3)})`
+          : `rgba(100,116,139,${(fog * 0.3).toFixed(3)})`;
       ctx.lineWidth = near ? 1.8 : 1;
       ctx.beginPath();
       ctx.moveTo(projected(scene, a, 0), projected(scene, a, 1));
       ctx.lineTo(projected(scene, b, 0), projected(scene, b, 1));
       ctx.stroke();
     }
+    ctx.setLineDash([]);
 
     const palette = paletteRef.current;
     for (let o = 0; o < scene.count; o += 1) {
@@ -216,29 +240,80 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
     if (!apiSession) return;
     try {
       const graph = knowledgeGraphSchema.parse(
-        await apiRequest("/documents/graph", { session: apiSession }),
+        await apiRequest(`${documentBase}/graph`, { session: apiSession }),
       );
       nodesRef.current = graph.nodes;
       paletteRef.current = folderPalette(graph.nodes);
       sceneRef.current = buildScene({
         nodes: graph.nodes.map((n) => ({ id: n.id, title: n.title, folder: n.folder })),
-        // 조직의 space/link 간선은 직접 연결이며 개인 AI 추론 간선이 아니다.
-        edges: graph.edges.map(({ source, target_id, target_title }) => ({ source, target_id, target_title, kind: "manual" })),
+        edges: graph.edges.map(({ source, target_id, target_title, kind, score, provenance }) => ({
+          source,
+          target_id,
+          target_title,
+          kind: kind === "ai_similarity" ? "ai_similarity" : "manual",
+          ...(score === undefined ? {} : { score }),
+          ...(provenance === undefined ? {} : { provenance }),
+        })),
         orphans: graph.orphans,
       });
       selectedRef.current = -1;
       fittedRef.current = false;
+      setGraphEdges(graph.edges);
+      setPendingAnalysis(graph.analysis.filter((item) => item.state === "pending").length);
+      const projects = pgWorkspace
+        ? graph.nodes.filter((node) => node.kind === "space" && node.id.startsWith("project:"))
+          .map((node) => ({ id: node.id.slice("project:".length), title: node.title }))
+        : [];
+      setUploadProjects(projects);
+      setUploadProjectId((current) => projects.some((project) => project.id === current) ? current : (projects[0]?.id ?? ""));
       setStats(graph.stats);
       setError(null);
       kick();
     } catch (caught) {
       setError(userMessageOf(caught));
     }
-  }, [apiSession, kick]);
+  }, [apiSession, documentBase, kick, pgWorkspace]);
 
   useEffect(() => {
     void loadGraph();
   }, [loadGraph]);
+
+  async function upload(file: File): Promise<void> {
+    if (!apiSession || (pgWorkspace && !uploadProjectId)) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const lower = file.name.toLowerCase();
+      const mime = lower.endsWith(".md") ? "text/markdown" : lower.endsWith(".txt") ? "text/plain" : file.type;
+      const created = uploadedDocumentSchema.parse(await apiRequest(`${documentBase}/upload`, {
+        method: "POST",
+        session: apiSession,
+        body: {
+          filename: file.name,
+          mime,
+          content_base64: base64Of(await file.arrayBuffer()),
+          ...(pgWorkspace ? { project_id: uploadProjectId } : {}),
+        },
+      }));
+      const analysis = created.analysis?.state === "pending"
+        ? documentAnalysisSchema.parse(await apiRequest(`${documentBase}/${created.id}/analysis?wait=1`, { session: apiSession }))
+        : created.analysis;
+      await loadGraph();
+      const stored = pgWorkspace ? "회사 문서 저장" : "업로드·RAG 색인";
+      if (analysis?.state === "ready") {
+        setNotice(`${created.filename} ${stored}과 로컬 AI 유사 관계 분석을 완료했습니다.`);
+      } else if (analysis?.state === "unavailable") {
+        setNotice(`${created.filename} ${stored}은 완료했습니다. 로컬 임베딩 모델을 사용할 수 없어 AI 유사 관계는 만들지 않았습니다.`);
+      } else {
+        setNotice(`${created.filename} ${stored}은 완료했지만 로컬 AI 유사 관계 분석은 완료되지 않았습니다.`);
+      }
+    } catch (caught) {
+      setError(userMessageOf(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const openNode = useCallback(
     async (index: number): Promise<void> => {
@@ -254,7 +329,7 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
       setBusy(true);
       try {
         const parsed = documentDetailSchema.parse(
-          await apiRequest(`/documents/${node.id}`, { session: apiSession, signal: controller.signal }),
+          await apiRequest(`${documentBase}/${node.id}`, { session: apiSession, signal: controller.signal }),
         );
         if (controller.signal.aborted) return;
         setDetail({
@@ -271,7 +346,7 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
         }
       }
     },
-    [apiSession],
+    [apiSession, documentBase],
   );
 
   async function save(): Promise<void> {
@@ -279,12 +354,14 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
     setBusy(true);
     setError(null);
     try {
-      await apiRequest(`/documents/${selected.id}`, {
+      await apiRequest(`${documentBase}/${selected.id}`, {
         method: "PATCH",
         session: apiSession,
         body: { content: detail.content, version: detail.version },
       });
-      setNotice(`${selected.title} 문서를 저장했습니다. 새 판으로 기록되고 RAG 색인도 갱신됩니다.`);
+      setNotice(pgWorkspace
+        ? `${selected.title} 회사 문서를 새 버전으로 저장하고 유사 관계 분석을 갱신했습니다.`
+        : `${selected.title} 문서를 저장했습니다. 새 판으로 기록되고 RAG 색인도 갱신됩니다.`);
       setEditing(false);
       await loadGraph();
       const index = nodesRef.current.findIndex((n) => n.id === selected.id);
@@ -345,11 +422,34 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
           </div>
           <h1>{screen.label}</h1>
           <p>
-            AI Agent 가 근거로 쓰는 조직 문서를 공간별로 묶어 3D 로 봅니다. 노드를 누르면 본문과 색인 상태를
-            확인하고 바로 고칠 수 있습니다.
+            선택한 회사의 조직 문서를 공간별로 묶고, 로컬 AI가 분석한 유사 관계를 3D로 봅니다. 노드를 누르면
+            본문과 분석 상태를 확인하고 바로 고칠 수 있습니다.
           </p>
         </div>
         <div className="screen-header__actions">
+          {pgWorkspace && (
+            <label className="graph-upload-project">
+              저장할 프로젝트
+              <select aria-label="저장할 프로젝트" value={uploadProjectId} onChange={(event) => setUploadProjectId(event.target.value)} disabled={busy || uploadProjects.length === 0}>
+                {uploadProjects.length === 0 && <option value="">프로젝트 없음</option>}
+                {uploadProjects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
+              </select>
+            </label>
+          )}
+          <label className="graph-upload">
+            <span>{busy ? "처리 중…" : "문서 파일 올리기 (.md/.txt)"}</span>
+            <input
+              type="file"
+              aria-label="조직 문서 파일 올리기"
+              accept=".md,.txt,text/markdown,text/plain"
+              disabled={busy || (pgWorkspace && !uploadProjectId)}
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = "";
+                if (file) void upload(file);
+              }}
+            />
+          </label>
           <Button
             tone={spin ? "primary" : "neutral"}
             size="small"
@@ -391,15 +491,19 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
         <SectionCard
           padded={false}
           title="조직 지식 그래프"
-          subtitle={`문서 ${stats.documents} · 공간 ${stats.spaces} · RAG 청크 ${stats.chunks}${
+          subtitle={`문서 ${stats.documents} · 공간 ${stats.spaces} · ${pgWorkspace ? "본문 구간" : "RAG 청크"} ${stats.chunks}${
             stats.restricted > 0 ? ` · 권한 밖 ${stats.restricted}` : ""
           }`}
           foot="검은 노드=공간 · 붉은 테두리=민감 문서 · 드래그: 회전 · 휠: 확대"
         >
+          <p className="graph-note-picker">올릴 수 있는 파일: UTF-8 .md/.txt, 최대 1 MB · 실선: 공간/직접 위키 링크 · 청록 점선: 로컬 AI 유사도 (확정 관계가 아님)</p>
+          {pgWorkspace && <p className="graph-rag-limit" role="note">회사 문서 업로드는 현재 지식 그래프의 로컬 유사 관계 분석용입니다. AI Agent 채팅 RAG 색인에는 아직 연결되지 않습니다.</p>}
+          {pendingAnalysis > 0 && <p className="graph-note-picker" role="status">로컬 AI 분석 대기 {pendingAnalysis}개</p>}
           <div className="graph-stage">
             <canvas
               ref={canvasRef}
               className="graph-stage__canvas"
+              data-ai-links={graphEdges.filter((edge) => edge.kind === "ai_similarity").length}
               role="application"
               aria-label="조직 지식 3D 그래프"
               onPointerDown={(event) => {
@@ -465,7 +569,7 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
             selected
               ? selected.kind === "space"
                 ? "공간에 속한 문서"
-                : "AI Agent 가 인용할 수 있는 문서"
+                : "조직 문서 본문과 관계 분석"
               : "그래프에서 노드를 눌러 선택하세요"
           }
         >
@@ -506,9 +610,22 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
               <ul className="graph-meta">
                 <li><b>공간</b><span>{selected.folder}</span></li>
                 <li><b>민감도</b><span>{SENSITIVITY_LABEL[selected.sensitivity] ?? selected.sensitivity}</span></li>
-                <li><b>RAG 청크</b><span>{selected.chunks}개</span></li>
+                <li><b>{pgWorkspace ? "본문 구간" : "RAG 청크"}</b><span>{selected.chunks}개</span></li>
                 {selected.tags.length > 0 && <li><b>태그</b><span>{selected.tags.join(", ")}</span></li>}
                 {detail && <li><b>판</b><span>v{detail.version} · 이력 {detail.revisions}건</span></li>}
+              </ul>
+
+              <ul aria-label="선택 문서 연결">
+                {graphEdges.filter((edge) => edge.source === selected.id || edge.target_id === selected.id).map((edge, index) => {
+                  const relatedId = edge.source === selected.id ? edge.target_id : edge.source;
+                  const title = nodesRef.current.find((node) => node.id === relatedId)?.title ?? edge.target_title;
+                  return (
+                    <li key={`${edge.source}:${edge.target_id}:${edge.kind}:${index}`} data-edge-kind={edge.kind} data-related-document-id={relatedId ?? ""}>
+                      {edge.kind === "ai_similarity" ? `AI 추론 · ${((edge.score ?? 0) * 100).toFixed(1)}% 코사인 유사도` : edge.kind === "space" ? "소속 공간" : "직접 위키 링크"}: {title}
+                      {edge.provenance && <small> · {edge.provenance.model} · v{edge.provenance.source_version}/v{edge.provenance.target_version}</small>}
+                    </li>
+                  );
+                })}
               </ul>
 
               {busy && !detail && <p className="vault-empty">문서를 불러오는 중…</p>}

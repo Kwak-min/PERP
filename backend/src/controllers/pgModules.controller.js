@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { z } from "zod";
 import { pgIdentity } from "../middleware/pgAccess.js";
 import { pgQuery, pgTransaction } from "../config/pg.js";
@@ -6,6 +8,12 @@ import { hashPassword } from "../utils/crypto.js";
 import { isCompanyMember } from "../services/pg-company.service.js";
 import { ApiError } from "../utils/errors.js";
 import { CANDIDATE_LIMIT, pgVaultScope, vaultSemantic } from "../services/vault-semantic.service.js";
+import {
+  DOCUMENT_CANDIDATE_LIMIT,
+  documentSemantic,
+  pgDocumentSemanticScope,
+} from "../services/document-semantic.service.js";
+import { extractSupportedTextUpload, persistUploadedSource } from "../services/document-ingestion.service.js";
 
 // perp_db(PostgreSQL) 모듈 read 슬라이스.
 // strangler-fig 1단계: 홈/프로젝트/캘린더/재무/HR 화면을 실데이터로 전환.
@@ -295,21 +303,236 @@ export async function tasks(req, res) {
   res.json({ items: rows });
 }
 
-// GET /api/v1/pg/documents — 문서
+// ── 조직 문서 / 로컬 의미 그래프 ─────────────────────────────────
+const pgDocumentId = z.string().regex(/^\d+$/);
+const pgDocumentUploadInput = z.object({
+  filename: z.string().min(1).max(255),
+  mime: z.string().min(1).max(100),
+  content_base64: z.string().min(1).max(1_400_000),
+  project_id: z.string().regex(/^[1-9]\d*$/),
+  title: z.string().trim().min(1).max(300).optional(),
+}).strict();
+const pgDocumentPatchInput = z.object({
+  title: z.string().trim().min(1).max(300).optional(),
+  content: z.string().optional(),
+  version: z.number().int().positive(),
+}).strict().refine((value) => value.title !== undefined || value.content !== undefined, "변경할 내용을 입력하세요");
+const PG_DOCUMENT_FIELDS = `d.id, d.project_id, p.name AS project_name, d.title,
+  COALESCE(d.content_md, '') AS content_md, d.file_id, d.author_id, d.version,
+  d.created_at, d.updated_at`;
+
+const toPgDocument = (row) => ({
+  id: String(row.id),
+  project_id: String(row.project_id),
+  project_name: row.project_name,
+  title: row.title,
+  content: row.content_md ?? "",
+  file_id: row.file_id == null ? null : String(row.file_id),
+  author_id: row.author_id == null ? null : String(row.author_id),
+  version: Number(row.version),
+  updated_at: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at ?? ""),
+  created_at: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at ?? ""),
+});
+
+async function pgDocumentsFor(companyId, bounded = false) {
+  const { rows } = await pgQuery(
+    `SELECT ${PG_DOCUMENT_FIELDS}
+       FROM project.documents d
+       JOIN project.projects p ON p.id = d.project_id
+      WHERE p.company_id = $1
+      ORDER BY d.updated_at DESC, d.id
+      ${bounded ? "LIMIT $2" : ""}`,
+    bounded ? [companyId, DOCUMENT_CANDIDATE_LIMIT + 1] : [companyId],
+  );
+  return rows.map(toPgDocument);
+}
+
+async function pgDocumentFor(companyId, id) {
+  const { rows } = await pgQuery(
+    `SELECT ${PG_DOCUMENT_FIELDS}
+       FROM project.documents d
+       JOIN project.projects p ON p.id = d.project_id
+      WHERE d.id = $1 AND p.company_id = $2`,
+    [pgDocumentId.parse(String(id)), companyId],
+  );
+  if (!rows[0]) throw new ApiError("NOT_FOUND", "문서를 찾을 수 없습니다");
+  return toPgDocument(rows[0]);
+}
+
+function analyzePgDocument(identity, document) {
+  return documentSemantic.schedule(
+    pgDocumentSemanticScope(identity),
+    document,
+    () => pgDocumentsFor(identity.companyId, true),
+  );
+}
+
+async function requirePgProject(companyId, projectId) {
+  const { rows } = await pgQuery(
+    `SELECT 1 FROM project.projects WHERE id = $1 AND company_id = $2`,
+    [projectId, companyId],
+  );
+  if (!rows[0]) throw new ApiError("VALIDATION_ERROR", "선택한 회사의 유효한 프로젝트가 아닙니다");
+}
+
+// GET /api/v1/pg/documents — 문서 목록
 export async function documents(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
+  const rows = await pgDocumentsFor(companyId);
+  res.json({ items: rows.map((document) => ({
+    __id: document.id,
+    제목: document.title,
+    프로젝트: document.project_name,
+    작성자: document.author_id ?? "—",
+    버전: document.version,
+    수정일: document.updated_at,
+  })) });
+}
+
+// GET /api/v1/pg/documents/graph — 선택 회사의 프로젝트/문서/직접·AI 연결
+export async function pgDocumentsGraph(req, res) {
+  const identity = resolveUser(req);
+  const scope = pgDocumentSemanticScope(identity);
+  if (req.query.wait === "1") await documentSemantic.wait(scope);
+  const [{ rows: projectRows }, documents] = await Promise.all([
+    pgQuery(`SELECT id, name, updated_at FROM project.projects WHERE company_id = $1 ORDER BY name`, [identity.companyId]),
+    pgDocumentsFor(identity.companyId),
+  ]);
+  const projectName = new Map(projectRows.map((project) => [String(project.id), project.name]));
+  const titleIds = new Map();
+  for (const document of documents) {
+    const ids = titleIds.get(document.title) ?? [];
+    ids.push(document.id);
+    titleIds.set(document.title, ids);
+  }
+  const chunks = new Map(documents.map((document) => [document.id,
+    Math.max(1, document.content.split("\n\n").map((part) => part.trim()).filter(Boolean).length)]));
+  const nodes = [
+    ...projectRows.map((project) => ({
+      id: `project:${project.id}`, kind: "space", title: project.name, folder: project.name,
+      sensitivity: "org", chunks: 0, tags: [], updated_at: project.updated_at instanceof Date ? project.updated_at.toISOString() : String(project.updated_at ?? ""),
+    })),
+    ...documents.map((document) => ({
+      id: document.id, kind: "document", title: document.title, folder: document.project_name,
+      sensitivity: "internal", chunks: chunks.get(document.id), tags: [], updated_at: document.updated_at,
+    })),
+  ];
+  const edges = [];
+  for (const document of documents) {
+    if (projectName.has(document.project_id)) {
+      edges.push({ source: document.id, target_id: `project:${document.project_id}`, target_title: document.project_name, kind: "space" });
+    }
+    const seen = new Set();
+    for (const match of document.content.matchAll(/\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g)) {
+      const title = match[1].trim();
+      if (!title || seen.has(title)) continue;
+      seen.add(title);
+      const ids = titleIds.get(title) ?? [];
+      const targetId = ids.length === 1 ? ids[0] : null;
+      if (targetId === document.id) continue;
+      edges.push({ source: document.id, target_id: targetId, target_title: targetId ? title : "", kind: "link" });
+    }
+  }
+  const semantic = documentSemantic.graph(scope, documents);
+  edges.push(...semantic.edges);
+  const linked = new Set(edges.flatMap((edge) => [edge.source, edge.target_id]).filter(Boolean));
+  res.json({
+    nodes,
+    edges,
+    analysis: semantic.analysis,
+    orphans: documents.filter((document) => !linked.has(document.id)).map((document) => document.id),
+    stats: {
+      documents: documents.length,
+      spaces: projectRows.length,
+      chunks: [...chunks.values()].reduce((sum, count) => sum + count, 0),
+      restricted: 0,
+    },
+  });
+}
+
+export async function pgDocumentDetail(req, res) {
+  const identity = resolveUser(req);
+  const document = await pgDocumentFor(identity.companyId, req.params.id);
+  res.json({
+    ...document,
+    visibility: "org",
+    sensitivity: "internal",
+    tags: [],
+    versions: [{ revision: document.version, author_id: document.author_id, created_at: document.updated_at }],
+    analysis: documentSemantic.status(pgDocumentSemanticScope(identity), document),
+  });
+}
+
+export async function pgDocumentAnalysis(req, res) {
+  const identity = resolveUser(req);
+  let document = await pgDocumentFor(identity.companyId, req.params.id);
+  const scope = pgDocumentSemanticScope(identity);
+  if (req.method === "POST") analyzePgDocument(identity, document);
+  if (req.query.wait === "1") await documentSemantic.wait(scope, document.id);
+  document = await pgDocumentFor(identity.companyId, document.id);
+  res.json(documentSemantic.status(scope, document));
+}
+
+export async function pgUploadDocument(req, res) {
+  const identity = resolveUser(req);
+  const payload = pgDocumentUploadInput.parse(req.body);
+  const extracted = extractSupportedTextUpload(payload);
+  await requirePgProject(identity.companyId, payload.project_id);
+  const stored = await persistUploadedSource({ tenantId: "pg", orgId: identity.companyId, extension: extracted.extension, bytes: extracted.bytes });
+  let row;
+  try {
+    row = await pgTransaction(async (client) => {
+      const { rows: files } = await client.query(
+        `INSERT INTO files.objects
+          (company_id, uploader_id, original_name, extension, mime_type, size_bytes,
+           checksum_sha256, storage_bucket, storage_key)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+        [identity.companyId, identity.userId, payload.filename, extracted.extension.slice(1), extracted.mime,
+          stored.size, stored.checksum, "orbitflow-local", stored.storageKey],
+      );
+      const { rows } = await client.query(
+        `INSERT INTO project.documents (project_id, title, content_md, file_id, author_id)
+         VALUES ($1,$2,$3,$4,$5)
+         RETURNING id, project_id, title, content_md, file_id, author_id, version, created_at, updated_at`,
+        [payload.project_id, payload.title ?? path.basename(payload.filename, extracted.extension), extracted.text, files[0].id, identity.userId],
+      );
+      return { ...rows[0], project_name: (await client.query("SELECT name FROM project.projects WHERE id = $1 AND company_id = $2", [payload.project_id, identity.companyId])).rows[0].name };
+    });
+  } catch (error) {
+    await stored.discard();
+    throw error;
+  }
+  const document = toPgDocument(row);
+  res.status(201).json({
+    ...document,
+    filename: payload.filename,
+    extraction: { format: extracted.format, bytes: stored.size, encoding: "utf-8" },
+    analysis: analyzePgDocument(identity, document),
+  });
+}
+
+export async function pgPatchDocument(req, res) {
+  const identity = resolveUser(req);
+  const payload = pgDocumentPatchInput.parse(req.body);
   const { rows } = await pgQuery(
-    `SELECT d.id AS __id, d.title AS 제목, p.name AS 프로젝트, u.name AS 작성자,
-            d.version AS 버전, d.updated_at AS 수정일
-       FROM project.documents d
-       JOIN project.projects p ON p.id = d.project_id
-       LEFT JOIN auth.users u ON u.id = d.author_id
-      WHERE p.company_id = $1
-      ORDER BY d.updated_at DESC`,
-    [companyId],
+    `UPDATE project.documents d
+        SET title = COALESCE($3, d.title), content_md = COALESCE($4, d.content_md),
+            version = d.version + 1
+       FROM project.projects p
+      WHERE d.id = $1 AND p.id = d.project_id AND p.company_id = $2 AND d.version = $5
+      RETURNING d.id, d.project_id, p.name AS project_name, d.title,
+                COALESCE(d.content_md, '') AS content_md, d.file_id, d.author_id,
+                d.version, d.created_at, d.updated_at`,
+    [pgDocumentId.parse(String(req.params.id)), identity.companyId, payload.title ?? null, payload.content ?? null, payload.version],
   );
-  res.json({ items: rows });
+  if (!rows[0]) {
+    await pgDocumentFor(identity.companyId, req.params.id);
+    throw new ApiError("VERSION_CONFLICT", "문서가 다른 곳에서 수정되었습니다");
+  }
+  const document = toPgDocument(rows[0]);
+  documentSemantic.invalidate(pgDocumentSemanticScope(identity), document.id, document.version);
+  res.json({ ...document, analysis: analyzePgDocument(identity, document) });
 }
 
 // GET /api/v1/pg/projects/options — 선택지(프로젝트) { value, label }
@@ -325,27 +548,22 @@ export async function projectOptions(req, res) {
 
 // POST /api/v1/pg/documents — 문서 생성
 export async function createDocument(req, res) {
-  const { userId, companyId } = await resolveUser(req);
-  if (!companyId) {
-    throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 문서를 만들 수 있습니다");
-  }
+  const identity = resolveUser(req);
   const body = req.body ?? {};
-  const projectId = body.project_id;
+  const projectId = String(body.project_id ?? "");
   const title = String(body.title ?? "").trim();
-  const contentMd = String(body.content_md ?? "").trim() || null;
+  const contentMd = String(body.content_md ?? "");
   if (!projectId) throw new ApiError("VALIDATION_ERROR", "프로젝트를 선택하세요");
   if (!title) throw new ApiError("VALIDATION_ERROR", "제목은 필수입니다");
-  const { rows: ok } = await pgQuery(
-    `SELECT 1 FROM project.projects WHERE id = $1 AND company_id = $2`,
-    [projectId, companyId],
-  );
-  if (!ok[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 프로젝트입니다");
+  await requirePgProject(identity.companyId, projectId);
   const { rows } = await pgQuery(
-    `INSERT INTO project.documents (project_id, title, content_md, author_id)
-     VALUES ($1, $2, $3, $4) RETURNING id`,
-    [projectId, title, contentMd, userId],
+    `INSERT INTO project.documents (project_id, title, content_md, file_id, author_id)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, project_id, title, content_md, file_id, author_id, version, created_at, updated_at`,
+    [projectId, title, contentMd, null, identity.userId],
   );
-  res.status(201).json({ id: String(rows[0].id) });
+  const document = toPgDocument({ ...rows[0], project_name: "" });
+  res.status(201).json({ ...document, analysis: analyzePgDocument(identity, document) });
 }
 
 // GET /api/v1/pg/members/options — 구성원 선택지 { value, label }
@@ -378,7 +596,8 @@ const DELETABLE = {
 };
 
 export async function deleteRecord(req, res) {
-  const { companyId } = await resolveUser(req);
+  const identity = resolveUser(req);
+  const { companyId } = identity;
   if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 삭제할 수 있습니다");
   const { resource, id } = req.params;
   const sql = Object.hasOwn(DELETABLE, resource) ? DELETABLE[resource] : null;
@@ -386,6 +605,7 @@ export async function deleteRecord(req, res) {
   if (!/^\d+$/.test(String(id))) throw new ApiError("VALIDATION_ERROR", "잘못된 id");
   const result = await pgQuery(sql, [id, companyId]);
   if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
+  if (resource === "documents") documentSemantic.invalidate(pgDocumentSemanticScope(identity), String(id));
   res.json({ ok: true });
 }
 
@@ -440,7 +660,8 @@ export async function getRecord(req, res) {
 
 // PATCH /api/v1/pg/records/:resource/:id — 수정
 export async function updateRecord(req, res) {
-  const { companyId } = await resolveUser(req);
+  const identity = resolveUser(req);
+  const { companyId } = identity;
   if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 수정할 수 있습니다");
   const { resource, id } = req.params;
   const def = EDITABLE[resource];
@@ -464,11 +685,13 @@ export async function updateRecord(req, res) {
     sets.push(`${col} = $${params.length}`);
   }
   if (sets.length === 0) throw new ApiError("VALIDATION_ERROR", "변경할 내용이 없습니다");
+  if (resource === "documents") sets.push("version = t.version + 1");
   const result = await pgQuery(
     `UPDATE ${def.table} t SET ${sets.join(", ")} WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")}`,
     params,
   );
   if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
+  if (resource === "documents") documentSemantic.invalidate(pgDocumentSemanticScope(identity), String(id));
   res.json({ ok: true });
 }
 

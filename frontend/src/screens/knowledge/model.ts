@@ -12,18 +12,34 @@ export const knowledgeNodeSchema = z.object({
   updated_at: z.string().catch(""),
 });
 
+export const documentAnalysisSchema = z.object({
+  state: z.enum(["pending", "ready", "error", "unavailable", "not_analyzed"]),
+  reason: z.string().optional(),
+  version: z.number().int(),
+  model: z.string().nullable(),
+  local_only: z.literal(true),
+});
+
+export const knowledgeEdgeSchema = z.object({
+  source: z.string(),
+  target_id: z.string().nullable().catch(null),
+  target_title: z.string().catch(""),
+  kind: z.enum(["space", "link", "ai_similarity"]).catch("link"),
+  score: z.number().min(-1).max(1).optional(),
+  provenance: z.object({
+    provider: z.literal("ollama-local"),
+    model: z.string(),
+    method: z.literal("embedding_cosine"),
+    source_version: z.number().int(),
+    target_version: z.number().int(),
+    analyzed_at: z.string(),
+  }).optional(),
+});
+
 export const knowledgeGraphSchema = z.object({
   nodes: z.array(knowledgeNodeSchema),
-  edges: z
-    .array(
-      z.object({
-        source: z.string(),
-        target_id: z.string().nullable().catch(null),
-        target_title: z.string().catch(""),
-        kind: z.string().catch("link"),
-      }),
-    )
-    .catch([]),
+  edges: z.array(knowledgeEdgeSchema).catch([]),
+  analysis: z.array(z.object({ id: z.string() }).and(documentAnalysisSchema)).catch([]),
   orphans: z.array(z.string()).catch([]),
   stats: z
     .object({
@@ -43,7 +59,15 @@ export const documentDetailSchema = z.object({
   versions: z.array(z.unknown()).catch([]),
 });
 
+export const uploadedDocumentSchema = z.object({
+  id: z.string(),
+  filename: z.string(),
+  extraction: z.object({ format: z.enum(["markdown", "plain_text"]), bytes: z.number(), encoding: z.literal("utf-8") }),
+  analysis: documentAnalysisSchema.nullable(),
+});
+
 export type KnowledgeNode = z.infer<typeof knowledgeNodeSchema>;
+export type KnowledgeEdge = z.infer<typeof knowledgeEdgeSchema>;
 export type KnowledgeGraph = z.infer<typeof knowledgeGraphSchema>;
 
 export const SENSITIVITY_LABEL: Readonly<Record<string, string>> = {
