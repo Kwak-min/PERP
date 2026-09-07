@@ -2,7 +2,8 @@ import { z } from "zod";
 
 import { pgQuery, pgTransaction } from "../config/pg.js";
 import { currentUser } from "../middleware/auth.js";
-import { pgIdentity, pgWorkspace, PG_CREATOR_PERMISSIONS } from "../middleware/pgAccess.js";
+import { pgWorkspaces, pgMembershipError } from "../middleware/pgAccess.js";
+import { grantCompanyCreator } from "../services/pg-company.service.js";
 import { OPTIONAL_MODULES } from "../config/modules.js";
 import { hashPassword, verifyPassword } from "../utils/crypto.js";
 import { ApiError } from "../utils/errors.js";
@@ -72,7 +73,7 @@ const signupSchema = z.object({
 
 // POST /api/v1/pg/auth/signup
 // 신규 계정을 auth.users 에 저장한다. (즉시 승인 정책: approval_status='approved')
-// 가입 시 그 사람의 회사(작업공간) + 기본 부서·직급을 함께 만들고 관리자(대표)로 지정한다.
+// 가입 시 회사(작업공간)와 직급을 만들고 관리자(대표)로 지정한다. 부서는 사용자가 별도로 추가한다.
 // 로그인과 동일하게 세션을 생성해 토큰을 반환 → 가입 직후 자동 로그인.
 export async function signup(req, res) {
   const parsed = signupSchema.safeParse(req.body ?? {});
@@ -112,13 +113,6 @@ export async function signup(req, res) {
     );
     const ceoPositionId = pos.find((p) => p.name === "대표")?.id ?? pos[0].id;
 
-    const { rows: dep } = await client.query(
-      `INSERT INTO org.departments (company_id, name, code) VALUES ($1, '경영지원팀', 'MGMT')
-       RETURNING id`,
-      [companyId],
-    );
-    const deptId = dep[0].id;
-
     // 기본 활성 모듈(전체 옵션) 세팅
     await client.query(
       `INSERT INTO org.company_modules (company_id, module_key)
@@ -134,18 +128,12 @@ export async function signup(req, res) {
           password_hash, approval_status, is_admin, approved_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'approved', true, now())
        RETURNING id`,
-      [companyId, deptId, ceoPositionId, email, name, phone ?? null, passwordHash],
+      [companyId, null, ceoPositionId, email, name, phone ?? null, passwordHash],
     );
     const createdUserId = u[0].id;
-    // 새 회사 생성자에게만 명시적 PG 역할을 기록한다. 기존 관리자 플래그는 사용하지 않는다.
-    await client.query(`INSERT INTO org.permissions (code, module)
-      SELECT code, split_part(code, '.', 1) FROM unnest($1::text[]) AS code
-      ON CONFLICT (code) DO NOTHING`, [PG_CREATOR_PERMISSIONS]);
-    const { rows: roles } = await client.query(
-      "INSERT INTO org.roles (company_id, name, is_system) VALUES ($1, 'company_creator', true) RETURNING id", [companyId]);
-    await client.query(`INSERT INTO org.role_permissions (role_id, permission_id)
-      SELECT $1, id FROM org.permissions WHERE code = ANY($2::text[])`, [roles[0].id, PG_CREATOR_PERMISSIONS]);
-    await client.query("INSERT INTO org.user_roles (user_id, role_id, granted_by) VALUES ($1, $2, $1)", [createdUserId, roles[0].id]);
+    await client.query(`INSERT INTO org.company_memberships (company_id, user_id, department_id, position_id, created_by)
+      VALUES ($1, $2, $3, $4, $2)`, [companyId, createdUserId, null, ceoPositionId]);
+    await grantCompanyCreator(client, companyId, createdUserId);
     const { rows: sessionRows } = await client.query(
       `INSERT INTO auth.sessions (user_id, ip_address, user_agent)
        VALUES ($1, $2, $3)
@@ -158,7 +146,7 @@ export async function signup(req, res) {
       [createdUserId, email, ip],
     );
     return { userId: createdUserId, session: sessionRows[0] };
-  });
+  }).catch(error => { throw pgMembershipError(error); });
 
   const summary = await loadUserSummary(userId);
 
@@ -172,8 +160,7 @@ export async function signup(req, res) {
 
 // PG 회사만 반환한다. SQLite 소속과 숫자 ID/이메일로 합치지 않는다.
 export async function workspace(req, res) {
-  const { companyId } = pgIdentity(req);
-  res.json({ organizations: companyId ? [await pgWorkspace(req)] : [] });
+  res.json({ organizations: await pgWorkspaces(req) });
 }
 
 // POST /api/v1/pg/auth/login

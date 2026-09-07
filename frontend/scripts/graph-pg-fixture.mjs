@@ -18,6 +18,7 @@ export async function startPgGraphFixture() {
   pgPool.query=async(sql,values=[])=>{
     queries.push({sql,values});
     if(sql.includes("FROM auth.sessions s"))return{rows:values[0]===token?[{id:"101",session_id:"qa-session",company_id:"77",name:"PG QA",email:"qa@example.invalid",account_status:"active",approval_status:"approved",login_at:new Date().toISOString()}]:[]};
+    if(sql.includes("FROM org.company_memberships m JOIN org.companies c"))return{rows:values[0]==="101"&&values[1]==="77"?[{user_id:"101",company_id:"77",department_id:null,position_id:null,name:"PG QA Workspace"}]:[]};
     if(sql.includes("FROM org.user_roles"))return{rows:[{code:"agent.chat",role:"member"}]};
     if(sql.includes("FROM org.company_modules"))return{rows:[{module_key:"agent"}]};
     if(sql.includes("FROM org.companies"))return{rows:[{name:"PG QA Workspace"}]};

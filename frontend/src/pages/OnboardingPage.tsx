@@ -3,7 +3,8 @@ import { Navigate, useNavigate } from "react-router-dom";
 import { z } from "zod";
 
 import { Button } from "../components/ui/Button";
-import { apiRequest, userMessageOf } from "../services/api";
+import { ApiError, apiRequest, userMessageOf } from "../services/api";
+import { isPgToken, organizationsOf } from "../services/auth";
 import { sessionStore, useSession } from "../store/session";
 
 const catalogSchema = z.object({
@@ -36,15 +37,18 @@ const types = [
 export function OnboardingPage() {
   const session = useSession();
   const navigate = useNavigate();
+  const nativePg = isPgToken(session?.token ?? "");
+  const availableTypes = nativePg ? types.filter(([key]) => key === "company") : types;
   const [step, setStep] = useState(1);
   const TOTAL_STEPS = 4;
-  const [type, setType] = useState("club");
+  const [type, setType] = useState(nativePg ? "company" : "club");
   const [name, setName] = useState("");
   const [modules, setModules] = useState<string[]>([]);
   const [catalog, setCatalog] = useState<z.infer<typeof catalogSchema>["items"]>([]);
   const [departments, setDepartments] = useState("");
   const [fiscalStart, setFiscalStart] = useState(1);
   const [busy, setBusy] = useState(false);
+  const [createdOrgId, setCreatedOrgId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -67,11 +71,15 @@ export function OnboardingPage() {
     setBusy(true);
     setError(null);
     try {
-      const organization = orgSchema.parse(
-        await apiRequest("/tenants", {
+      const organization = createdOrgId ? { org_id: createdOrgId } : orgSchema.parse(
+        await apiRequest(nativePg ? "/pg/companies" : "/tenants", {
           method: "POST",
           session: { token: session.token, orgId: null },
-          body: {
+          body: nativePg ? {
+            name: name.trim(),
+            modules: catalog.filter((item) => item.core || modules.includes(item.key)).map((item) => item.key),
+            departments: departments.split(",").map((item) => item.trim()).filter(Boolean),
+          } : {
             name: name.trim(),
             type,
             currency: "KRW",
@@ -85,18 +93,16 @@ export function OnboardingPage() {
           },
         }),
       );
-      sessionStore.patch({
-        orgId: organization.org_id,
-        organizations: [
-          ...session.organizations,
-          {
-            org_id: organization.org_id,
-            org_name: organization.name,
-            org_type: organization.type,
-            roles: ["owner"],
-          },
-        ],
-      });
+      // 생성은 이미 완료됐다. 소속 조회만 실패하면 같은 조직을 다시 확인한다.
+      setCreatedOrgId(organization.org_id);
+      const organizations = await organizationsOf(session.token);
+      const created = organizations.find((org) => org.org_id === organization.org_id);
+      if (!created) {
+        throw new ApiError("생성된 조직의 소속을 확인할 수 없습니다. 다시 로그인해 주세요.", {
+          code: "NO_ORGANIZATION", status: 403, requestId: "", details: {},
+        });
+      }
+      sessionStore.patch({ orgId: created.org_id, organizations: [...organizations] });
       navigate("/", { replace: true });
     } catch (caught) {
       setError(userMessageOf(caught));
@@ -115,7 +121,7 @@ export function OnboardingPage() {
           </span>
         ))}
       </div>
-      <span className="eyebrow">ORGANIZATION SETUP</span>
+      <span className="eyebrow">{nativePg ? "POSTGRESQL COMPANY SETUP" : "ORGANIZATION SETUP"}</span>
       <h2 id="onboarding-title">
         {step === 1
           ? "조직 유형을 선택하세요"
@@ -129,7 +135,7 @@ export function OnboardingPage() {
 
       {step === 1 && (
         <div className="type-grid" role="radiogroup" aria-label="조직 유형">
-          {types.map(([key, label, description]) => (
+          {availableTypes.map(([key, label, description]) => (
             <button
               key={key}
               type="button"
@@ -146,11 +152,11 @@ export function OnboardingPage() {
       {step === 2 && (
         <div className="form-stack">
           <label>조직 이름<input value={name} onChange={(event) => setName(event.target.value)} placeholder="예: 오비트 연구회" required /></label>
-          <div className="form-split">
+          {!nativePg && <div className="form-split">
             <label>기본 통화<select defaultValue="KRW"><option value="KRW">KRW · 대한민국 원</option></select></label>
             <label>회계연도 시작<select value={String(fiscalStart)} onChange={(event) => setFiscalStart(Number(event.target.value))}><option value="1">1월</option><option value="3">3월</option><option value="7">7월</option></select></label>
-          </div>
-          {type === "custom" && (
+          </div>}
+          {(nativePg || type === "custom") && (
             <label>추가할 부서 (선택, 쉼표로 구분)<input value={departments} onChange={(event) => setDepartments(event.target.value)} /></label>
           )}
         </div>
@@ -176,7 +182,8 @@ export function OnboardingPage() {
         <dl className="summary-review">
           <div><dt>유형</dt><dd>{types.find(([key]) => key === type)?.[1] ?? type}</dd></div>
           <div><dt>이름</dt><dd>{name.trim() || "—"}</dd></div>
-          <div><dt>통화·회계연도</dt><dd>KRW · {fiscalStart}월 시작</dd></div>
+          {!nativePg && <div><dt>통화·회계연도</dt><dd>KRW · {fiscalStart}월 시작</dd></div>}
+          {nativePg && <div><dt>저장소</dt><dd>PostgreSQL 회사</dd></div>}
           <div>
             <dt>켠 기능</dt>
             <dd>
@@ -192,6 +199,7 @@ export function OnboardingPage() {
       <div className="onboarding-actions">
         <Button
           tone="neutral"
+          disabled={busy || createdOrgId !== null}
           onClick={() => (step > 1 ? setStep((value) => value - 1) : navigate("/welcome"))}
         >
           이전
@@ -199,7 +207,7 @@ export function OnboardingPage() {
         {step < TOTAL_STEPS ? (
           <Button disabled={step === 2 && !name.trim()} onClick={() => setStep((value) => value + 1)}>다음</Button>
         ) : (
-          <Button disabled={busy || !name.trim()} onClick={createOrganization}>{busy ? "조직 생성 중…" : "조직 만들기"}</Button>
+          <Button disabled={busy || !name.trim()} onClick={createOrganization}>{busy ? "조직 확인 중…" : createdOrgId ? "소속 다시 확인" : "조직 만들기"}</Button>
         )}
       </div>
     </section>

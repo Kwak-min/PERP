@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { matchPath, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useAppContext } from "../../context/AppContext";
 import { navigation, sectionLabels } from "../../routes/catalog";
@@ -19,6 +19,11 @@ export function AppShell() {
   const [search, setSearch] = useState("");
   if (!session) return null;
   const activeSession = session;
+  // 별도 메뉴가 있는 하위 경로만 부모 강조를 해제한다. 실제 상세 화면은 부모를 유지한다.
+  const activePath = navigation.reduce((active, screen) =>
+    matchPath({ path: screen.path, end: screen.path === "/" }, location.pathname)
+      && screen.path.length > active.length ? screen.path : active, "");
+
   const grouped = Object.entries(
     navigation.reduce<Record<string, typeof navigation>>((groups, screen) => {
       const current = groups[screen.section] ?? [];
@@ -52,7 +57,7 @@ export function AppShell() {
                 <NavLink
                   key={screen.path}
                   to={screen.path}
-                  end={screen.path === "/"}
+                  end={screen.path !== activePath}
                   onClick={() => setSidebarOpen(false)}
                   className={({ isActive }) => (isActive ? "active" : "")}
                 >

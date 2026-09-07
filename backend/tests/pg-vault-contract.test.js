@@ -7,6 +7,7 @@ process.env.PG_HOST = "127.0.0.1";
 process.env.PG_PORT = "1";
 const token = randomUUID();
 const alien = randomUUID();
+const memberships = ["101", "202"].map(user_id => ({ user_id, company_id: "77", department_id: null, position_id: null, name: "PG Vault company" }));
 const notes = new Map([
   ["1", { id: "1", owner: "101", title: "Source", content_md: "[[Target|label]] [[Duplicate#heading]] [[Missing]]", folder_path: "/", version: 21 }],
   ["2", { id: "2", owner: "101", title: "Target", content_md: "", folder_path: "/second", version: 22 }],
@@ -22,6 +23,8 @@ before(async () => {
   pool.query = async (sql, values = []) => {
     queries.push({ sql, values });
     if (sql.includes("FROM auth.sessions s")) return { rows: [{ id: values[0] === alien ? "202" : "101", session_id: "session", company_id: "77", name: "Fixture", email: "fixture@example.invalid", account_status: "active", approval_status: "approved", login_at: new Date().toISOString() }] };
+    if (sql.includes("FROM org.company_memberships m JOIN org.companies c")) return { rows: memberships.filter(m => m.user_id === values[0] && m.company_id === values[1]) };
+    if (sql.includes("FROM org.user_roles") || sql.includes("FROM org.company_modules")) return { rows: [] };
     if (sql.includes("FROM notes.vaults WHERE owner_id")) return { rows: [{ id: "12" }] };
     if (sql.includes("UPDATE notes.notes")) {
       assert.match(sql, /n\.xmin::text\s*=\s*\$6/);

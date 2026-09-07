@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import * as controller from "../controllers/pgAuth.controller.js";
+import { createCompany } from "../controllers/pgCompanies.controller.js";
 import * as members from "../controllers/pgMembers.controller.js";
 import * as mod from "../controllers/pgModules.controller.js";
 import { pgRoute, pgRecordRoute } from "../middleware/pgAccess.js";
@@ -12,6 +13,7 @@ export const pgRouter = Router();
 
 pgRouter.get("/health", asyncRoute(controller.health));
 pgRouter.post("/auth/signup", asyncRoute(controller.signup));
+pgRouter.post("/companies", asyncRoute(createCompany));
 pgRouter.post("/auth/login", asyncRoute(controller.login));
 pgRouter.get("/auth/me", asyncRoute(controller.me));
 pgRouter.get("/auth/workspace", asyncRoute(controller.workspace));

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test, { before, after } from "node:test";
+import test, { before, beforeEach, after } from "node:test";
 import { randomUUID } from "node:crypto";
 import { api, startTestServer } from "./http.js";
 process.env.DATABASE_URL = "";
@@ -38,14 +38,19 @@ before(async () => {
     release() { calls.push("RELEASE"); },
   });
 });
+beforeEach(() => { failLog = false; committed = []; pending = []; calls.length = 0; });
 after(async () => { pool.query = originalQuery; pool.connect = originalConnect; await pool.end(); await server.close(); });
 const signup = () => api(server.baseUrl, "/pg/auth/signup", { method: "POST", body: { email: "creator@example.invalid", name: "Creator", password: "password-1234", company_name: "New company" } });
 test("new PG company creator receives finite recorded permissions in the account/session transaction", async () => {
   const result = await signup(); assert.equal(result.status, 201);
   assert.equal(result.body.user.company.id, "77");
-  for (const table of ["org.companies", "org.positions", "org.departments", "org.company_modules", "auth.users", "org.permissions", "org.roles", "org.role_permissions", "org.user_roles", "auth.sessions", "auth.login_logs"]) {
+  for (const table of ["org.companies", "org.positions", "org.company_modules", "auth.users", "org.company_memberships", "org.permissions", "org.roles", "org.role_permissions", "org.user_roles", "auth.sessions", "auth.login_logs"]) {
     assert.ok(committed.some(q => q.sql.includes(`INSERT INTO ${table}`)), table);
   }
+  // Given: 부서를 요청하지 않은 가입. When: 회사 생성. Then: 암묵적 부서나 사용자 배정을 만들지 않는다.
+  assert.equal(committed.some(q => q.sql.includes("INSERT INTO org.departments")), false);
+  assert.equal(committed.find(q => q.sql.includes("INSERT INTO auth.users")).values[1], null);
+  assert.deepEqual(committed.find(q => q.sql.includes("INSERT INTO org.company_memberships")).values, ["77", "101", null, "9"]);
   const permissions = committed.find(q => q.sql.includes("INSERT INTO org.permissions")).values[0];
   assert.ok(permissions.includes("project.write")); assert.ok(!permissions.includes("*"));
   assert.ok(!permissions.some(code => code.startsWith("platform.")));

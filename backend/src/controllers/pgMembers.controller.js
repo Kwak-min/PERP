@@ -1,12 +1,24 @@
 import { pgIdentity } from "../middleware/pgAccess.js";
 import { pgQuery } from "../config/pg.js";
 import { ApiError } from "../utils/errors.js";
+import { isCompanyMember } from "../services/pg-company.service.js";
 
 // perp_db(PostgreSQL) 구성원 슬라이스.
 // strangler-fig: 레거시 SQLite /members 를 대체하는 /api/v1/pg/members/*.
 // 모든 조회는 로그인 사용자의 회사(company_id)로 스코프한다.
 
 const resolveAuthUser = pgIdentity;
+
+async function companyMembers(companyId) {
+  return (await pgQuery(`SELECT u.id, u.email, u.name, m.department_id, m.position_id,
+      CASE WHEN u.account_status = 'active' THEN m.status ELSE u.account_status::text END AS account_status,
+      p.name AS position_name,
+      ARRAY(SELECT DISTINCT r.name FROM org.user_roles ur JOIN org.roles r ON r.id = ur.role_id
+        WHERE ur.user_id = u.id AND r.company_id = m.company_id AND ur.workspace_id IS NULL) AS roles
+    FROM org.company_memberships m JOIN auth.users u ON u.id = m.user_id
+    LEFT JOIN org.positions p ON p.id = m.position_id AND p.company_id = m.company_id
+    WHERE m.company_id = $1 ORDER BY u.id`, [companyId])).rows;
+}
 
 // GET /api/v1/pg/members
 // 로그인 사용자 회사의 구성원 목록. (회사 미배정 사용자는 빈 목록)
@@ -15,23 +27,13 @@ export async function listMembers(req, res) {
   if (!companyId) {
     return res.json({ items: [] });
   }
-  const { rows } = await pgQuery(
-    `SELECT u.id, u.email, u.name,
-            u.department_id, u.position_id,
-            u.account_status, u.is_admin,
-            p.name AS position_name
-       FROM auth.users u
-       LEFT JOIN org.positions p ON p.id = u.position_id
-      WHERE u.company_id = $1
-      ORDER BY u.id`,
-    [companyId],
-  );
+  const rows = await companyMembers(companyId);
   const items = rows.map((r) => ({
     membership_id: String(r.id),
     user_id: String(r.id),
     email: r.email,
     name: r.name,
-    roles: r.is_admin ? ["admin"] : r.position_name ? [r.position_name] : [],
+    roles: r.roles,
     status: r.account_status,
     department_id: r.department_id ? String(r.department_id) : null,
     title: r.position_name ?? null,
@@ -71,18 +73,13 @@ export async function orgChart(req, res) {
     `SELECT id, name, parent_id, manager_id FROM org.departments WHERE company_id = $1 ORDER BY id`,
     [companyId],
   );
-  const { rows: users } = await pgQuery(
-    `SELECT u.id, u.email, u.name, u.department_id, u.is_admin, u.account_status, p.name AS position_name
-       FROM auth.users u LEFT JOIN org.positions p ON p.id = u.position_id
-      WHERE u.company_id = $1 ORDER BY u.id`,
-    [companyId],
-  );
+  const users = await companyMembers(companyId);
   const toMember = (u) => ({
     membership_id: String(u.id),
     user_id: String(u.id),
     email: u.email,
     name: u.name,
-    roles: u.is_admin ? ["admin"] : u.position_name ? [u.position_name] : [],
+    roles: u.roles,
     status: u.account_status,
     department_id: u.department_id ? String(u.department_id) : null,
     title: u.position_name ?? null,
@@ -149,7 +146,7 @@ export async function assignMember(req, res) {
   }
   if (sets.length === 0) throw new ApiError("VALIDATION_ERROR", "변경할 내용이 없습니다");
   const result = await pgQuery(
-    `UPDATE auth.users SET ${sets.join(", ")} WHERE id = $1 AND company_id = $2`, params);
+    `UPDATE org.company_memberships SET ${sets.join(", ")} WHERE user_id = $1 AND company_id = $2 AND status = 'active'`, params);
   if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "구성원을 찾을 수 없습니다");
   res.json({ ok: true });
 }
@@ -163,8 +160,7 @@ export async function updateDepartment(req, res) {
   const params = [req.params.id, companyId];
   if ("leader_id" in body) {
     if (body.leader_id) {
-      const leader = await pgQuery("SELECT 1 FROM auth.users WHERE id = $1 AND company_id = $2", [body.leader_id, companyId]);
-      if (!leader.rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 책임자입니다");
+      if (!await isCompanyMember(body.leader_id, companyId)) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 책임자입니다");
     }
     params.push(body.leader_id || null);
     sets.push(`manager_id = $${params.length}`);
