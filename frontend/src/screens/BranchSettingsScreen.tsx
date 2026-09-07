@@ -3,7 +3,8 @@ import { useEffect, useState } from "react";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { SectionCard } from "../components/ui/SectionCard";
-import { useDepartments, type Department } from "../hooks/useDepartments";
+import { StateBoundary } from "../components/common/StateBoundary";
+import { useDepartmentResource, type Department } from "../hooks/useDepartments";
 import { useRoles } from "../hooks/useRoles";
 import type { ScreenDefinition } from "../routes/catalog";
 import { apiRequest, userMessageOf } from "../services/api";
@@ -23,7 +24,8 @@ export function BranchSettingsScreen({ screen }: Readonly<{ screen: ScreenDefini
   const [notice, setNotice] = useState<string | null>(null);
 
   const apiSession = session?.orgId ? { token: session.token, orgId: session.orgId } : null;
-  const departments = useDepartments(apiSession, reloadKey);
+  const departmentResource = useDepartmentResource(apiSession, reloadKey);
+  const { departments } = departmentResource;
   const roles = useRoles(apiSession);
   const selected = departments.find((department) => department.id === selectedId) ?? null;
 
@@ -95,9 +97,12 @@ export function BranchSettingsScreen({ screen }: Readonly<{ screen: ScreenDefini
 
       <div className="branch-layout">
         <SectionCard padded title="브랜치" subtitle="부서 단위 작업 공간" foot="사이드바 회사 선택기의 + 로도 만들 수 있습니다">
-          {departments.length === 0 ? (
-            <p className="branch-empty">브랜치가 없습니다. 사이드바 회사 선택기의 + 로 만드세요.</p>
-          ) : (
+          <StateBoundary
+            status={departmentResource.status}
+            error={departmentResource.error}
+            emptyTitle="브랜치가 없습니다"
+            emptyDescription="사이드바 회사 선택기의 + 로 만드세요."
+          >
             <ul className="branch-list">
               {departments.map((department) => (
                 <li key={department.id}>
@@ -119,7 +124,7 @@ export function BranchSettingsScreen({ screen }: Readonly<{ screen: ScreenDefini
                 </li>
               ))}
             </ul>
-          )}
+          </StateBoundary>
         </SectionCard>
 
         <SectionCard padded title="브랜치 설정" subtitle="이름, 상위 브랜치와 접근 그룹">

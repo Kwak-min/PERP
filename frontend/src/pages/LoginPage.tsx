@@ -55,7 +55,7 @@ export function LoginPage() {
         </label>
         <div className="form-row">
           <label className="check-label"><input type="checkbox" name="remember" defaultChecked /> 로그인 유지</label>
-          <button className="text-button" type="button" onClick={() => setError("비밀번호 재설정 링크를 관리자에게 요청하세요. (데모 환경에서는 메일 발송이 비활성화되어 있습니다)")}>비밀번호 찾기</button>
+          <button className="text-button" type="button" onClick={() => setError("비밀번호 재설정 링크를 관리자에게 요청하세요.")}>비밀번호 찾기</button>
         </div>
         <Button type="submit" disabled={busy}>{busy ? "확인 중…" : "로그인"}</Button>
       </form>

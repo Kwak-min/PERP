@@ -42,7 +42,7 @@ export function OnboardingPage() {
   const [name, setName] = useState("");
   const [modules, setModules] = useState<string[]>([]);
   const [catalog, setCatalog] = useState<z.infer<typeof catalogSchema>["items"]>([]);
-  const [departments, setDepartments] = useState("운영팀,기획팀");
+  const [departments, setDepartments] = useState("");
   const [fiscalStart, setFiscalStart] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -151,7 +151,7 @@ export function OnboardingPage() {
             <label>회계연도 시작<select value={String(fiscalStart)} onChange={(event) => setFiscalStart(Number(event.target.value))}><option value="1">1월</option><option value="3">3월</option><option value="7">7월</option></select></label>
           </div>
           {type === "custom" && (
-            <label>기본 부서 (쉼표로 구분)<input value={departments} onChange={(event) => setDepartments(event.target.value)} /></label>
+            <label>추가할 부서 (선택, 쉼표로 구분)<input value={departments} onChange={(event) => setDepartments(event.target.value)} /></label>
           )}
         </div>
       )}

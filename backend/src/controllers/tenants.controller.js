@@ -90,10 +90,8 @@ export function createOrg(req, res) {
       if (value) terminology[key] = value;
     }
   }
-  const departments =
-    isCustom && payload.departments !== null && payload.departments !== undefined
-      ? payload.departments
-      : template.departments;
+  // 조직 유형은 부서 생성 동의가 아니다. 명시적으로 제출한 부서만 만든다.
+  const departments = payload.departments ?? [];
 
   const selected = validateSelection(
     payload.modules === null || payload.modules === undefined ? template.modules : payload.modules,
