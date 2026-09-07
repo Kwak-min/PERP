@@ -46,12 +46,12 @@ export function BranchSettingsScreen({ screen }: Readonly<{ screen: ScreenDefini
     setBusy(true);
     setError(null);
     try {
-      await apiRequest(`/members/departments/${selected.id}`, {
+      await apiRequest(`/pg/members/departments/${selected.id}`, {
         method: "PATCH",
         session: apiSession,
         body: { name: name.trim(), parent_id: parentId || null },
       });
-      await apiRequest(`/members/departments/${selected.id}/access`, {
+      await apiRequest(`/pg/members/departments/${selected.id}/access`, {
         method: "PUT",
         session: apiSession,
         body: { access_roles: accessRoles },

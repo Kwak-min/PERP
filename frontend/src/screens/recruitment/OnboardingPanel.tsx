@@ -25,7 +25,7 @@ export function OnboardingPanel({ apiSession, members }: Props) {
     }
     try {
       const result = onboardingListSchema.parse(
-        await apiRequest(`/hr/onboarding?member_id=${memberId}`, { session: apiSession }),
+        await apiRequest(`/pg/hr/onboarding?member_id=${memberId}`, { session: apiSession }),
       );
       setItems(result.items);
     } catch (caught) {
@@ -47,7 +47,7 @@ export function OnboardingPanel({ apiSession, members }: Props) {
     setBusy(true);
     setError(null);
     try {
-      await apiRequest("/hr/onboarding", {
+      await apiRequest("/pg/hr/onboarding", {
         method: "POST",
         session: apiSession,
         body: { member_id: memberId, flow, labels },
@@ -66,7 +66,7 @@ export function OnboardingPanel({ apiSession, members }: Props) {
     setBusy(true);
     setError(null);
     try {
-      await apiRequest(`/hr/onboarding/${itemId}/complete`, { method: "POST", session: apiSession });
+      await apiRequest(`/pg/hr/onboarding/${itemId}/complete`, { method: "POST", session: apiSession });
       await reload();
     } catch (caught) {
       setError(userMessageOf(caught));

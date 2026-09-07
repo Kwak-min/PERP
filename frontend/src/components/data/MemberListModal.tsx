@@ -61,7 +61,7 @@ export function MemberListModal({ session, fallback, onClose }: Props) {
   useEffect(() => {
     if (!session) return;
     const controller = new AbortController();
-    apiRequest("/members?limit=500", { session, signal: controller.signal })
+    apiRequest(session.orgId?.startsWith("pg:") ? "/pg/members?limit=500" : "/members?limit=500", { session, signal: controller.signal })
       .then((payload) => {
         if (!controller.signal.aborted) setMembers(membersSchema.parse(payload).items);
       })

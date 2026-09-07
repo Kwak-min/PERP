@@ -45,6 +45,11 @@ export async function organizationsOf(token: string): Promise<readonly Organizat
   const parsed = legacyMeSchema.parse(
     await apiRequest("/auth/me", { session: { token, orgId: null } }),
   );
+  // UUID PG 토큰은 서버가 검증한 별도 PG 회사 목록을 가져온다.
+  if (/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(token)) {
+    const pg = legacyMeSchema.parse(await apiRequest("/pg/auth/workspace", { session: { token, orgId: null } }));
+    return [...parsed.organizations, ...pg.organizations];
+  }
   return parsed.organizations;
 }
 
@@ -98,9 +103,11 @@ export async function signup(
   name: string,
   password: string,
   invitationToken?: string,
+  companyName?: string,
 ): Promise<SessionState> {
   const body: Record<string, string> = { email, name, password };
   if (invitationToken) body.invitation_token = invitationToken;
+  if (companyName) body.company_name = companyName;
   const payload = pgLoginSchema.parse(
     await apiRequest("/pg/auth/signup", { method: "POST", body }),
   );

@@ -32,14 +32,14 @@ export function HomeBuilderScreen({ screen }: Readonly<{ screen: ScreenDefinitio
     const params = new URLSearchParams();
     if (departmentId) params.set("department_id", departmentId);
     if (projectId) params.set("project_id", projectId);
-    apiRequest(`/members/home-layout?${params}`, { session })
+    apiRequest(`/pg/members/home-layout?${params}`, { session })
       .then((payload) => setBlocks((payload as { blocks: readonly string[] }).blocks))
       .catch((caught: unknown) => setMessage(userMessageOf(caught)));
   }, [departmentId, projectId, session]);
 
   async function save(): Promise<void> {
     if (!session) return;
-    await apiRequest("/members/home-layout", {
+    await apiRequest("/pg/members/home-layout", {
       session, method: "PUT", body: {
         department_id: departmentId || null,
         project_id: projectId || null,

@@ -40,7 +40,7 @@ export function useLeavePolicies(
     }
     const controller = new AbortController();
     setLoading(true);
-    apiRequest("/hr/leave-policies", { session: { token, orgId }, signal: controller.signal })
+    apiRequest("/pg/hr/leave-policies", { session: { token, orgId }, signal: controller.signal })
       .then((data) => {
         if (controller.signal.aborted) return;
         setPolicies(listSchema.parse(data).items);

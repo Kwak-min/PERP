@@ -40,8 +40,8 @@ export function OrgChartScreen({ screen }: Readonly<{ screen: ScreenDefinition }
     if (!apiSession) return;
     try {
       const [chartData, memberData] = await Promise.all([
-        apiRequest("/members/org-chart", { session: apiSession }),
-        apiRequest("/members?limit=200", { session: apiSession }),
+        apiRequest("/pg/members/org-chart", { session: apiSession }),
+        apiRequest("/pg/members?limit=200", { session: apiSession }),
       ]);
       setChart(orgChartSchema.parse(chartData));
       setMembers(membersSchema.parse(memberData).items);
@@ -65,7 +65,7 @@ export function OrgChartScreen({ screen }: Readonly<{ screen: ScreenDefinition }
     setBusy(true);
     setError(null);
     try {
-      await apiRequest(`/members/departments/${setupSeat.id}`, {
+      await apiRequest(`/pg/members/departments/${setupSeat.id}`, {
         method: "PATCH",
         session: apiSession,
         body: { leader_id: input.leaderUserId },
@@ -78,7 +78,7 @@ export function OrgChartScreen({ screen }: Readonly<{ screen: ScreenDefinition }
           (!after.has(member.membership_id) && before.has(member.membership_id)),
       );
       for (const member of changes) {
-        await apiRequest(`/members/${member.membership_id}/assignment`, {
+        await apiRequest(`/pg/members/${member.membership_id}/assignment`, {
           method: "PATCH",
           session: apiSession,
           body: { department_id: after.has(member.membership_id) ? setupSeat.id : null },
@@ -99,7 +99,7 @@ export function OrgChartScreen({ screen }: Readonly<{ screen: ScreenDefinition }
     setBusy(true);
     setError(null);
     try {
-      await apiRequest(`/members/${member.membership_id}/assignment`, {
+      await apiRequest(`/pg/members/${member.membership_id}/assignment`, {
         method: "PATCH",
         session: apiSession,
         body: { title },
@@ -118,7 +118,7 @@ export function OrgChartScreen({ screen }: Readonly<{ screen: ScreenDefinition }
     setBusy(true);
     setError(null);
     try {
-      await apiRequest("/members/departments", {
+      await apiRequest("/pg/members/departments", {
         method: "POST",
         session: apiSession,
         body: { name: name.trim(), parent_id: seat.id },

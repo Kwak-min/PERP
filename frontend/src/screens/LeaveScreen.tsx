@@ -84,9 +84,9 @@ export function LeaveScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
   const reload = useCallback(async (): Promise<void> => {
     if (!apiSession) return;
     const results = await Promise.allSettled([
-      apiRequest("/hr/leave-balances", { session: apiSession }),
-      apiRequest(`/hr/leaves/calendar?from=${range.from}&to=${range.to}`, { session: apiSession }),
-      apiRequest("/hr/leaves", { session: apiSession }),
+      apiRequest("/pg/hr/leave-balances", { session: apiSession }),
+      apiRequest(`/pg/hr/leaves/calendar?from=${range.from}&to=${range.to}`, { session: apiSession }),
+      apiRequest("/pg/hr/leaves", { session: apiSession }),
     ]);
     const [balanceResult, calendarResult, leavesResult] = results;
     setBalances(
@@ -160,7 +160,7 @@ export function LeaveScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
     setBusy(true);
     setError(null);
     try {
-      const created = (await apiRequest("/hr/leaves", {
+      const created = (await apiRequest("/pg/hr/leaves", {
         method: "POST",
         session: apiSession,
         body: input,
@@ -184,7 +184,7 @@ export function LeaveScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
     setDecidingId(leaveId);
     setError(null);
     try {
-      await apiRequest(`/hr/leaves/${leaveId}/decide`, {
+      await apiRequest(`/pg/hr/leaves/${leaveId}/decide`, {
         method: "POST",
         session: apiSession,
         body: { decision },

@@ -64,6 +64,7 @@ export async function pgAuthBridge(req, _res, next) {
     }
 
     const operationalUser = operationalUserFor(row);
+    if (!operationalUser || operationalUser.auth_status !== "active") return next();
     req.appUser = {
       ...operationalUser,
       email: row.email,
@@ -71,7 +72,7 @@ export async function pgAuthBridge(req, _res, next) {
     };
     req.sessionId = String(row.session_id);
     req.authSource = "perp_db";
-    req.externalIdentity = { provider: "perp_db", subject: String(row.id) };
+    req.externalIdentity = { provider: "perp_db", subject: String(row.id), companyId: row.company_id == null ? null : String(row.company_id) };
     return next();
   } catch (error) {
     return next(error);

@@ -52,7 +52,7 @@ export function LeaveStatsPanel({ apiSession, members, leaves, reloadKey }: Prop
 
   useEffect(() => {
     let cancelled = false;
-    apiRequest("/hr/leave-stats", { session: apiSession })
+    apiRequest("/pg/hr/leave-stats", { session: apiSession })
       .then((data) => {
         if (!cancelled) setStats(leaveStatsSchema.parse(data));
       })

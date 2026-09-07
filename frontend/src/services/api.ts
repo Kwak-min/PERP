@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { workspaceEndpoint } from "./workspace";
 
 const apiErrorSchema = z.object({
   error: z.object({
@@ -69,7 +70,7 @@ export async function apiRequest(
       : timeout,
   };
   if (options.body !== undefined) request.body = JSON.stringify(options.body);
-  const response = await fetch(`${API_BASE_URL}${path}`, request);
+  const response = await fetch(`${API_BASE_URL}${workspaceEndpoint(path, options.session?.orgId)}`, request);
 
   if (response.status === 204 || response.status === 205) return null;
   const contentType = response.headers.get("content-type") ?? "";

@@ -24,6 +24,7 @@ function isEmpty(data: unknown): boolean {
 export function useResource(
   path: string | null,
   session: ApiSession | null,
+  reloadKey = 0,
 ): ResourceState {
   const [state, setState] = useState<ResourceState>({
     status: "idle",
@@ -65,7 +66,7 @@ export function useResource(
         });
       });
     return () => controller.abort();
-  }, [path, session]);
+  }, [path, session, reloadKey]);
 
   return state;
 }

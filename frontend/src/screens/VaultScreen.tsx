@@ -39,7 +39,7 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
   const reload = useCallback(async (): Promise<void> => {
     if (!apiSession) return;
     try {
-      const data = noteListSchema.parse(await apiRequest("/vault/notes?limit=100", { session: apiSession }));
+      const data = noteListSchema.parse(await apiRequest("/pg/vault/notes?limit=100", { session: apiSession }));
       setNotes(data.items);
       setFolders(data.folders);
       setError(null);
@@ -73,7 +73,7 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
     setError(null);
     try {
       const detail = noteDetailSchema.parse(
-        await apiRequest(`/vault/notes/${noteId}`, { session: apiSession, signal: controller.signal }),
+        await apiRequest(`/pg/vault/notes/${noteId}`, { session: apiSession, signal: controller.signal }),
       );
       if (controller.signal.aborted) return;
       setEditingId(detail.id);
@@ -102,11 +102,11 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
     };
     try {
       if (editingId) {
-        await apiRequest(`/vault/notes/${editingId}`, { method: "PATCH", session: apiSession, body });
+        await apiRequest(`/pg/vault/notes/${editingId}`, { method: "PATCH", session: apiSession, body });
         setNotice(`${body.title} 노트를 저장했습니다.`);
       } else {
         const created = noteDetailSchema.parse(
-          await apiRequest("/vault/notes", { method: "POST", session: apiSession, body }),
+          await apiRequest("/pg/vault/notes", { method: "POST", session: apiSession, body }),
         );
         setEditingId(created.id);
         setNotice(`${body.title} 노트를 만들었습니다.`);
@@ -124,7 +124,7 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
     setBusy(true);
     setError(null);
     try {
-      await apiRequest(`/vault/notes/${editingId}`, { method: "DELETE", session: apiSession });
+      await apiRequest(`/pg/vault/notes/${editingId}`, { method: "DELETE", session: apiSession });
       setEditingId(null);
       setDraft(EMPTY_DRAFT);
       setNotice("노트를 삭제했습니다.");

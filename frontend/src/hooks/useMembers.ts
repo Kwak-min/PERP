@@ -26,7 +26,7 @@ export function useMembers(session: ApiSession | null): readonly OrgMember[] {
       return;
     }
     const controller = new AbortController();
-    apiRequest("/members?limit=200", { session: { token, orgId }, signal: controller.signal })
+    apiRequest("/pg/members", { session: { token, orgId }, signal: controller.signal })
       .then((data) => {
         if (!controller.signal.aborted) setMembers(listSchema.parse(data).items);
       })

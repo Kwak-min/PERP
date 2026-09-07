@@ -4,6 +4,7 @@ const KEY = "orbitflow.demoMode";
 const listeners = new Set<() => void>();
 
 function read(): boolean {
+  // 명시적으로 켠 데모만 표시한다.
   if (typeof window === "undefined") return false;
   const raw = localStorage.getItem(KEY);
   return raw === "1";
