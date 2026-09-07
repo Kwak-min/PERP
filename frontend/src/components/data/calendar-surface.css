@@ -1,0 +1,17 @@
+.calendar-screen { min-width: 0; }
+.calendar-screen .calendar-nav { flex-wrap: wrap; padding: 8px 0; gap: 8px; }
+.calendar-screen .calendar__cell { min-width: 0; }
+.calendar-screen .calendar__event { text-decoration: none; }
+.calendar-screen .calendar__event:hover { text-decoration: underline; }
+.calendar-screen .calendar__event:focus-visible,
+.calendar-screen .calendar__more:focus-visible { outline: 2px solid var(--of-primary); outline-offset: 2px; }
+.calendar-screen .calendar__overflow { min-width: 0; }
+.calendar-screen .calendar__more { cursor: pointer; }
+.calendar-empty { margin: 0; padding: 16px; color: var(--of-text-muted); font-size: 12px; }
+@media (max-width: 767px) {
+  .calendar-screen .calendar__cell { padding: 4px 2px; min-height: 96px; }
+  .calendar-screen .calendar__event { min-height: 44px; line-height: 36px; padding: 4px 2px; font-size: 11px; }
+  .calendar-screen .calendar__event b { display: none; }
+  .calendar-screen .calendar__more { min-height: 44px; padding: 4px 0; font-size: 11px; }
+  .calendar-screen .calendar-nav .button { min-height: 44px; }
+}

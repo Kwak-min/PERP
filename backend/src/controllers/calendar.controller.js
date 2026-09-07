@@ -145,14 +145,18 @@ export function create(req, res) {
 export function list(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("event.read");
+  const window = z.object({ from: z.string().datetime({ offset: true }).optional(), to: z.string().datetime({ offset: true }).optional() })
+    .refine(value => !value.from || !value.to || (Date.parse(value.to) > Date.parse(value.from) && Date.parse(value.to) - Date.parse(value.from) <= 32 * 86_400_000), "조회 기간은 32일 이내여야 합니다")
+    .parse(req.query);
   const filters = [];
-  if (req.query.from) filters.push({ sql: "end_at >= ?", params: [req.query.from] });
-  if (req.query.to) filters.push({ sql: "start_at <= ?", params: [req.query.to] });
+  if (window.from) filters.push({ sql: "julianday(end_at) >= julianday(?)", params: [window.from] });
+  if (window.to) filters.push({ sql: "julianday(start_at) < julianday(?)", params: [window.to] });
   if (req.query.project_id) {
     filters.push({ sql: "project_id = ?", params: [req.query.project_id] });
   }
   const rows = listScoped("event", principal, filters, {
-    limit: Number(req.query.limit ?? 100),
+    // 월 범위가 제한된 조회는 100건에서 잘라 날짜의 일정을 숨기지 않는다.
+    limit: window.from && window.to ? -1 : Number(req.query.limit ?? 100),
     orderBy: "start_at ASC",
   });
   res.json({ items: rows.map(eventView), next_cursor: null });

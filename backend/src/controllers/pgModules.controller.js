@@ -117,14 +117,21 @@ export async function projects(req, res) {
 export async function calendar(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
+  const window = z.object({ from: z.string().datetime({ offset: true }).optional(), to: z.string().datetime({ offset: true }).optional(), event_id: z.string().regex(/^\d+$/).optional() })
+    .refine(value => Boolean(value.from) === Boolean(value.to) && (!value.from || (Date.parse(value.to) > Date.parse(value.from) && Date.parse(value.to) - Date.parse(value.from) <= 32 * 86_400_000)), "조회 기간은 32일 이내여야 합니다")
+    .parse(req.query);
+  const params = [companyId];
+  const filters = ["company_id = $1"];
+  if (window.from && window.to) { params.push(window.from, window.to); filters.push("ends_at >= $2 AND starts_at < $3"); }
+  if (window.event_id) { params.push(window.event_id); filters.push(`id = $${params.length}`); }
   const { rows } = await pgQuery(
     `SELECT id AS __id, title AS 일정, starts_at AS 시작, ends_at AS 종료,
             location AS 장소, scope AS status
        FROM calendar.events
-      WHERE company_id = $1
+      WHERE ${filters.join(" AND ")}
       ORDER BY starts_at DESC
-      LIMIT 100`,
-    [companyId],
+      ${window.from || window.event_id ? "" : "LIMIT 100"}`,
+    params,
   );
   res.json({ items: rows });
 }

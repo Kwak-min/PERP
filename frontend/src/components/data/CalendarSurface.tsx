@@ -1,0 +1,90 @@
+import { useEffect, useMemo, useState } from "react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { z } from "zod";
+import type { ScreenDefinition } from "../../routes/catalog";
+import { ApiError, apiRequest, userMessageOf, type ApiSession } from "../../services/api";
+import { isPgWorkspace } from "../../services/workspace";
+import { useSession } from "../../store/session";
+import { StateBoundary } from "../common/StateBoundary";
+import { Badge } from "../ui/Badge";
+import { Button } from "../ui/Button";
+import { SectionCard } from "../ui/SectionCard";
+import { CalendarCreateModal } from "./CalendarCreateModal";
+import { MonthCalendar } from "./MonthCalendar";
+import { calendarCells, calendarRecordSchema, localDateInput, monthWindow, parseCalendarRecords, type CalendarRecord } from "./calendarModel";
+import "./calendar-surface.css";
+
+const permissionsSchema = z.object({ permissions: z.array(z.string()) });
+const workspacesSchema = z.object({ organizations: z.array(permissionsSchema.extend({ org_id: z.string() })) });
+type CalendarState = Readonly<{ status: "loading" | "ready" | "error" | "forbidden"; records: readonly CalendarRecord[]; error: Error | null }>;
+
+export function CalendarSurface({ screen }: Readonly<{ screen: ScreenDefinition }>) {
+  const stored = useSession();
+  const session = useMemo<ApiSession | null>(() => stored ? { token: stored.token, orgId: stored.orgId } : null, [stored]);
+  return session ? <CalendarWorkspace key={session.orgId} screen={screen} session={session} /> : null;
+}
+
+function CalendarWorkspace({ screen, session }: Readonly<{ screen: ScreenDefinition; session: ApiSession }>) {
+  const { eventId } = useParams();
+  const [search, setSearch] = useSearchParams();
+  const requestedMonth = search.get("month");
+  const today = new Date();
+  const shown = requestedMonth && /^\d{4}-(0[1-9]|1[0-2])$/.test(requestedMonth)
+    ? new Date(`${requestedMonth}-01T00:00:00`) : new Date(today.getFullYear(), today.getMonth(), 1);
+  const window = monthWindow(shown);
+  const pg = isPgWorkspace(session.orgId);
+  const endpoint = eventId ? (pg ? `/pg/calendar?event_id=${encodeURIComponent(eventId)}` : `/calendar/${encodeURIComponent(eventId)}`)
+    : `${pg ? "/pg/calendar" : "/calendar"}?${new URLSearchParams(window)}`;
+  const [state, setState] = useState<CalendarState>({ status: "loading", records: [], error: null });
+  const [permissions, setPermissions] = useState<readonly string[]>([]);
+  const [revision, setRevision] = useState(0);
+  const [modal, setModal] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setState({ status: "loading", records: [], error: null });
+    apiRequest(endpoint, { session, signal: controller.signal }).then(payload => {
+      const records = eventId && !pg ? [calendarRecordSchema.parse(payload)] : parseCalendarRecords(payload, pg);
+      if (!controller.signal.aborted) setState({ status: "ready", records, error: null });
+    }).catch((caught: unknown) => {
+      if (!controller.signal.aborted) setState({ status: caught instanceof ApiError && caught.status === 403 ? "forbidden" : "error", records: [], error: caught instanceof Error ? caught : new Error("일정을 불러오지 못했습니다") });
+    });
+    return () => controller.abort();
+  }, [endpoint, eventId, pg, revision, session]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    apiRequest(pg ? "/pg/auth/workspace" : "/tenants/current", { session, signal: controller.signal }).then(payload => {
+      const next = pg ? workspacesSchema.parse(payload).organizations.find(org => org.org_id === session.orgId)?.permissions ?? [] : permissionsSchema.parse(payload).permissions;
+      if (!controller.signal.aborted) setPermissions(next);
+    }).catch((caught: unknown) => {
+      if (!controller.signal.aborted) setNotice(`작업 권한을 확인하지 못했습니다: ${userMessageOf(caught)}`);
+    });
+    return () => controller.abort();
+  }, [pg, session]);
+
+  const cells = calendarCells(state.records, shown);
+  const detail = state.records[0];
+  const currentMonth = today.getFullYear() === shown.getFullYear() && today.getMonth() === shown.getMonth();
+  function changeMonth(date: Date): void { setSearch({ month: localDateInput(date).slice(0, 7) }); }
+  return <div className="screen calendar-screen" data-screen-id={screen.id}>
+    <header className="screen-header"><div><div className="screen-header__meta"><Badge>{screen.id}</Badge><Badge>calendar</Badge></div><h1>{screen.label}</h1><p>{screen.description}</p></div>
+      <div className="screen-header__actions">{eventId ? <Link className="button button--neutral" to={`/calendar${requestedMonth ? `?month=${requestedMonth}` : ""}`}>캘린더로</Link>
+        : <Button disabled={!(permissions.includes("event.write") || (!pg && permissions.includes("*")))} onClick={() => setModal(true)}>새로 만들기</Button>}</div></header>
+    {notice && <div className="screen-notice" role="status"><span>{notice}</span><Button tone="ghost" size="small" onClick={() => setNotice(null)}>닫기</Button></div>}
+    <SectionCard title={eventId ? "일정 상세" : "월간 일정"} subtitle={`기기 시간대: ${Intl.DateTimeFormat().resolvedOptions().timeZone}`} foot="권한 범위 안의 서버 일정만 표시합니다">
+      {!eventId && <nav className="calendar-nav" aria-label="월 선택"><Button tone="neutral" size="small" aria-label="이전 달" onClick={() => changeMonth(new Date(shown.getFullYear(), shown.getMonth() - 1, 1))}>이전</Button>
+        <strong aria-live="polite">{shown.getFullYear()}년 {shown.getMonth() + 1}월</strong><Button tone="neutral" size="small" aria-label="다음 달" onClick={() => changeMonth(new Date(shown.getFullYear(), shown.getMonth() + 1, 1))}>다음</Button>
+        <Button tone="neutral" size="small" onClick={() => changeMonth(today)}>오늘</Button></nav>}
+      <StateBoundary status={state.status} error={state.error}>
+        {eventId ? detail ? <dl className="kv-list"><div><dt>이름</dt><dd>{detail.title}</dd></div><div><dt>시작</dt><dd>{new Date(detail.start_at).toLocaleString("ko-KR")}</dd></div><div><dt>종료</dt><dd>{new Date(detail.end_at).toLocaleString("ko-KR")}</dd></div><div><dt>장소</dt><dd>{detail.location ?? "미지정"}</dd></div></dl> : <p role="status">일정을 찾을 수 없습니다.</p>
+          : <><MonthCalendar year={shown.getFullYear()} month={shown.getMonth()} events={cells.map(cell => ({ ...cell, href: `${cell.href}?month=${localDateInput(shown).slice(0, 7)}` }))} {...(currentMonth ? { today: today.getDate() } : {})} />
+            {state.status === "ready" && cells.length === 0 && <p className="calendar-empty" role="status">이번 달에 등록된 일정이 없습니다.</p>}</>}
+      </StateBoundary>
+    </SectionCard>
+    {modal && <CalendarCreateModal session={session} shown={currentMonth ? today : shown} onClose={() => setModal(false)} onSaved={start => {
+      setModal(false); changeMonth(start); setRevision(value => value + 1); setNotice("일정을 서버에 저장했습니다.");
+    }} />}
+  </div>;
+}
