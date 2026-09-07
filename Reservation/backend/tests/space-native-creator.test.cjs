@@ -34,14 +34,8 @@ async function space(actor, suffix = '', method = 'POST', body = { name: 'Creato
 }
 
 test('native company creation grants exactly its finite SQL permission list and exposes reservation menu/create/manage without is_admin', async () => {
-  assert.deepEqual(creatorPermissions, [
-    'member.read', 'member.write', 'role.assign', 'department.write', 'audit.read', 'organization.settings',
-    'project.read', 'project.write', 'task.read', 'task.write', 'document.read', 'document.write',
-    'event.read', 'event.write', 'approval.decide', 'approval.request', 'transaction.read', 'transaction.write',
-    'budget.read', 'budget.write', 'dues.read', 'dues.write', 'settlement.create', 'asset.read', 'asset.write',
-    'notification.read', 'agent.chat', 'agent.policy.manage', 'automation.manage', 'attendance.read', 'attendance.write',
-    'leave.approve', 'recruitment.manage', 'reservation.create', 'reservation.manage',
-  ]);
+  const { COMPANY_PERMISSIONS } = await import('../../../backend/src/config/rbac.js');
+  assert.deepEqual(creatorPermissions, COMPANY_PERMISSIONS);
   const role = pg.state.roles.find(r => r.company_id === creator.orgId.slice(3));
   assert.deepEqual(pg.state.permissions.filter(p => p.role_id === role.id).map(p => p.code), creatorPermissions);
   const write = pg.queries.find(q => q.sql.startsWith('INSERT INTO org.role_permissions') && q.values[0] === role.id);
@@ -109,9 +103,12 @@ test('native creator delegates only owned reservation grants via actual role cre
   assert.equal(principal.status, 200);
   assert.deepEqual(principal.body.permissions, [...reservationGrants].sort());
   assert.equal((await space(delegate)).status, 201);
-  for (const permissions of [['*'], ['platform.tenants'], ['analytics.read']]) {
+  const analytics = await api(erp.baseUrl, '/settings/roles', { ...creator, method: 'POST', body: { name: 'Analytics delegate', permissions: ['analytics.read'] } });
+  assert.equal(analytics.status, 201);
+  assert.deepEqual(analytics.body.permissions, ['analytics.read']);
+  for (const permissions of [['*'], ['platform.tenants']]) {
     const denied = await api(erp.baseUrl, '/settings/roles', { ...creator, method: 'POST', body: { name: 'Denied escalation', permissions } });
-    assert.equal(denied.status, permissions[0] === 'analytics.read' ? 403 : 400);
+    assert.equal(denied.status, 400);
   }
   assert.equal((await api(erp.baseUrl, '/settings/roles', { ...delegate, method: 'POST', body: { name: 'Denied delegation', permissions: reservationGrants } })).status, 403);
 });

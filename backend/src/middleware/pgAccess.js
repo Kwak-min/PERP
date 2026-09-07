@@ -1,5 +1,6 @@
 import { pgQuery } from "../config/pg.js";
 import { CORE_MODULES } from "../config/modules.js";
+import { COMPANY_PERMISSIONS } from '../config/rbac.js';
 import { ApiError } from "../utils/errors.js";
 import { effectivePgPermissions, menuForApi } from '../config/menu-permissions.js';
 
@@ -82,14 +83,7 @@ export async function pgWorkspace(req) {
 }
 
 // 회사 생성 트랜잭션에서만 부여하는 유한 권한 집합. 기존 is_admin을 이 목록으로 승격하지 않는다.
-export const PG_CREATOR_PERMISSIONS = [
-  "member.read", "member.write", "role.assign", "department.write", "audit.read", "organization.settings",
-  "project.read", "project.write", "task.read", "task.write", "document.read", "document.write",
-  "event.read", "event.write", "approval.decide", "approval.request", "transaction.read", "transaction.write",
-  "budget.read", "budget.write", "dues.read", "dues.write", "settlement.create", "asset.read", "asset.write",
-  "notification.read", "agent.chat", "agent.policy.manage", "automation.manage", "attendance.read", "attendance.write",
-  "leave.approve", "recruitment.manage", "reservation.create", "reservation.manage",
-];
+export const PG_CREATOR_PERMISSIONS = COMPANY_PERMISSIONS;
 
 const RECORD_ACCESS = {
   projects: ["project", "projects"], tasks: ["task", "tasks"], documents: ["document", "documents"],
