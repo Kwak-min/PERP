@@ -33,6 +33,20 @@ test('pagination clamps after deletion and preserves empty/export structure', ()
   assert.equal(toCsv(empty).split('\n').length, 1);
 });
 
+test('financial metadata stays attached through filtering and pagination but never enters cells or CSV', () => {
+  const table = liveTable({ items: items.map(item => ({ __version: item.__id + 10, __metadata: 'internal-only', ...item })) });
+  assert.deepEqual(table.columns, ['name', 'status']);
+  const active = screenFilters['FIN-003'].find(filter => filter.id === 'active');
+  const filtered = filterTable(table, { query: 'record-', filter: active });
+  const row = paginateTable(filtered, 2).table.rows[1];
+  assert.equal(row.id, '23');
+  assert.equal(row.values.__version, 33);
+  assert.equal(row.values.__metadata, 'internal-only');
+  assert.deepEqual(row.cells, ['record-23', 'active']);
+  assert.equal(toCsv(filtered).includes('internal-only'), false);
+  assert.equal(filterTable(table, { query: 'internal-only', filter: allFilter }).rows.length, 0);
+});
+
 test('legacy IDs stay attached and CSV escapes commas, quotes and line breaks', () => {
   const table = liveTable({ items: [{ id: 'legacy-a', name: 'a,"b"\nc', status: 'active' }] });
   assert.equal(table.rows[0].id, 'legacy-a');

@@ -18,6 +18,8 @@ type Props = Readonly<{
 // 설정(CreateConfig)에 따라 입력 폼을 렌더하고 perp_db 로 생성/수정 요청을 보낸다.
 export function CreateFormModal({ entityLabel, config, session, onClose, onCreated, method = "POST", initialValues }: Props) {
   const firstRef = useRef<HTMLInputElement>(null);
+  // Keep the same request key after a timeout/error, including changed payload conflicts.
+  const requestKey = useRef(crypto.randomUUID());
   const isEdit = method === "PATCH";
   const [values, setValues] = useState<Record<string, string>>(initialValues ?? {});
   const [options, setOptions] = useState<Record<string, readonly { value: string; label: string }[]>>({});
@@ -47,6 +49,7 @@ export function CreateFormModal({ entityLabel, config, session, onClose, onCreat
   const dirty = Object.entries(values).some(([key, value]) => value !== (initialValues?.[key] ?? ""));
 
   function requestClose(): void {
+    if (saving) return;
     if (dirty && !window.confirm("입력한 내용이 사라집니다. 닫을까요?")) return;
     onClose();
   }
@@ -70,7 +73,10 @@ export function CreateFormModal({ entityLabel, config, session, onClose, onCreat
     try {
       await apiRequest(config.endpoint, {
         method,
-        body: values,
+        body: { ...values, ...(isEdit && /^\/pg\/records\/(budgets|settlements|dues)\//.test(config.endpoint) && initialValues?.version
+          ? { expected_version: Number(initialValues.version) } : {}) },
+        ...(method === 'POST' && /^\/pg\/(assets|finance\/(transactions|budgets|settlements|dues))$/.test(config.endpoint)
+          ? { headers: { 'Idempotency-Key': requestKey.current } } : {}),
         ...(session ? { session } : {}),
       });
       onCreated();
@@ -123,6 +129,8 @@ export function CreateFormModal({ entityLabel, config, session, onClose, onCreat
                 <input
                   ref={index === 0 ? firstRef : undefined}
                   type={field.type === "text" ? "text" : field.type}
+                  min={field.name === 'amount' ? '0.01' : undefined}
+                  step={field.name === 'amount' ? '0.01' : undefined}
                   value={values[field.name] ?? ""}
                   onChange={(event) => set(field.name, event.target.value)}
                 />

@@ -210,7 +210,7 @@ function DataTable({
 }: Readonly<{
   table: TableData;
   onRowClick?: (row: readonly string[], index: number) => void;
-  onDelete?: (id: string) => void;
+  onDelete?: (row: TableRow) => void;
   onEdit?: (id: string) => void;
 }>) {
   const canDelete = Boolean(onDelete);
@@ -267,7 +267,7 @@ function DataTable({
                         size="small"
                         onClick={(event) => {
                           event.stopPropagation();
-                          if (row.id && window.confirm("이 항목을 삭제할까요?")) onDelete?.(row.id);
+                          if (row.id && window.confirm("이 항목을 삭제할까요?")) onDelete?.(row);
                         }}
                       >
                         삭제
@@ -378,10 +378,12 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const pgWorkspace = isPgWorkspace(session?.orgId);
   const deleteResource = pgWorkspace ? screen.deleteResource : undefined;
   const handleDelete = deleteResource
-    ? async (id: string) => {
+    ? async (row: TableRow) => {
         try {
-          await apiRequest(`/pg/records/${deleteResource}/${id}`, {
+          const financial = ['transactions', 'budgets', 'settlements', 'dues'].includes(deleteResource);
+          await apiRequest(`/pg/records/${deleteResource}/${row.id}`, {
             method: "DELETE",
+            ...(financial ? { body: { expected_version: row.values.__version ?? row.values.version } } : {}),
             ...(apiSession ? { session: apiSession } : {}),
           });
           setReloadKey((key) => key + 1);

@@ -19,7 +19,7 @@ export function liveTable(data: unknown): TableData | null {
   const parsed = listSchema.safeParse(data);
   if (!parsed.success || parsed.data.items.length === 0) return null;
   const records = parsed.data.items;
-  const columns = Object.keys(records[0] ?? {}).filter((key) => key !== "__id").slice(0, 6);
+  const columns = Object.keys(records[0] ?? {}).filter((key) => !key.startsWith("__")).slice(0, 6);
   return {
     columns,
     rows: records.map((record) => ({
