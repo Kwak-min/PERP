@@ -331,10 +331,12 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const branchScoped = screen.module === "projects" && branchId !== null;
   const endpoint = useMemo(() => {
     if (!screen.endpoint) return null;
-    if (!branchScoped || !branchId) return screen.endpoint;
     const separator = screen.endpoint.includes("?") ? "&" : "?";
+    // 레거시 자산은 제한 없는 조회 후 검색/10건 페이지를 적용한다. PG는 원래 전체 조회다.
+    if (screen.id === 'AST-001' && !isPgWorkspace(session?.orgId)) return `${screen.endpoint}${separator}limit=-1`;
+    if (!branchScoped || !branchId) return screen.endpoint;
     return `${screen.endpoint}${separator}department_id=${encodeURIComponent(branchId)}`;
-  }, [screen.endpoint, branchScoped, branchId]);
+  }, [screen.id, screen.endpoint, session?.orgId, branchScoped, branchId]);
   const [reloadKey, setReloadKey] = useState(0);
   const resource = useResource(endpoint, apiSession, reloadKey);
   const [query, setQuery] = useState("");
@@ -581,9 +583,14 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
               </button>
             ))}
             {/* 전체를 포함한 모든 필터에서 같은 자리에 건수를 보여준다. */}
-            <span className="filter-bar__result">
-              {table?.rows.length ?? 0}건
-            </span>
+            {screen.id === 'AST-001' ? (
+              <div className="assets-list-counts" aria-live="polite">
+                <span>전체 <strong>{baseTable?.rows.length ?? 0}</strong> 개</span>
+                <span>검색 <strong>{table?.rows.length ?? 0}</strong> 개</span>
+              </div>
+            ) : (
+              <span className="filter-bar__result">{table?.rows.length ?? 0}건</span>
+            )}
           </div>
           <StateBoundary
             status={
@@ -609,7 +616,26 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
               />
             ) : null}
           </StateBoundary>
-          {pagination && table && (
+          {screen.id === 'AST-001' && serverAnswered ? (
+            <div className="assets-list-footer">
+              <div className="assets-list-counts" aria-live="polite">
+                <span>전체 <strong>{baseTable?.rows.length ?? 0}</strong> 개</span>
+                <span>검색 <strong>{table?.rows.length ?? 0}</strong> 개</span>
+                <span>{pagination?.start ?? 0}–{pagination?.end ?? 0} 표시</span>
+              </div>
+              <nav className="assets-list-pager" aria-label="목록 페이지">
+                {pagination && pagination.pageCount > 1 && (
+                  <Button tone="ghost" size="small" aria-label="이전 페이지" disabled={pagination.currentPage === 1}
+                    onClick={() => setPage(pagination.currentPage - 1)}>이전</Button>
+                )}
+                <span aria-live="polite">{pagination?.currentPage ?? 1} / {pagination?.pageCount ?? 1} 페이지</span>
+                {pagination && pagination.pageCount > 1 && (
+                  <Button tone="ghost" size="small" aria-label="다음 페이지" disabled={pagination.currentPage === pagination.pageCount}
+                    onClick={() => setPage(pagination.currentPage + 1)}>다음</Button>
+                )}
+              </nav>
+            </div>
+          ) : pagination && table && (
             <nav className="filter-bar" aria-label="목록 페이지">
               <Button tone="ghost" size="small" aria-label="이전 페이지" disabled={pagination.currentPage === 1}
                 onClick={() => setPage(pagination.currentPage - 1)}>이전</Button>

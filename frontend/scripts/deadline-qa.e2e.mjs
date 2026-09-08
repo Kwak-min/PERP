@@ -15,8 +15,8 @@ import { networkAudit, protectedPorts } from '../../scripts/deadline-isolation-g
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const args = process.argv.slice(2);
-if (args[0] !== '--scenario' || !['baseline', 'recruitment-nav', 'nav-pref', 'members-pagination'].includes(args[1]) || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination [--probe error|cancel]');
+if (args[0] !== '--scenario' || !['baseline', 'recruitment-nav', 'nav-pref', 'members-pagination', 'assets-footer'].includes(args[1]) || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {
+  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer [--probe error|cancel]');
   process.exitCode = 2;
 } else {
   assertIsolated();
@@ -40,7 +40,7 @@ async function rendered(page, selector) {
 }
 
 async function baseline(probe, scenario) {
-  const evidence = path.join(root, `.omo/evidence/task-${scenario === 'recruitment-nav' ? 3 : scenario === 'members-pagination' ? 6 : 1}-deadline-erp-redesign`, ...(probe ? [`probe-${probe}`] : []));
+  const evidence = path.join(root, `.omo/evidence/task-${scenario === 'recruitment-nav' ? 3 : scenario === 'members-pagination' ? 6 : scenario === 'assets-footer' ? 7 : 1}-deadline-erp-redesign`, ...(probe ? [`probe-${probe}`] : []));
   const runId = randomUUID(), attempt = path.join(evidence, 'runs', runId);
   await mkdir(attempt, { recursive: true });
   // 이전 성공 스크린샷을 현재 실패의 증거로 오인하지 않도록 current pointer를 먼저 무효화한다.
@@ -162,6 +162,9 @@ async function baseline(probe, scenario) {
     } else if (scenario === 'members-pagination') {
       const { membersPagination } = await import('./deadline-members-pagination.mjs');
       await membersPagination({ surface, api, fixture, result, attempt });
+    } else if (scenario === 'assets-footer') {
+      const { assetsFooter } = await import('./deadline-assets-footer.mjs');
+      await assetsFooter({ surface, fixture, api, result, attempt, evidence });
     } else {
     await surface('members-25-sidebar', fixture.actorAdmin, '/members', '.org-directory__table tbody tr', '/api/v1/members', async page => {
       const names = await page.locator('.org-directory__table tbody tr td:first-child').allTextContents();
