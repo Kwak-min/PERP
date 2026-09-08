@@ -101,7 +101,7 @@ export function OrgModulesScreen({ screen }: Readonly<{ screen: ScreenDefinition
             <Badge>{screen.id}</Badge>
           </div>
           <h1>모듈 및 기능 설정</h1>
-          <p>조직의 사용 가능 여부를 설정합니다. 기능을 켜도 구성원의 역할 권한은 변경되지 않습니다.</p>
+          <p>조직의 사용 가능 여부를 설정합니다. 기능을 꺼도 기존 자료와 역할 권한은 보존되며, 다시 켜도 회수한 권한은 복원되지 않습니다.</p>
         </div>
         <div className="screen-header__actions">
           <Button onClick={save} disabled={!canSave || saving || status !== "ready"}>
@@ -123,7 +123,8 @@ export function OrgModulesScreen({ screen }: Readonly<{ screen: ScreenDefinition
         </SectionCard>
       ) : (
         <>
-          <SectionCard title="기능" subtitle="근태·휴가·전자결재는 각각 독립적으로 사용 여부를 설정합니다">
+          <SectionCard title="기능" subtitle="근태·휴가·전자결재는 역할 권한과 별도로 사용 여부를 설정합니다">
+            <p>꺼진 기능은 관리자에게도 메뉴와 API가 차단됩니다. 이 설정은 저장된 기록이나 역할 권한을 변경하지 않습니다.</p>
             <ul className="form-stack" style={{ listStyle: "none", padding: 0 }}>
               {features.map(feature => (
                 <li key={feature.key}>

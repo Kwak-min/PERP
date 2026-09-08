@@ -12,19 +12,22 @@ import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
 import { assertIsolated, startDeadlineServer, createDeadlineFixture, evidenceBody } from '../../backend/tests/deadline-fixture.js';
 import { networkAudit, protectedPorts } from '../../scripts/deadline-isolation-guard.mjs';
+import { initializeDeadlineSession } from './deadline-browser-session.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const args = process.argv.slice(2);
 const sharedScenarioArgs = args[0] === '--scenario'
   && ['baseline', 'recruitment-nav', 'nav-pref', 'members-pagination', 'assets-footer', 'sidebar', 'knowledge-graphs'].includes(args[1])
   && (args.length === 2 || (args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])));
-const dedicatedScenarioArgs = args.length === 2 && args[0] === '--scenario' && ['month-summary', 'roles'].includes(args[1]);
+const dedicatedScenarioArgs = args.length === 2 && args[0] === '--scenario' && ['month-summary', 'roles', 'role-toggles', 'role-toggles-native', 'disabled-hr-features'].includes(args[1]);
 if (!sharedScenarioArgs && !dedicatedScenarioArgs) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar|knowledge-graphs [--probe error|cancel] | --scenario month-summary|roles');
+  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar|knowledge-graphs [--probe error|cancel] | --scenario month-summary|roles|role-toggles|role-toggles-native|disabled-hr-features');
   process.exitCode = 2;
 } else {
   assertIsolated();
   if (args[1] === 'roles') await (await import('./deadline-roles-qa.mjs')).rolesScenario();
+  else if (['role-toggles', 'role-toggles-native'].includes(args[1])) await (await import('./deadline-role-toggles.e2e.mjs')).roleTogglesScenario(args[1] === 'role-toggles-native');
+  else if (args[1] === 'disabled-hr-features') await (await import('./deadline-disabled-hr-features-qa.mjs')).disabledHrFeaturesScenario();
   else if (args[1] === 'month-summary') await (await import('./deadline-month-summary.e2e.mjs')).monthSummary();
   else if (args[1] === 'nav-pref') await (await import('./deadline-nav-pref.e2e.mjs')).navPrefScenario(args[3]);
   else await baseline(args[3], args[1]);
@@ -54,7 +57,7 @@ async function baseline(probe, scenario) {
   await rm(path.join(evidence, 'screen.png'), { force: true });
   const result = { runId, status: 'running', scenario, probe: probe ?? null, source: 'legacy SQLite / actual HTTP APIs', surfaces: [], http: [], blockedBrowserRequests: [], browserResponses: [], errors: [], resources: [], nativePostgres: 'not exercised', liveServicesUsed: false };
   result.provenance = { head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', timeout: 5000 }).trim(), files: {} };
-  for (const file of ['scripts/run_deadline_isolated.mjs', 'scripts/deadline-isolation-guard.mjs', 'scripts/deadline-runner.test.mjs', 'backend/tests/deadline-fixture.js', 'backend/tests/deadline-fixture.test.js', 'frontend/scripts/deadline-qa.e2e.mjs', 'frontend/scripts/deadline-harness.test.mjs', ...(scenario === 'recruitment-nav' ? ['frontend/scripts/deadline-recruitment-nav.scenario.mjs', 'frontend/src/routes/catalog.ts'] : []), ...(scenario === 'sidebar' ? ['frontend/scripts/deadline-sidebar.scenario.mjs', 'frontend/src/components/layout/AppShell.tsx', 'frontend/src/styles.css', 'frontend/src/services/auth.ts', 'frontend/src/store/navPref.ts'] : []), ...(scenario === 'knowledge-graphs' ? ['frontend/src/screens/VaultGraphScreen.tsx', 'frontend/src/screens/KnowledgeGraphScreen.tsx', 'frontend/src/screens/vault/graph3d.ts', 'backend/src/controllers/vault.controller.js', 'backend/src/controllers/documents.controller.js'] : [])]) result.provenance.files[file] = createHash('sha256').update(await readFile(path.join(root, file))).digest('hex');
+  for (const file of ['scripts/run_deadline_isolated.mjs', 'scripts/deadline-isolation-guard.mjs', 'scripts/deadline-runner.test.mjs', 'backend/tests/deadline-fixture.js', 'backend/tests/deadline-fixture.test.js', 'frontend/scripts/deadline-qa.e2e.mjs', 'frontend/scripts/deadline-harness.test.mjs', 'frontend/scripts/deadline-browser-session.mjs', 'frontend/scripts/deadline-browser-session.test.mjs', ...(scenario === 'recruitment-nav' ? ['frontend/scripts/deadline-recruitment-nav.scenario.mjs', 'frontend/src/routes/catalog.ts'] : []), ...(scenario === 'sidebar' ? ['frontend/scripts/deadline-sidebar.scenario.mjs', 'frontend/src/components/layout/AppShell.tsx', 'frontend/src/styles.css', 'frontend/src/services/auth.ts', 'frontend/src/store/navPref.ts'] : []), ...(scenario === 'knowledge-graphs' ? ['frontend/src/screens/VaultGraphScreen.tsx', 'frontend/src/screens/KnowledgeGraphScreen.tsx', 'frontend/src/screens/vault/graph3d.ts', 'backend/src/controllers/vault.controller.js', 'backend/src/controllers/documents.controller.js'] : [])]) result.provenance.files[file] = createHash('sha256').update(await readFile(path.join(root, file))).digest('hex');
   if (scenario === 'members-pagination') for (const file of ['frontend/scripts/deadline-members-pagination.mjs', 'frontend/scripts/deadline-members-pagination-edges.mjs', 'frontend/src/screens/orgchart/MemberDirectory.tsx', 'frontend/src/screens/OrgChartScreen.tsx', 'frontend/src/components/data/MemberListModal.tsx', 'frontend/src/components/data/member-pagination.css']) result.provenance.files[file] = createHash('sha256').update(await readFile(path.join(root, file))).digest('hex');
   await writeFile(path.join(evidence, 'scenario.json'), JSON.stringify(result, null, 2));
   await writeFile(path.join(evidence, 'cleanup.json'), JSON.stringify({ runId, status: 'pending' }, null, 2));
@@ -132,10 +135,12 @@ async function baseline(probe, scenario) {
           socket.connectToServer();
         } else { result.blockedBrowserRequests.push({ url: url.href, method: 'WEBSOCKET' }); socket.close(); }
       });
-      await context.addInitScript(session => { localStorage.setItem('orbitflow.session.v1', JSON.stringify(session)); localStorage.setItem('orbitflow.demoMode', '0'); }, actor.session);
-      const page = await context.newPage(); page.setDefaultTimeout(15000);
       const errors = [];
-      page.on('pageerror', error => errors.push(error.message));
+      await initializeDeadlineSession(context, { origin, session: actor.session, demoMode: true, onPageError: error => {
+        errors.push(error.message);
+        result.errors.push({ phase: 'page', surface: name, message: error.message });
+      } });
+      const page = await context.newPage(); page.setDefaultTimeout(15000);
       page.on('response', response => {
         if (!new URL(response.url()).pathname.startsWith('/api/')) return;
         const task = (async () => {
@@ -249,6 +254,17 @@ async function baseline(probe, scenario) {
       const summaryValues = await page.locator('.calendar-summary__stats dd').allTextContents();
       return { summaryValues, apiEventIds: fixture.events.slice(0, 2).map(event => event.id) };
     });
+    // The primary approval read policy requires a current decision grant, not assignment alone.
+    assert.deepEqual((await api.request(fixture.actorMember, '/approvals/requests')).items, []);
+    await api.request(fixture.actorMember, `/approvals/requests/${fixture.approval.id}`, 'GET', undefined, 404);
+    const approvalReaderRole = await api.request(fixture.actorAdmin, '/settings/roles', 'POST', { name: 'Baseline assigned approval reader', scope: 'self', permissions: ['approval.decide'] }, 201);
+    const approvalReader = (await api.request(fixture.actorAdmin, '/settings/members')).items.find(member => member.membership_id === fixture.actorMember.membershipId);
+    const approvalReaderSaved = await api.request(fixture.actorAdmin, `/settings/members/${approvalReader.membership_id}/roles`, 'PUT', {
+      roles: [...approvalReader.roles, approvalReaderRole.key], expected_roles_version: approvalReader.roles_version,
+    });
+    assert.equal(approvalReaderSaved.roles_version, approvalReader.roles_version + 1);
+    assert.deepEqual((await api.request(fixture.actorMember, '/approvals/requests')).items.map(item => item.id), [fixture.approval.id]);
+    result.approvalReaderFixture = { assignmentAloneReadable: false, explicitDecisionGrant: approvalReaderRole.key, expectedRolesVersion: approvalReader.roles_version, savedRolesVersion: approvalReaderSaved.roles_version };
     await surface('approvals-assigned-member', fixture.actorMember, '/approvals', 'main .operational-list li', '/api/v1/approvals/requests', async page => {
       assert.ok((await page.locator('.operational-list').innerText()).includes(fixture.approval.title));
       return { approvalId: fixture.approval.id, requesterId: fixture.actorAdmin.userId, assigneeId: fixture.actorMember.userId };
