@@ -125,8 +125,8 @@ class WikiTransaction {
     return yield* this.insert('event', { sequence: Number(seq.n), kind, actor_id: this.context.actorId,
       ...references, metadata_json: canonical(metadata), created_at: now() });
   }
-  *authorize() {
-    const c = this.context, action = c.scope === 'company' ? `document.${this.write ? 'write' : 'read'}` : 'agent.chat';
+  *authorize(mutation = this.write) {
+    const c = this.context, action = c.scope === 'company' ? `document.${mutation ? 'write' : 'read'}` : 'agent.chat';
     if (!this.pg) {
       const membership = yield* this.one(`SELECT m.*,o.modules FROM membership m JOIN organization o ON o.id=m.org_id AND o.tenant_id=m.tenant_id
         JOIN tenant t ON t.id=o.tenant_id JOIN app_user u ON u.id=m.user_id
@@ -153,8 +153,8 @@ class WikiTransaction {
       }
     }
   }
-  *open() {
-    yield* this.authorize();
+  *open(mutation = this.write) {
+    yield* this.authorize(mutation);
     const c = this.context, values = [c.store,c.scope,c.tenantId,c.companyId,c.ownerId];
     this.wiki = yield* this.one(`SELECT * FROM knowledge_wiki WHERE store=? AND scope=? AND COALESCE(tenant_id,'')=COALESCE(?,'') AND COALESCE(company_id,'')=COALESCE(?,'') AND COALESCE(owner_id,'')=COALESCE(?,'')${this.pg && this.write ? ' FOR UPDATE' : ''}`,values);
     if (!this.wiki && this.write) {
@@ -421,6 +421,25 @@ export function withKnowledgeTransaction(context, {write = false} = {}, work) {
   if (typeof write !== 'boolean') throw new Error('boolean write option required');
   const tx = new WikiTransaction(wikiContext(context),write);
   function* operation() { yield* tx.open(); return yield* work(tx.facade()); }
+  return executeTransaction(tx,operation);
+}
+// Exact query-result conversion needs both permissions in the same locked SQL
+// transaction, before the callback can read a result or return a prior draft.
+// Do not change ordinary writes or grant drafts to reader job bookkeeping.
+export function withKnowledgeQueryDraftTransaction(context, work) {
+  if (!types.isGeneratorFunction(work) || types.isAsyncFunction(work)) throw wikiError('ASYNC_TRANSACTION_CALLBACK',500);
+  const tx = new WikiTransaction(wikiContext(context),true);
+  function* operation() {
+    yield* tx.authorize(false);
+    yield* tx.open();
+    return yield* work(tx.facade());
+  }
+  return executeTransaction(tx,operation);
+}
+// Transaction mode controls SQL locking/atomicity, not the business permission.
+// This runner is private: ordinary consumers cannot override authorization.
+function executeTransaction(tx,operation) {
+  const {context,write} = tx;
   if (context.store === 'pg') return pgTransaction(async client => {
     try {
       if (!write) await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
@@ -436,6 +455,93 @@ export function withKnowledgeTransaction(context, {write = false} = {}, work) {
     try { const result = runSync(operation(),conn,tx); tx.expire(); conn.exec('COMMIT'); return result; }
     catch (error) { tx.expire(); conn.exec('ROLLBACK'); throw error; }
   } finally { tx.expire(); conn.exec(`PRAGMA query_only=${queryOnly ? 'ON' : 'OFF'}`); }
+}
+// Trusted jobs-service capability only. No HTTP body/options are forwarded here.
+// Existing job authority is derived from its stored operation, never a caller hint.
+export function withKnowledgeJobTransaction(context, selector, work) {
+  if (!types.isGeneratorFunction(work) || types.isAsyncFunction(work)) throw wikiError('ASYNC_TRANSACTION_CALLBACK',500);
+  if (!selector || Object.keys(selector).length !== 1 || !(typeof selector.jobId === 'string' && selector.jobId || ['query','ingest','lint'].includes(selector.operation))) fail('INVALID_JOB_OPERATION',500);
+  const tx = new WikiTransaction(wikiContext(context),true);
+  function* operation() {
+    yield* tx.open(false);
+    let jobId = selector.jobId, kind = selector.operation;
+    if (jobId) {
+      const job = yield* tx.get('job',jobId,true);
+      if (!job || job.actor_id !== tx.context.actorId) fail();
+      kind = job.operation;
+    }
+    if (kind !== 'query') yield* tx.authorize(true);
+    const facade = tx.facade(), drafts = new Set();
+    const denied = () => fail('INVALID_JOB_OPERATION',500);
+    // Build a new facade rather than adding authority to the frozen public one.
+    const overrides = {
+      *insert(table,record) {
+        if (table === 'job') {
+          if (jobId || record.actor_id !== tx.context.actorId || record.operation !== kind) denied();
+        } else if (['job_attempt','job_input'].includes(table)) {
+          if (!jobId || record.job_id !== jobId) denied();
+        } else if (table === 'dependency') {
+          if (record.dependent_page_revision_id || !(jobId && record.dependent_job_id === jobId && !record.dependent_change_set_id || drafts.has(record.dependent_change_set_id) && !record.dependent_job_id)) denied();
+        } else if (table === 'change_set') {
+          if (kind === 'query' || !jobId || record.job_id !== jobId || record.actor_id !== tx.context.actorId || record.state !== 'draft') denied();
+        } else denied();
+        const row = yield* facade.insert(table,record);
+        if (table === 'job') jobId = row.id;
+        if (table === 'change_set') drafts.add(row.id);
+        return row;
+      },
+      *update(table,id,patch) {
+        if (table === 'job') {
+          if (!jobId || id !== jobId || Object.keys(patch).some(k => !['state','fence','lease_owner','lease_until','current_attempt_id','input_manifest_hash','model_version','failure_code','updated_at','result_json','result_hash'].includes(k))) denied();
+        } else if (table === 'job_attempt') {
+          if (!jobId || Object.keys(patch).some(k => !['finished_at','failure_code','result_hash'].includes(k)) || (yield* facade.get(table,id))?.job_id !== jobId) denied();
+        } else denied();
+        return yield* facade.update(table,id,patch);
+      },
+      *event(kind,references={},metadata={}) {
+        if (!jobId || references.job_id !== jobId || Object.keys(references).some(k => !['job_id','change_set_id'].includes(k)) || (references.change_set_id && !drafts.has(references.change_set_id)) || !(kind.startsWith('job.') || kind === 'change_set.draft' && drafts.has(references.change_set_id))) denied();
+        return yield* facade.event(kind,references,metadata);
+      },
+      *persistInputs(id,attemptId,manifest) {
+        if (!jobId || id !== jobId) denied();
+        return yield* facade.persistInputs(id,attemptId,manifest);
+      },
+    };
+    for (const name of ['register','recapture','withdraw','updateWiki']) overrides[name] = function*() { denied(); };
+    return yield* work(Object.freeze({...facade,...overrides}));
+  }
+  return executeTransaction(tx,operation);
+}
+
+// Fixed metadata-only retirement, NOT an unauthenticated transaction callback.
+// Rechecks the actual denial itself; cannot retire an authorized actor's job or
+// a live replacement lease. No input/config/result body is selected or returned.
+export function retireUnauthorizedWikiJob(context,id,lease = null) {
+  const tx = new WikiTransaction(wikiContext(context),true);
+  function* operation() {
+    let denial = null;
+    function* check(mutation) {
+      try { yield* tx.authorize(mutation); }
+      catch (error) { if (!['PERMISSION_DENIED','MODULE_DISABLED'].includes(error.code)) throw error; denial = error.code; }
+    }
+    yield* check(false); // Same company/account lock order as ordinary transactions.
+    const c = tx.context;
+    tx.wiki = yield* tx.one(`SELECT id FROM knowledge_wiki WHERE store=? AND scope=? AND COALESCE(tenant_id,'')=COALESCE(?,'') AND COALESCE(company_id,'')=COALESCE(?,'') AND COALESCE(owner_id,'')=COALESCE(?,'')${tx.pg ? ' FOR UPDATE' : ''}`,[c.store,c.scope,c.tenantId,c.companyId,c.ownerId]);
+    if (!tx.wiki) return false;
+    const job = yield* tx.one(`SELECT id,operation,state,fence,current_attempt_id,lease_owner,lease_until FROM knowledge_job WHERE wiki_id=? AND id=? AND actor_id=?${tx.pg ? ' FOR UPDATE' : ''}`,[tx.wiki.id,id,c.actorId]);
+    if (!job || !['queued','running'].includes(job.state)) return false;
+    if (!denial && job.operation !== 'query') yield* check(true);
+    if (!denial) return false;
+    const instant = yield* tx.clock();
+    if (lease) {
+      if (job.state !== 'running' || job.fence !== lease.fence || job.current_attempt_id !== lease.attempt_id || job.lease_owner !== lease.owner || !job.lease_until || job.lease_until <= instant) return false;
+    } else if (job.state === 'running' && job.lease_until > instant) return false;
+    if (job.current_attempt_id && job.state === 'running') yield* tx.rows('UPDATE knowledge_job_attempt SET failure_code=?,finished_at=? WHERE wiki_id=? AND id=? AND job_id=?',[denial,instant,tx.wiki.id,job.current_attempt_id,id]);
+    yield* tx.rows("UPDATE knowledge_job SET state='failed',failure_code=?,fence=fence+1,lease_owner=NULL,lease_until=NULL,updated_at=? WHERE wiki_id=? AND id=?",[denial,instant,tx.wiki.id,id]);
+    yield* tx.event('job.invalidated',{job_id:id},{code:denial});
+    return true;
+  }
+  return executeTransaction(tx,operation);
 }
 export function registerSource(context, input) { return withKnowledgeTransaction(context,{write:true},function*(tx) { return yield* tx.register(input); }); }
 export function retrieveKnowledge(context, input) { return withKnowledgeTransaction(context,{},function*(tx) { return yield* tx.retrieve(input); }); }

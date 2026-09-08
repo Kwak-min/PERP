@@ -5,13 +5,16 @@ import { pgIdentity, pgRoute } from '../middleware/pgAccess.js';
 import { wikiContext, withKnowledgeTransaction, TRUSTED_SCHEMA } from '../services/knowledge-wiki-store.service.js';
 import { sourceRegistrationSchema, recaptureSchema, sourceCasSchema, wikiError } from '../services/knowledge-wiki-contract.service.js';
 
-// Task31 원본/인가 projection만. jobs/추론/게시 capability는 후속 소유자의 별도 router다.
+import { knowledgeWikiJobsRouter } from './knowledge-wiki-jobs.routes.js';
+
+// 원본 projection과 private 작업 router. 게시 capability는 별도 소유자다.
 export function knowledgeWikiRouter(store, scope) {
   const router = Router();
   const context = req => {
     if (store === 'pg') { const identity = pgIdentity(req); return wikiContext({store,scope,actorId:identity.userId,companyId:identity.companyId}); }
     const p = resolvePrincipal(req); return wikiContext({store,scope,actorId:p.userId,tenantId:p.tenantId,companyId:p.orgId});
   };
+  router.use('/jobs',knowledgeWikiJobsRouter(store,scope,context));
   function route(method,path,write,handler) {
     const execute = async (req,res) => {
       res.set({'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'});
