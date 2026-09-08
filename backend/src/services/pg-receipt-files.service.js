@@ -1,6 +1,7 @@
 import { pgQuery, pgTransaction } from '../config/pg.js';
 import { ApiError, notFound } from '../utils/errors.js';
 import { effectivePgPermissions } from '../config/menu-permissions.js';
+import { canReadPgApproval } from './pg-approval-read-policy.service.js';
 import { assertFeatureEnabled } from '../config/features.js';
 import { assertReceiptBounds, newReceiptStage, receiptUploadView, removeStagedReceipt, tokenHash, writeReceipt, receiptTokensSchema } from './receipt-files.service.js';
 
@@ -33,23 +34,29 @@ export async function pgReceiptParent(client, principal, { kind, parentId, write
   const { rows: [parent] } = await client.query(`SELECT *,xmin::text AS receipt_version FROM ${table} WHERE id=$1 AND company_id=$2 ${write ? 'FOR UPDATE' : ''}`, [parentId, principal.companyId]);
   if (!parent) throw notFound('receipt parent');
   if (kind === 'approval') {
-    if (String(parent.requester_id) !== String(principal.userId) && (write || !principal.has('approval.decide'))) throw notFound('receipt parent');
-    if (!principal.has('approval.decide') || write) principal.require('approval.request');
-    if (write && !['draft', 'pending'].includes(parent.status)) throw new ApiError('CONFLICT', '종결된 결재 원증빙은 변경할 수 없습니다.');
+    const requester = String(parent.requester_id) === String(principal.userId);
+    if (write) {
+      principal.require('approval.request');
+      if (!requester) throw notFound('receipt parent');
+      if (!['draft', 'pending'].includes(parent.status) || parent.workflow_locked) throw new ApiError('CONFLICT', '제출 snapshot의 결재 원증빙은 변경할 수 없습니다.');
+    } else if (!canReadPgApproval(principal, parent)) throw notFound('receipt parent');
   } else principal.require(`transaction.${write ? 'write' : 'read'}`);
   return parent;
 }
 
-export async function freshPgReceiptPrincipal(client, principal, kind) {
+export async function freshPgReceiptPrincipal(client, principal, kind, read = false) {
   await client.query('SELECT id FROM org.companies WHERE id=$1 FOR UPDATE', [principal.companyId]);
-  const permission = kind === 'transaction' ? 'transaction.write' : 'approval.request';
+  const permission = kind === 'transaction' ? `transaction.${read ? 'read' : 'write'}` : null;
   const { rows: [membership] } = await client.query(`SELECT m.user_id FROM org.company_memberships m JOIN auth.users u ON u.id=m.user_id
     JOIN org.companies c ON c.id=m.company_id WHERE m.user_id=$1 AND m.company_id=$2 AND m.status='active' AND u.account_status='active'
     AND u.approval_status='approved' AND c.is_active FOR SHARE OF m,u`, [principal.userId, principal.companyId]);
   const { rows: grants } = await client.query(`SELECT p.code,r.name AS role FROM org.user_roles ur JOIN org.roles r ON r.id=ur.role_id AND r.company_id=$2
     JOIN org.role_permissions rp ON rp.role_id=r.id JOIN org.permissions p ON p.id=rp.permission_id WHERE ur.user_id=$1 AND ur.workspace_id IS NULL`, [principal.userId, principal.companyId]);
-  if (!membership || !grants.some(row => row.code === permission)) throw new ApiError('PERMISSION_DENIED', '현재 원증빙 첨부 권한이 없습니다.');
+  if (!membership) throw new ApiError('PERMISSION_DENIED', '현재 원증빙 첨부 권한이 없습니다.');
   const permissions = effectivePgPermissions(grants);
+  if ((permission && !permissions.includes(permission)) || (kind === 'approval' && !permissions.some(code => code === 'approval.request' || (read && code === 'approval.decide')))) {
+    throw new ApiError('PERMISSION_DENIED', '현재 원증빙 첨부 권한이 없습니다.');
+  }
   const fresh = { ...principal, has: code => permissions.includes(code), require(code) { if (!this.has(code)) throw new ApiError('PERMISSION_DENIED', '현재 원증빙 권한이 없습니다.'); } };
   fresh.require(kind === 'transaction' ? 'menu.finance' : 'menu.approvals');
   const { rows: modules } = await client.query('SELECT module_key FROM org.company_modules WHERE company_id=$1', [principal.companyId]);
@@ -88,7 +95,8 @@ export async function consumePgReceipts(client, principal, { kind, parentId, exp
 
 export async function getPgReceipt(principal, { kind, parentId, fileId }) {
   return pgTransaction(async client => {
-    await pgReceiptParent(client, principal, { kind, parentId });
+    const fresh = await freshPgReceiptPrincipal(client, principal, kind, true);
+    await pgReceiptParent(client, fresh, { kind, parentId });
     if (!/^[1-9]\d*$/.test(String(fileId))) throw notFound('receipt');
     const table = kind === 'transaction' ? 'accounting.journal_entry_files' : 'org.approval_request_files', parentColumn = kind === 'transaction' ? 'entry_id' : 'approval_id';
     const { rows: [file] } = await client.query(`SELECT f.storage_key,f.original_name AS filename,f.mime_type AS mime,f.size_bytes,f.checksum_sha256 FROM ${table} l

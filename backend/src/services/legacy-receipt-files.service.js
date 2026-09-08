@@ -42,12 +42,22 @@ export function stageLegacyReceipt(principal, kind, validated) {
 }
 
 export function legacyReceiptParent(principal, { kind, parentId, write = false }) {
-  principal.require(kind === 'transaction' ? `transaction.${write ? 'write' : 'read'}` : 'approval.request');
+  if (kind === 'transaction') principal.require(`transaction.${write ? 'write' : 'read'}`);
   const parent = getScoped(kind === 'transaction' ? 'transaction_record' : 'approval', principal, parentId);
   if (kind === 'approval') {
-    const assigned = db().prepare('SELECT 1 FROM approval_step WHERE tenant_id=? AND approval_id=? AND approver_id=? AND deleted_at IS NULL').get(principal.tenantId, parentId, principal.userId);
-    if (parent.requester_id !== principal.userId && (write || !assigned)) throw notFound('receipt parent');
-    if (write && !['draft', 'pending'].includes(parent.status)) throw new ApiError('CONFLICT', '종결된 결재 원증빙은 변경할 수 없습니다.');
+    const requester = parent.requester_id === principal.userId;
+    const assigned = db().prepare('SELECT 1 FROM approval_step WHERE tenant_id=? AND approval_id=? AND approver_id=? AND deleted_at IS NULL')
+      .get(principal.tenantId, parentId, principal.userId);
+    if (write) {
+      principal.require('approval.request');
+      if (!requester) throw notFound('receipt parent');
+      if (!['draft', 'pending'].includes(parent.status) || parent.workflow_locked) {
+        throw new ApiError('CONFLICT', '제출 snapshot의 결재 원증빙은 변경할 수 없습니다.');
+      }
+    } else if (parent.status === 'draft') {
+      if (!requester || !principal.has('approval.request')) throw notFound('receipt parent');
+    } else if (requester) principal.require('approval.request');
+    else if (!assigned || !principal.has('approval.decide')) throw notFound('receipt parent');
   } else if (principal.scope !== 'all' && parent.created_by !== principal.userId) {
     throw notFound('receipt parent');
   }

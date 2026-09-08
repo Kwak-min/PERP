@@ -21,6 +21,7 @@ import {
   pgDocumentSemanticScope,
 } from "../services/document-semantic.service.js";
 import { extractSupportedTextUpload, persistUploadedSource } from "../services/document-ingestion.service.js";
+import { canReadPgApproval } from '../services/pg-approval-read-policy.service.js';
 
 // perp_db(PostgreSQL) 모듈 read 슬라이스.
 // strangler-fig 1단계: 홈/프로젝트/캘린더/재무/HR 화면을 실데이터로 전환.
@@ -238,20 +239,21 @@ export async function financeTransactions(req, res) {
 // GET /api/v1/pg/approvals — 결재(승인요청)
 export async function approvals(req, res) {
   const principal = await resolvePgCompanyPrincipal(req);
-  const { companyId, userId } = principal;
+  const { companyId } = principal;
   if (!principal.has('approval.decide')) principal.require('approval.request');
   const canDecide = principal.has('approval.decide');
   const { rows } = await pgQuery(
-    `SELECT ar.id AS __id, ar.request_type AS 유형, r.name AS 신청자, t.name AS 대상,
+    `SELECT ar.id AS __id, ar.requester_id, ar.request_type AS 유형, r.name AS 신청자, t.name AS 대상,
             ar.status AS status, ar.created_at AS 신청일, ar.payload, ar.decision_note, ar.decided_at
        FROM org.approval_requests ar
        LEFT JOIN auth.users r ON r.id = ar.requester_id
        LEFT JOIN auth.users t ON t.id = ar.target_user_id
-      WHERE ar.company_id = $1 AND ($2::boolean OR ar.requester_id = $3)
+      WHERE ar.company_id = $1
       ORDER BY ar.created_at DESC, ar.id DESC`,
-    [companyId, canDecide, userId],
+    [companyId],
   );
-  res.json({ items: rows, can_decide: canDecide, can_request: principal.has('approval.request') });
+  const items = rows.filter(row => canReadPgApproval(principal, row)).map(({ requester_id, ...row }) => row);
+  res.json({ items, can_decide: canDecide, can_request: principal.has('approval.request') });
 }
 
 // GET /api/v1/pg/tasks — 업무 (project.tasks)
