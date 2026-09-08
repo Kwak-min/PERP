@@ -23,6 +23,8 @@ import {
 } from "../services/reservationApi";
 import { AttendeePanel } from "./reservation/AttendeePanel";
 import { CancelScopeModal } from "./reservation/CancelScopeModal";
+import { ReservationModal } from "./reservation/ReservationModal";
+import { isCurrentlyBusy, useOccupancyNow } from "./reservation/useOccupancyNow";
 import { SpaceMonthCalendar } from "./reservation/SpaceMonthCalendar";
 import { seoulDay, type FreeInterval } from "./reservation/occupancy";
 
@@ -38,6 +40,7 @@ import {
   type CancelScope,
   type CreateReservationInput,
   type Reservation,
+  type ReservationCreation,
   type ReservationStatus,
   type Space,
   type UpdateReservationInput,
@@ -78,7 +81,10 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = searchParams.get("tab");
   const activeTab: MainTab = tab === "admin" || tab === "my" || tab === "waitlist" ? tab : "spaces";
-  const setActiveTab = (next: MainTab) => { setTimetableModal(null); setSearchParams({ tab: next }); };
+  const setActiveTab = (next: MainTab) => {
+    setTimetableModal(null); setMyDetailId(null); setMyCancelTarget(null); setAdminModal(null);
+    setSearchParams({ tab: next });
+  };
 
   // ── Tab 1: 공간 검색 & 예약 상태 ──────────────────────────────────────
   const [spaces, setSpaces] = useState<Space[]>([]);
@@ -97,6 +103,7 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
   const spacesRequest = useRef<AbortController | null>(null);
   const [timetableModal, setTimetableModal] = useState<TimetableModalState | null>(null);
   const [timetableBusy, setTimetableBusy] = useState(false);
+  const [creationResult, setCreationResult] = useState<ReservationCreation | null>(null);
 
   // ── Tab 2: 내 예약 상태 ────────────────────────────────────────────────
   const [myReservations, setMyReservations] = useState<Reservation[]>([]);
@@ -106,6 +113,8 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
   const [myDetailId, setMyDetailId] = useState<number | null>(null);
   const [myCancelTarget, setMyCancelTarget] = useState<Reservation | null>(null);
   const [myCancelBusy, setMyCancelBusy] = useState(false);
+  const myRequest = useRef<AbortController | null>(null);
+  const myNow = useOccupancyNow(myReservations);
 
   // ── Tab 3: 대기열 상태 ─────────────────────────────────────────────────
   const [waitlist, setWaitlist] = useState<Waitlist[]>([]);
@@ -120,6 +129,15 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
   const [adminNotice, setAdminNotice] = useState<string | null>(null);
   const [adminModal, setAdminModal] = useState<SpaceAdminModalState | null>(null);
   const [adminBusy, setAdminBusy] = useState(false);
+
+  const modalActive = Boolean(timetableModal || myDetailId !== null || myCancelTarget || adminModal);
+  const modalWasActive = useRef(false);
+  const launcher = useRef<HTMLElement | null>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (modalWasActive.current && !modalActive) (launcher.current?.isConnected ? launcher.current : heading.current)?.focus();
+    modalWasActive.current = modalActive;
+  }, [modalActive]);
 
   // ── 공간 목록 불러오기 ─────────────────────────────────────────────────
   const loadSpaces = useCallback(async () => {
@@ -141,22 +159,25 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
     }
   }, [minCapacity]);
 
-  useEffect(() => () => spacesRequest.current?.abort(), []);
+  useEffect(() => () => { spacesRequest.current?.abort(); myRequest.current?.abort(); }, []);
 
   // ── 내 예약 목록 불러오기 ──────────────────────────────────────────────
   const loadMyReservations = useCallback(async () => {
+    myRequest.current?.abort();
+    const controller = new AbortController();
+    myRequest.current = controller;
     try {
       setMyLoading(true);
       setMyError(null);
-      const raw = await getMyReservations();
-      const parsed = (Array.isArray(raw) ? raw : []).map((item) => reservationSchema.parse(item));
-      setMyReservations(parsed);
+      const raw = await getMyReservations(myStatusTab, controller.signal);
+      const parsed = raw.map((item) => reservationSchema.parse(item));
+      if (!controller.signal.aborted) setMyReservations(parsed);
     } catch (e: unknown) {
-      setMyError(e instanceof Error ? e.message : "내 예약 목록을 불러오지 못했습니다.");
+      if (!controller.signal.aborted) setMyError(e instanceof Error ? e.message : "내 예약 목록을 불러오지 못했습니다.");
     } finally {
-      setMyLoading(false);
+      if (!controller.signal.aborted) setMyLoading(false);
     }
-  }, []);
+  }, [myStatusTab]);
 
   // ── 대기열 목록 불러오기 ──────────────────────────────────────────────
   const loadWaitlist = useCallback(async () => {
@@ -212,19 +233,22 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
   const selectDay = (day: string) => { setTimetableDate(day); setTimetableModal(null); };
 
   // ── 예약 핸들러들 ─────────────────────────────────────────────────────
-  const handleCreateReservation = async (dto: CreateReservationInput | UpdateReservationInput) => {
-    await createReservation(dto as CreateReservationInput);
+  const handleCreateReservation = async (dto: CreateReservationInput) => {
+    const result = await createReservation(dto);
+    setCreationResult(result);
     setCalendarRevision(value => value + 1);
   };
 
-  const handleUpdateReservation = async (id: number, dto: CreateReservationInput | UpdateReservationInput) => {
-    await updateReservation(id, dto as UpdateReservationInput);
+  const handleUpdateReservation = async (id: number, dto: UpdateReservationInput) => {
+    await updateReservation(id, dto);
     setCalendarRevision(value => value + 1);
+    if (activeTab === "my") await loadMyReservations();
   };
 
   const handleCancelReservation = async (r: Reservation, scope: CancelScope) => {
     try {
       setTimetableBusy(true);
+      setSpacesError(null);
       await cancelReservation(r.id, scope);
       setTimetableModal(null);
       setCalendarRevision(value => value + 1);
@@ -238,6 +262,7 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
   const handleMyCancelReservation = async (r: Reservation, scope: CancelScope) => {
     try {
       setMyCancelBusy(true);
+      setMyError(null);
       await cancelReservation(r.id, scope);
       setMyCancelTarget(null);
       await loadMyReservations();
@@ -333,10 +358,12 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
     myDetailId != null ? myReservations.find((r) => r.id === myDetailId) : null;
 
   return (
-    <div className="rsv-screen">
+    <div className="rsv-screen" onClickCapture={event => {
+      if (!modalActive && event.target instanceof HTMLElement) launcher.current = event.target.closest<HTMLElement>('button, [role="button"], a') ?? event.target;
+    }}>
       {/* ── 메인 헤더 ──────────────────────────────────────────────────────── */}
       <div style={{ marginBottom: "1.25rem" }}>
-        <h1 style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "0.25rem", color: "var(--of-text, #0f172a)" }}>
+        <h1 ref={heading} tabIndex={-1} style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "0.25rem", color: "var(--of-text, #0f172a)" }}>
           {screen.label}
         </h1>
         <p style={{ fontSize: "0.875rem", color: "var(--of-text-muted, #475569)" }}>
@@ -376,6 +403,12 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
           </button>
         )}
       </div>
+
+      {creationResult && <section className="rsv-success-banner" role="status" data-created-count={creationResult.created.length} data-skipped-count={creationResult.skipped.length}>
+        <strong>예약 {creationResult.created.length}건 생성 · 충돌로 {creationResult.skipped.length}건 제외</strong>
+        {creationResult.skipped.length > 0 && <ul>{creationResult.skipped.map(item => <li key={item.startTime} data-skipped-start={item.startTime} data-skipped-end={item.endTime}>{formatDateRange(item.startTime, item.endTime)}</li>)}</ul>}
+        <button type="button" className="btn btn-ghost" onClick={() => setCreationResult(null)}>결과 닫기</button>
+      </section>}
 
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* TAB 1: 공간 검색 & 예약 / 타임테이블 통합 뷰                        */}
@@ -507,12 +540,10 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
               <button
                 key={t.key}
                 className={`rsv-tab ${myStatusTab === t.key ? "active" : ""}`}
-                onClick={() => setMyStatusTab(t.key)}
+                onClick={() => { if (myStatusTab !== t.key) { setMyReservations([]); setMyStatusTab(t.key); } }}
               >
                 {t.label}
-                <span style={{ marginLeft: "0.35rem", fontSize: "0.7rem", opacity: 0.7 }}>
-                  ({t.key === "ALL" ? myReservations.length : myReservations.filter((r) => r.status === t.key).length})
-                </span>
+                {t.key === myStatusTab && !myLoading && <span> ({filteredMyReservations.length})</span>}
               </button>
             ))}
           </div>
@@ -530,7 +561,7 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
             ) : (
               <div className="rsv-card-list">
                 {filteredMyReservations.map((r) => (
-                  <div key={r.id} className={`rsv-reservation-card ${r.status === "CANCELLED" ? "cancelled" : ""}`}>
+                  <div key={r.id} data-reservation-id={r.id} className={`rsv-reservation-card ${r.status === "CANCELLED" ? "cancelled" : ""}`}>
                     <div className="rsv-card-body">
                       <h3 className="rsv-card-title">{r.title}</h3>
                       <div className="rsv-card-meta">
@@ -566,11 +597,13 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
                         }}
                       >
                         {STATUS_LABEL[r.status]}
+                        {isCurrentlyBusy(r, myNow) && <strong className="rsv-now-badge" data-current-busy="true">이용 중</strong>}
                       </span>
                       <button className="btn btn-ghost" style={{ fontSize: "0.75rem" }} onClick={() => setMyDetailId(r.id)}>
                         참석자
                       </button>
-                      {r.status === "CONFIRMED" && (
+                      {r.isMine === true && r.status === "CONFIRMED" && <button className="btn btn-ghost" onClick={() => setTimetableModal({ type: "edit", reservation: r })}>수정</button>}
+                      {r.isMine === true && r.status === "CONFIRMED" && (
                         <button
                           className="btn btn-ghost"
                           style={{ fontSize: "0.75rem", color: "var(--of-danger, #b91c1c)" }}
@@ -656,7 +689,7 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
       {activeTab === "admin" && (
         isAdmin ? (
           <>
-            <div style={{ marginBottom: "1.25rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div className="rsv-admin-toolbar" style={{ marginBottom: "1.25rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={{ fontSize: "0.875rem", color: "var(--of-text-muted, #475569)" }}>
               선택한 회사: {organization?.org_name} · 공간을 등록하고 관리합니다.
             </span>
@@ -687,6 +720,7 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
                 <div className="rsv-empty-text">등록된 공간이 없습니다.</div>
               </div>
             ) : (
+              <div className="rsv-table-scroll" role="region" aria-label="공간 관리 표" tabIndex={0}>
               <table className="rsv-admin-table">
                 <thead>
                   <tr>
@@ -744,6 +778,7 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </SectionCard>
         </>
@@ -771,79 +806,66 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
           prefillStart={timetableModal.slot.startTime}
           prefillEnd={timetableModal.slot.endTime}
           onSubmit={handleCreateReservation}
+          onRefresh={() => setCalendarRevision(value => value + 1)}
           onClose={() => setTimetableModal(null)}
         />
       )}
 
       {/* 타임테이블 뷰: 예약 상세/수정 모달 */}
-      {(timetableModal?.type === "detail" || timetableModal?.type === "edit") && timetableModal.reservation && (
-        <div className="rsv-modal-backdrop" onClick={() => setTimetableModal(null)}>
-          <div className="rsv-modal rsv-modal-wide" onClick={(e) => e.stopPropagation()}>
-            <div className="rsv-modal-header">
-              <h2 className="rsv-modal-title">{timetableModal.reservation.title}</h2>
-              <button className="rsv-modal-close" onClick={() => setTimetableModal(null)} aria-label="close">
-                ✕
-              </button>
-            </div>
+      {timetableModal?.type === "detail" && timetableModal.reservation.isMine === true && (
+        <ReservationModal title={timetableModal.reservation.title} onClose={() => setTimetableModal(null)} wide>
             <p style={{ fontSize: "0.8rem", color: "var(--of-text-muted, #475569)", marginBottom: "1.25rem" }}>
-              {formatDate(timetableModal.reservation.startTime)} · {formatTime(timetableModal.reservation.startTime)} – {formatTime(timetableModal.reservation.endTime)}
+              {formatDateRange(timetableModal.reservation.startTime, timetableModal.reservation.endTime)}
             </p>
             {timetableModal.reservation.description && (
               <p style={{ fontSize: "0.875rem", marginBottom: "1.25rem" }}>{timetableModal.reservation.description}</p>
             )}
             <div style={{ borderTop: "1px solid var(--of-border, #e2e8f0)", paddingTop: "1rem", marginBottom: "1rem" }}>
-              <AttendeePanel reservationId={timetableModal.reservation.id} />
+              <AttendeePanel reservationId={timetableModal.reservation.id} readonly={timetableModal.reservation.status === "CANCELLED"} />
             </div>
-            <div className="rsv-modal-footer">
-              <button className="btn btn-ghost" onClick={() => setTimetableModal({ type: "cancel", reservation: timetableModal.reservation! })}>
+            {timetableModal.reservation.status === "CONFIRMED" && <div className="rsv-modal-footer">
+              <button className="btn btn-ghost" onClick={() => setTimetableModal({ type: "cancel", reservation: timetableModal.reservation })}>
                 예약 취소
               </button>
-              <button className="btn btn-primary" onClick={() => setTimetableModal({ type: "edit", reservation: timetableModal.reservation! })}>
+              <button className="btn btn-primary" onClick={() => setTimetableModal({ type: "edit", reservation: timetableModal.reservation })}>
                 수정
               </button>
-            </div>
-          </div>
-        </div>
+            </div>}
+        </ReservationModal>
       )}
 
       {/* 타임테이블 뷰: 예약 수정 모달 */}
-      {timetableModal?.type === "edit" && (
+      {timetableModal?.type === "edit" && timetableModal.reservation.isMine === true && (
         <ReservationFormModal
           existing={timetableModal.reservation}
-          onSubmit={(dto) => handleUpdateReservation(timetableModal.reservation.id, dto)}
+          onSubmit={(dto: UpdateReservationInput) => handleUpdateReservation(timetableModal.reservation.id, dto)}
+          onRefresh={() => setCalendarRevision(value => value + 1)}
           onClose={() => setTimetableModal(null)}
         />
       )}
 
       {/* 타임테이블 뷰: 반복 예약 취소 범위 선택 모달 */}
-      {timetableModal?.type === "cancel" && (
+      {timetableModal?.type === "cancel" && timetableModal.reservation.isMine === true && (
         <CancelScopeModal
           isRecurring={Boolean(timetableModal.reservation.recurrenceRuleId)}
           onConfirm={(scope) => void handleCancelReservation(timetableModal.reservation, scope)}
           onClose={() => setTimetableModal(null)}
           busy={timetableBusy}
+          error={spacesError}
         />
       )}
 
       {/* 내 예약 탭: 참석자 패널 상세 모달 */}
       {myDetailReservation && (
-        <div className="rsv-modal-backdrop" onClick={() => setMyDetailId(null)}>
-          <div className="rsv-modal rsv-modal-wide" onClick={(e) => e.stopPropagation()}>
-            <div className="rsv-modal-header">
-              <h2 className="rsv-modal-title">{myDetailReservation.title}</h2>
-              <button className="rsv-modal-close" onClick={() => setMyDetailId(null)} aria-label="close">
-                ✕
-              </button>
-            </div>
+        <ReservationModal title={myDetailReservation.title} onClose={() => setMyDetailId(null)} wide>
             <p style={{ fontSize: "0.8rem", color: "var(--of-text-muted, #475569)", marginBottom: "1rem" }}>
               {formatDateRange(myDetailReservation.startTime, myDetailReservation.endTime)}
             </p>
             <AttendeePanel
               reservationId={myDetailReservation.id}
-              readonly={myDetailReservation.status === "CANCELLED"}
+              readonly={myDetailReservation.isMine !== true || myDetailReservation.status === "CANCELLED"}
             />
-          </div>
-        </div>
+        </ReservationModal>
       )}
 
       {/* 내 예약 탭: 취소 모달 */}
@@ -853,6 +875,7 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
           onConfirm={(scope) => void handleMyCancelReservation(myCancelTarget, scope)}
           onClose={() => setMyCancelTarget(null)}
           busy={myCancelBusy}
+          error={myError}
         />
       )}
 

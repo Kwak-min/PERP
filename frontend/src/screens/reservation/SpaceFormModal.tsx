@@ -1,5 +1,6 @@
 import { useId, useState } from "react";
 import type { CreateSpaceInput } from "./model";
+import { ReservationModal } from "./ReservationModal";
 
 interface SpaceFormModalProps {
   existing?: { id: number; name: string; location: string; floor?: string | null; capacity: number; amenities?: string[] | null };
@@ -58,12 +59,7 @@ export function SpaceFormModal({ existing, onSubmit, onClose }: Readonly<SpaceFo
   };
 
   return (
-    <div className="rsv-modal-backdrop" onClick={onClose}>
-      <div className="rsv-modal" role="dialog" aria-modal="true" aria-labelledby={`${formId}-title`} onClick={(e) => e.stopPropagation()}>
-        <div className="rsv-modal-header">
-          <h2 id={`${formId}-title`} className="rsv-modal-title">{isEdit ? "공간 수정" : "공간 등록"}</h2>
-          <button className="rsv-modal-close" onClick={onClose} aria-label="닫기">✕</button>
-        </div>
+    <ReservationModal title={isEdit ? "공간 수정" : "공간 등록"} onClose={onClose} busy={busy}>
 
         {error && <div className="rsv-error-banner">{error}</div>}
 
@@ -119,7 +115,6 @@ export function SpaceFormModal({ existing, onSubmit, onClose }: Readonly<SpaceFo
             {busy ? "저장 중..." : isEdit ? "수정" : "등록"}
           </button>
         </div>
-      </div>
-    </div>
+    </ReservationModal>
   );
 }

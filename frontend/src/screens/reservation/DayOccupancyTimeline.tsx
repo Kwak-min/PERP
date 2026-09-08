@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { getTimetable } from "../../services/reservationApi";
 import type { Reservation } from "./model";
+import { isCurrentlyBusy, useOccupancyNow } from "./useOccupancyNow";
+const EMPTY_ROWS: readonly Occupancy[] = [];
 import { completeTimetableSchema, dayBounds, dayOccupancy, freeIntervals, intervalLabel, overlaps, type FreeInterval, type Occupancy } from "./occupancy";
 
 type Props = Readonly<{
@@ -35,7 +37,8 @@ export function DayOccupancyTimeline({ spaceId, day, revision, onSelectFree, onS
   const current = state?.key === key ? state : null;
   const bounds = dayBounds(day);
   const viewport = fullDay ? bounds : { start: bounds.start + 8 * 3_600_000, end: bounds.start + 22 * 3_600_000 };
-  const rows = current?.status === "ready" ? current.rows : [];
+  const rows = current?.status === "ready" ? current.rows : EMPTY_ROWS;
+  const now = useOccupancyNow(rows);
   const outside = rows.filter(row => Date.parse(row.startTime) < viewport.start || Date.parse(row.endTime) > viewport.end).length;
   const segments = [
     ...rows.filter(row => overlaps(row, viewport)).map(row => ({ kind: "busy" as const, row, start: row.startTime })),
@@ -62,7 +65,9 @@ export function DayOccupancyTimeline({ spaceId, day, revision, onSelectFree, onS
               <button className={`rsv-interval ${segment.row.isMine ? "rsv-interval-mine" : "rsv-interval-busy"}`}
                 onClick={() => segment.row.isMine ? onSelectReservation(segment.row) : onSelectBusy(segment.row)}>
                 <span className="rsv-interval-time">{intervalLabel(segment.row, day)}</span>
-                <span>{segment.row.isMine ? `내 예약 · ${segment.row.title}` : "예약됨 · 대기 신청"}</span>
+                <span>{segment.row.isMine ? `내 예약 · ${segment.row.title}` : "예약됨 · 대기 신청"}
+                  {isCurrentlyBusy(segment.row, now) && <strong className="rsv-now-badge" data-current-busy="true">이용 중</strong>}
+                </span>
               </button>
             </li>)}
         </ol>

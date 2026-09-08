@@ -266,7 +266,6 @@
 }
 
 .rsv-reservation-card.cancelled {
-  opacity: 0.6;
   background: var(--of-surface-muted, #f1f5f9);
 }
 
@@ -277,9 +276,7 @@
   font-weight: 700;
   color: var(--of-text, #0f172a);
   margin: 0 0 0.25rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 
 .rsv-card-meta {
@@ -354,6 +351,33 @@
 }
 
 .rsv-modal-wide { max-width: 640px; }
+dialog.rsv-modal { margin: auto; max-width: min(480px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); color: var(--of-text); }
+dialog.rsv-modal-wide { max-width: min(640px, calc(100vw - 2rem)); }
+dialog.rsv-modal::backdrop { background: rgba(15, 23, 42, 0.5); backdrop-filter: blur(3px); }
+.rsv-modal, .rsv-card-meta, .rsv-success-banner, .rsv-error-banner { overflow-wrap: anywhere; word-break: keep-all; }
+.rsv-modal input[type="checkbox"], .rsv-modal input[type="radio"] { width: 1rem; height: 1rem; min-height: 1rem; padding: 0; flex: 0 0 auto; accent-color: var(--of-primary); }
+.rsv-modal .rsv-time-fields { grid-template-columns: minmax(0, 1fr); }
+.rsv-form-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
+.rsv-form-group { min-width: 0; }
+.rsv-attendee-inputs { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .5rem; }
+.rsv-attendee-inputs input { min-width: 0; padding: .5rem; border: 1px solid var(--of-border-strong); border-radius: var(--r-md); }
+.rsv-modal .btn, .rsv-modal-close, .rsv-screen .btn { min-height: 44px; padding: .5rem .75rem; border: 1px solid var(--of-border-strong); border-radius: var(--r-md); background: var(--of-card); color: var(--of-text); cursor: pointer; }
+.rsv-modal .btn-primary { background: var(--of-primary); color: var(--of-card); border-color: var(--of-primary); }
+.rsv-modal .btn-danger { background: var(--of-danger); color: var(--of-card); }
+.rsv-modal button:disabled { opacity: .6; cursor: wait; }
+.rsv-modal :focus-visible, .rsv-screen :focus-visible { outline: 2px solid var(--of-primary); outline-offset: 2px; }
+.rsv-modal-footer, .rsv-tabs { flex-wrap: wrap; }
+.rsv-now-badge { display: inline-block; margin-left: .5rem; padding: .25rem .5rem; border-radius: var(--r-md); color: var(--of-success); background: var(--of-success-soft); font-size: .75rem; }
+.rsv-table-scroll { max-width: 100%; overflow-x: auto; }
+.rsv-table-scroll .rsv-admin-table { min-width: 760px; }
+.rsv-screen .rsv-admin-toolbar { flex-wrap: wrap; gap: .75rem; }
+@media (max-width: 600px) {
+  .rsv-modal .rsv-form-row { grid-template-columns: minmax(0, 1fr); }
+  .rsv-attendee-inputs { flex-direction: column; }
+  dialog.rsv-modal { padding: 1rem; }
+  .rsv-reservation-card { flex-direction: column; }
+  .rsv-card-actions { flex-direction: row; flex-wrap: wrap; align-items: center; }
+}
 
 .rsv-modal-header {
   display: flex;

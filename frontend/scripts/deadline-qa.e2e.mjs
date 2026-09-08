@@ -15,7 +15,10 @@ import { networkAudit, protectedPorts } from '../../scripts/deadline-isolation-g
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const args = process.argv.slice(2);
-if (args[0] === '--scenario' && args[1] === 'reservation-space-calendar' && (args.length === 2 || (args.length === 3 && args[2] === '--baseline'))) {
+if (args[0] === '--scenario' && args[1] === 'reservation-conflict-edit' && args.length === 2) {
+  const { reservationConflict } = await import('./deadline-reservation-conflict.scenario.mjs');
+  await reservationConflict();
+} else if (args[0] === '--scenario' && args[1] === 'reservation-space-calendar' && (args.length === 2 || (args.length === 3 && args[2] === '--baseline'))) {
   const { reservationCalendar } = await import('./deadline-reservation-calendar.scenario.mjs');
   await reservationCalendar(args[2] === '--baseline');
 } else if (args[0] !== '--scenario' || !['baseline', 'recruitment-nav'].includes(args[1]) || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {

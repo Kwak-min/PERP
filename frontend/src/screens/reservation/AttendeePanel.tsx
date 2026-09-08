@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+﻿import { useEffect, useId, useState } from "react";
 import { addAttendee, getAttendees, removeAttendee } from "../../services/reservationApi";
 import { attendeeSchema, ATTENDEE_STATUS_LABEL, type Attendee, type AddAttendeeInput } from "./model";
 
@@ -19,6 +19,7 @@ const ST_FG: Record<string, string> = {
 };
 
 export function AttendeePanel({ reservationId, readonly = false }: Readonly<AttendeePanelProps>) {
+  const formId = useId();
   const [attendees, setAttendees] = useState<Attendee[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -109,17 +110,17 @@ export function AttendeePanel({ reservationId, readonly = false }: Readonly<Atte
           {addError && <div className="rsv-error-banner">{addError}</div>}
           <div className="rsv-form-row" style={{ marginBottom: "0.5rem" }}>
             <div className="rsv-form-group" style={{ margin: 0 }}>
-              <label>이름 *</label>
-              <input type="text" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="홍길동" />
+              <label htmlFor={`${formId}-name`}>이름 *</label>
+              <input id={`${formId}-name`} type="text" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="홍길동" />
             </div>
             <div className="rsv-form-group" style={{ margin: 0 }}>
-              <label>부서</label>
-              <input type="text" value={form.department} onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))} placeholder="개발팀" />
+              <label htmlFor={`${formId}-department`}>부서</label>
+              <input id={`${formId}-department`} type="text" value={form.department} onChange={(e) => setForm((f) => ({ ...f, department: e.target.value }))} placeholder="개발팀" />
             </div>
           </div>
           <div className="rsv-form-group" style={{ marginBottom: "0.75rem" }}>
-            <label>이메일 *</label>
-            <input type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} placeholder="name@example.com" />
+            <label htmlFor={`${formId}-email`}>이메일 *</label>
+            <input id={`${formId}-email`} type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} placeholder="name@example.com" />
           </div>
           <button className="btn btn-primary" onClick={() => void handleAdd()} disabled={busy} style={{ width: "100%" }}>
             {busy ? "초대 중..." : "초대 이메일 발송"}

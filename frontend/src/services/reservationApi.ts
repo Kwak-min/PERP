@@ -14,7 +14,7 @@ import type {
 } from "../screens/reservation/model";
 import { sessionStore } from "../store/session";
 import { z } from "zod";
-import { spaceSchema } from "../screens/reservation/model";
+import { spaceSchema, reservationCreationSchema } from "../screens/reservation/model";
 
 const RESERVATION_API_BASE =
   import.meta.env.VITE_RESERVATION_API_URL ?? "http://localhost:8080";
@@ -138,8 +138,8 @@ export function getReservations(filter: ReservationFilter = {}, signal?: AbortSi
   return rsvFetch<unknown[]>(`/api/v1/reservations${qs ? `?${qs}` : ""}`, { signal: signal ?? null });
 }
 
-export function getMyReservations() {
-  return rsvFetch<unknown[]>("/api/v1/reservations?mine=true");
+export function getMyReservations(status: "CONFIRMED" | "CANCELLED" | "ALL" = "CONFIRMED", signal?: AbortSignal) {
+  return rsvFetch<unknown[]>(`/api/v1/reservations?mine=true&status=${status}`, { signal: signal ?? null });
 }
 
 export function getReservationById(id: number) {
@@ -155,11 +155,12 @@ export function getTimetable(spaceId: number, date: string, slotMinutes = 60, si
   return rsvFetch<unknown>(`/api/v1/reservations/timetable?${params}`, { signal: signal ?? null });
 }
 
-export function createReservation(dto: CreateReservationInput) {
-  return rsvFetch<unknown>("/api/v1/reservations", {
+export async function createReservation(dto: CreateReservationInput) {
+  const raw = await rsvFetch<unknown>("/api/v1/reservations", {
     method: "POST",
     body: JSON.stringify(dto),
   });
+  return reservationCreationSchema.parse(raw);
 }
 
 export function updateReservation(id: number, dto: UpdateReservationInput) {
