@@ -24,7 +24,7 @@ async function change(page, expected, action) {
 
 async function observe(page) {
   return page.evaluate(() => {
-    const screen = document.querySelector('[data-screen-id="AST-001"]');
+    const screen = document.querySelector('main [data-screen-id="AST-001"]');
     const footer = screen.querySelector('.assets-list-footer') ?? screen.querySelector('nav[aria-label="목록 페이지"]');
     const box = element => { const r = element.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
     const numbers = element => [...(element?.textContent.match(/\d+/g) ?? [])].map(Number);
