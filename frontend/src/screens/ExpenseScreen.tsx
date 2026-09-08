@@ -10,6 +10,7 @@ import { ExpenseForm } from '../components/common/ExpenseForm';
 import { downloadCsv, paginateTable, type TableData } from '../pages/screenTable';
 import { ExpenseDetail } from './expenses/ExpenseDetail';
 import { FinanceOverview } from './expenses/FinanceOverview';
+import { ExpenseImportPanel } from './finance/ExpenseImportPanel';
 import { financePath, ledgerRows, statusLabel, type LedgerRow } from './expenses/model';
 import './expenses/expense.css';
 
@@ -22,7 +23,7 @@ function ExpenseWorkspace({ session, screen }: Readonly<{ session: ApiSession; s
   const [params, setParams] = useSearchParams();
   const [rows, setRows] = useState<LedgerRow[] | null>(null), [permissions, setPermissions] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null), [revision, setRevision] = useState(0);
-  const [create, setCreate] = useState(params.get('new') === 'expense');
+  const [create, setCreate] = useState(params.get('new') === 'expense'), [importing, setImporting] = useState(false);
   const selected = params.get('transaction');
   const [query, setQuery] = useState(''), [status, setStatus] = useState(''), [page, setPage] = useState(1);
   const [success, setSuccess] = useState<string | null>(null), [loadedAt, setLoadedAt] = useState('');
@@ -46,11 +47,13 @@ function ExpenseWorkspace({ session, screen }: Readonly<{ session: ApiSession; s
   return <div className="screen expense-screen" data-screen-id={screen.id}>
     <header className="screen-header"><div><h1>{screen.label}</h1><p>기존 수입·지출과 초안·확정 전표를 함께 확인합니다.</p></div><div className="expense-actions">
       <Button tone="neutral" onClick={() => setRevision(n => n + 1)}>새로고침</Button>
-      {canCreate && <Button data-expense-entry onClick={() => { setCreate(true); setSuccess(null); }}>새 지출 입력</Button>}
+      {canCreate && <Button tone="neutral" data-expense-import-entry onClick={() => { setImporting(true); setCreate(false); setSuccess(null); }}>CSV 가져오기</Button>}
+      {canCreate && <Button data-expense-entry onClick={() => { setCreate(true); setImporting(false); setSuccess(null); }}>새 지출 입력</Button>}
     </div></header>
     {screen.id === 'FIN-001' && rows && <FinanceOverview rows={rows} pg={pg} session={session} loadedAt={loadedAt} />}
     {success && <p role="status" data-expense-success>{success}</p>}
     {create && canCreate && <ExpenseForm session={session} onClose={() => setCreate(false)} onSaved={id => { setCreate(false); select(id); setSuccess('확정 장부에 지출이 기록되었습니다.'); setRevision(n => n + 1); }} />}
+    {importing && canCreate && <ExpenseImportPanel session={session} onClose={() => setImporting(false)} onCompleted={summary => { setSuccess(`CSV 적용 완료: 새 기록 ${summary.created ?? 0}건, 기존 기록 재사용 ${summary.reused ?? 0}건.`); setRevision(n => n + 1); }} />}
     {selected && <ExpenseDetail key={selected} id={selected} session={session} canWrite={canWrite} onClose={() => select(null)} onChanged={() => setRevision(n => n + 1)} />}
     <section className="expense-panel" aria-label="전체 거래 장부"><header><div><h2>전체 거래 장부</h2><p>{loadedAt ? `조회 시각 ${loadedAt} · 서울` : '선택 회사의 장부'}</p></div><Button tone="neutral" disabled={!rows || Boolean(error)} onClick={() => downloadCsv('거래', table)}>필터 결과 전체 CSV 내보내기</Button></header>
       <div className="expense-fields"><label>장부 검색<input type="search" value={query} onChange={event => { setQuery(event.target.value); setPage(1); }} /></label><label>상태<select value={status} onChange={event => { setStatus(event.target.value); setPage(1); }}><option value="">전체 상태</option>{['confirmed', 'draft', 'pending'].map(value => <option key={value} value={value}>{statusLabel(value)}</option>)}</select></label></div>

@@ -111,6 +111,39 @@ export async function apiRequest(
   return payload;
 }
 
+async function responsePayload(response: Response): Promise<unknown> {
+  const contentType = response.headers.get("content-type") ?? "";
+  try { return contentType.includes("application/json") ? await response.json() : await response.text(); }
+  catch { return null; }
+}
+
+function throwUploadError(response: Response, payload: unknown, fallback: string): never {
+  const parsed = apiErrorSchema.safeParse(payload);
+  throw new ApiError(parsed.success ? parsed.data.error.message : `${fallback} (${response.status})`, {
+    code: parsed.success ? parsed.data.error.code : "HTTP_ERROR", status: response.status,
+    requestId: response.headers.get("x-request-id") ?? "", details: parsed.success ? parsed.data.error.details : {},
+  });
+}
+
+// CSV는 JSON/base64/multipart가 아닌 선택한 UTF-8 파일의 원본 bytes로만 전송한다.
+export async function apiCsvUpload(
+  path: string,
+  options: Readonly<{ file: File; session: ApiSession; signal: AbortSignal }>,
+): Promise<unknown> {
+  if (!/^\/(?:pg\/)?finance\/transactions\/imports\/uploads$/.test(path)) {
+    throw new ApiError("CSV 업로드 경로가 올바르지 않습니다.", { code: "VALIDATION_ERROR", status: 400, requestId: "", details: {} });
+  }
+  const headers = new Headers({ Accept: "application/json", Authorization: `Bearer ${options.session.token}`, "Content-Type": "text/csv" });
+  if (options.session.orgId) headers.set("X-Org-Id", options.session.orgId);
+  const response = await fetch(`${API_BASE_URL}${workspaceEndpoint(path, options.session.orgId)}`, {
+    method: "POST", headers, body: await options.file.arrayBuffer(), cache: "no-store", redirect: "error",
+    signal: AbortSignal.any([options.signal, AbortSignal.timeout(30000)]),
+  });
+  const payload = await responsePayload(response);
+  if (!response.ok) throwUploadError(response, payload, "CSV 업로드 실패");
+  return payload;
+}
+
 // 원증빙은 JSON이 아닌 원본 bytes로 전송한다. 모든 네트워크 경계는 이 모듈에 둔다.
 export async function apiReceiptUpload(
   path: string,

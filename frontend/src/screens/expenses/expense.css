@@ -32,6 +32,10 @@
 .expense-table-wrap td, .expense-table-wrap th { padding: 8px; border-bottom: 1px solid var(--of-border); }
 .expense-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px; }
 .expense-summary dd { margin: 8px 0 0; font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.expense-import-mapping { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 12px; margin-bottom: 16px; }
+.expense-import small { color: var(--of-text-muted); }
+.expense-import table label { display: flex; align-items: center; gap: 6px; white-space: nowrap; margin-top: 6px; }
+.expense-import table input[type="checkbox"] { width: 20px; min-height: 20px; }
 @media (max-width: 600px) {
   .expense-screen .screen-header { flex-direction: column; align-items: stretch; }
   .expense-fields, .expense-facts, .expense-summary { grid-template-columns: minmax(0, 1fr); }
