@@ -12,7 +12,21 @@
 .role-settings__list { display: grid; gap: 8px; }
 .role-settings__list > div { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid var(--of-border); }
 .role-settings__list > div > small { flex: 1; }
-.role-settings__actions { display: flex; gap: 8px; }
+.role-settings__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.role-settings p, .role-settings legend, .role-settings strong, .role-settings summary { word-break: keep-all; overflow-wrap: anywhere; }
+.role-settings__comparison { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px; margin: 12px 0; }
+.role-settings__comparison > div { padding: 12px; border: 1px solid var(--of-border); border-radius: 6px; background: var(--of-surface-muted); min-width: 0; }
+.role-settings__comparison h3 { font-size: 13px; margin: 0; }
+.role-settings__sources { margin-top: 16px; }
+.role-settings__sources summary { cursor: pointer; min-height: 44px; padding: 12px 0; }
+.role-settings__sources ul { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 8px; padding: 0; list-style: none; }
+.role-settings__sources small { display: block; overflow-wrap: anywhere; }
+.role-settings :is(input, select, summary):focus-visible { outline: 2px solid var(--of-primary); outline-offset: 2px; }
+.role-settings input:disabled, .role-settings select:disabled { cursor: not-allowed; }
+.role-settings__checks input { width: 16px; height: 16px; min-height: 16px; padding: 0; flex: 0 0 16px; accent-color: var(--of-primary); }
+.role-settings__checks label { word-break: keep-all; min-width: 0; }
+.role-settings select { min-width: 0; }
+@media (max-width: 480px) { .role-settings button, .role-settings input:not([type=checkbox]), .role-settings select { min-height: 44px; } }
 .settings-links { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
 .settings-links > a { display: grid; gap: 8px; padding: 20px; border: 1px solid var(--of-border); border-radius: 8px; color: var(--of-text); background: var(--of-card); text-decoration: none; }
 .settings-links > a:hover { border-color: var(--of-primary); }
