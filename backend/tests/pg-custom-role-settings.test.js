@@ -5,7 +5,13 @@ import { installRoleFixture } from './pg-custom-role-fixture.js';
 
 describe('PG custom company roles (SQL boundary fixture, real HTTP)', { timeout: 30000 }, () => {
   let server, fixture, admin, member, foreign;
-  const request = (actor, route, method = 'GET', body) => api(server.baseUrl, route, { ...actor, method, body });
+  const request = (actor, route, method = 'GET', body) => {
+    const roleId = /^\/settings\/roles\/([^/]+)$/.exec(route)?.[1];
+    const memberId = /^\/settings\/members\/([^/]+)\/roles$/.exec(route)?.[1];
+    if (roleId && ['PATCH','DELETE'].includes(method)) body = { ...body, expected_version: fixture.state.roles.find(role => role.id === roleId)?.version };
+    if (memberId && method === 'PUT') body = { ...body, expected_roles_version: fixture.state.memberships.find(member => member.user_id === memberId)?.roles_version };
+    return api(server.baseUrl, route, { ...actor, method, body });
+  };
   const create = (name, permissions, actor = admin) => request(actor, '/settings/roles', 'POST', { name, permissions, scope: 'all' });
   before(async () => { server = await startTestServer(); fixture = await installRoleFixture(); admin = fixture.actor(); member = fixture.actor('102'); foreign = fixture.actor('103', '88'); });
   after(async () => { await server?.close(); await fixture?.close(); });

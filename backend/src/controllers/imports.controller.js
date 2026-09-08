@@ -1,9 +1,10 @@
 import { z } from "zod";
 
-import { db } from "../config/db.js";
+import { db, transaction } from "../config/db.js";
 import { resolvePrincipal } from "../middleware/auth.js";
 import { getScoped, insert, listScoped, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
+import { freshLegacyAuthority, assertDelegation, legacyRoleDefinitions, resolveRoleKeys } from '../services/company-roles.service.js';
 import { ApiError } from "../utils/errors.js";
 
 const importSchema = z.object({
@@ -116,6 +117,15 @@ function validate(kind, rows) {
 }
 
 function applyMembers(principal, rows) {
+  principal = freshLegacyAuthority(principal, 'menu.imports');
+  principal.require('member.write');
+  const definitions = legacyRoleDefinitions(principal);
+  // 어느 행도 쓰기 전에 전체 파일의 현재 회사 역할을 검증한다.
+  for (const row of rows) {
+    const keys = row.values.roles.split(',').map(key => key.trim()).filter(Boolean);
+    assertDelegation(principal, resolveRoleKeys(definitions, keys));
+    row.values.roles = [...new Set(keys)].join(',');
+  }
   const created = [];
   for (const row of rows) {
     const existing = db()
@@ -132,11 +142,14 @@ function applyMembers(principal, rows) {
       });
     const membership = db()
       .prepare(
-        `SELECT id FROM membership
+        `SELECT id, roles FROM membership
          WHERE tenant_id = ? AND org_id = ? AND user_id = ? AND deleted_at IS NULL`,
       )
       .get(principal.tenantId, principal.orgId, user.id);
-    if (membership) continue;
+    if (membership) {
+      assertDelegation(principal, resolveRoleKeys(definitions, membership.roles.split(',').filter(Boolean), true));
+      continue; // insert-only: 기존 역할/버전/회원 자료는 덮지 않는다.
+    }
     const inserted = insert("membership", {
       tenant_id: principal.tenantId,
       org_id: principal.orgId,
@@ -228,10 +241,11 @@ export function templates(_req, res) {
   });
 }
 
-export function createImport(req, res) {
+export const createImport = transaction((req, res) => {
   const principal = resolvePrincipal(req);
   const payload = importSchema.parse(req.body);
   principal.require(KINDS[payload.kind].permission);
+  if (payload.kind === 'members') principal.require('role.assign');
 
   if (payload.request_key) {
     const duplicate = listScoped(
@@ -287,13 +301,14 @@ export function createImport(req, res) {
   });
 
   res.status(201).json({ ...view(job), applied_ids: appliedIds });
-}
+});
 
-export function commitImport(req, res) {
+export const commitImport = transaction((req, res) => {
   const principal = resolvePrincipal(req);
   const payload = commitSchema.parse(req.body);
   const job = getScoped("import_job", principal, req.params.jobId, "import job");
   principal.require(KINDS[job.kind].permission);
+  if (job.kind === 'members') principal.require('role.assign');
 
   if (job.status !== "preview") {
     throw new ApiError("CONFLICT", `이미 처리된 가져오기입니다: ${job.status}`);
@@ -335,7 +350,7 @@ export function commitImport(req, res) {
   });
 
   res.json({ ...view(updated), applied_ids: appliedIds });
-}
+});
 
 export function listImports(req, res) {
   const principal = resolvePrincipal(req);

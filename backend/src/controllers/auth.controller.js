@@ -7,6 +7,7 @@ import { currentUser, resolvePrincipal } from "../middleware/auth.js";
 import { enabledSet } from "../middleware/modules.js";
 import { insert, newId, nowIso, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
+import { assertInvitationDelegation } from '../services/company-roles.service.js';
 import { hashPassword, newToken, tokenFingerprint, verifyPassword } from "../utils/crypto.js";
 import { ApiError } from "../utils/errors.js";
 
@@ -66,6 +67,7 @@ const createSignup = transaction((payload, email, req) => {
   });
 
   if (invite) {
+    assertInvitationDelegation(invite);
     insert("membership", {
       tenant_id: invite.tenant_id,
       user_id: user.id,
@@ -257,6 +259,7 @@ const joinByInvitation = transaction((invite, user, requestId) => {
     .prepare("SELECT id FROM membership WHERE user_id = ? AND org_id = ? AND deleted_at IS NULL")
     .get(user.id, invite.org_id);
   if (already) throw new ApiError("CONFLICT", "이미 이 조직의 구성원입니다");
+  assertInvitationDelegation(invite);
 
   insert("membership", {
     tenant_id: invite.tenant_id,

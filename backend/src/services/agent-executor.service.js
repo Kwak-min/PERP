@@ -1,10 +1,31 @@
+import { z } from "zod";
+
 import { db } from "../config/db.js";
 import { getScoped, insert, nowIso, softDelete, update } from "../models/base.js";
 import * as audit from "./audit.service.js";
 import { createApproval } from "./approval.service.js";
+import { assignLegacyRoles, setLegacyMemberStatus } from "./company-roles.service.js";
 import { ApiError, notFound } from "../utils/errors.js";
 
 const TX = "transaction_record";
+const rolesVersion = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+const mutationSchemas = {
+  "change.member_status": z.object({
+    membership_id: z.string().min(1).max(100),
+    status: z.enum(["active", "inactive", "left"]),
+    expected_roles_version: rolesVersion,
+  }).strict(),
+  "change.permission": z.object({
+    membership_id: z.string().min(1).max(100),
+    roles: z.array(z.string().min(1).max(100)).max(50),
+    expected_roles_version: rolesVersion,
+  }).strict(),
+};
+
+function payloadOf(action) {
+  const payload = JSON.parse(action.input_json || "{}");
+  return mutationSchemas[action.tool]?.parse(payload) ?? payload;
+}
 
 function membershipOf(principal, membershipId) {
   const row = db()
@@ -78,8 +99,8 @@ export function buildPreview(principal, tool, payload) {
   }
 }
 
-export function execute(principal, action) {
-  const payload = JSON.parse(action.input_json || "{}");
+export function execute(principal, action, requestId) {
+  const payload = payloadOf(action);
 
   switch (action.tool) {
     case "create.task": {
@@ -152,30 +173,44 @@ export function execute(principal, action) {
     }
     case "change.member_status": {
       const membership = membershipOf(principal, payload.membership_id);
-      const before = membership.status;
-      const updated = update(
-        "membership",
+      const result = setLegacyMemberStatus(
+        principal,
         membership.id,
-        { status: payload.status, version: membership.version + 1 },
-        principal.userId,
+        payload.status,
+        requestId,
+        payload.expected_roles_version,
       );
       return [
-        { membership_id: updated.id, status: updated.status },
-        { kind: "restore_field", resource: "membership", id: membership.id, field: "status", value: before },
+        result,
+        {
+          kind: "restore_member_status",
+          resource: "membership",
+          id: membership.id,
+          status: membership.status,
+          expected_roles_version: result.roles_version,
+        },
       ];
     }
     case "change.permission": {
       const membership = membershipOf(principal, payload.membership_id);
-      const before = membership.roles;
-      const updated = update(
-        "membership",
+      const roles = membership.roles.split(",").filter(Boolean);
+      const result = assignLegacyRoles(
+        principal,
         membership.id,
-        { roles: payload.roles.join(","), version: membership.version + 1 },
-        principal.userId,
+        payload.roles,
+        requestId,
+        payload.expected_roles_version,
+        "menu.members",
       );
       return [
-        { membership_id: updated.id, roles: (updated.roles ?? "").split(",").filter(Boolean) },
-        { kind: "restore_field", resource: "membership", id: membership.id, field: "roles", value: before },
+        result,
+        {
+          kind: "restore_member_roles",
+          resource: "membership",
+          id: membership.id,
+          roles,
+          expected_roles_version: result.roles_version,
+        },
       ];
     }
     case "delete.task": {
@@ -232,7 +267,7 @@ const ROLLBACK_TABLES = new Set([
   "approval",
 ]);
 
-export function rollback(principal, action) {
+export function rollback(principal, action, requestId) {
   if (!action.rollback_ref) {
     throw new ApiError("CONFLICT", "no rollback information stored for this action");
   }
@@ -245,9 +280,29 @@ export function rollback(principal, action) {
   if (!row) throw notFound(ref.resource);
   if (row.tenant_id !== principal.tenantId) throw notFound(ref.resource);
 
-  if (ref.kind === "soft_delete") {
+  if (ref.kind === "restore_member_roles") {
+    assignLegacyRoles(
+      principal,
+      ref.id,
+      ref.roles,
+      requestId,
+      ref.expected_roles_version,
+      "menu.members",
+    );
+  } else if (ref.kind === "restore_member_status") {
+    setLegacyMemberStatus(
+      principal,
+      ref.id,
+      ref.status,
+      requestId,
+      ref.expected_roles_version,
+    );
+  } else if (ref.kind === "soft_delete") {
     update(ref.resource, ref.id, { deleted_at: nowIso() }, principal.userId);
   } else if (ref.kind === "restore_field") {
+    if (ref.resource === "membership" && (ref.field === "roles" || ref.field === "status")) {
+      throw new ApiError("CONFLICT", "legacy membership rollback lacks a roles version; create a new agent action");
+    }
     update(ref.resource, ref.id, { [ref.field]: ref.value }, principal.userId);
   } else if (ref.kind === "withdraw_approval") {
     update("approval", ref.id, { status: "withdrawn" }, principal.userId);

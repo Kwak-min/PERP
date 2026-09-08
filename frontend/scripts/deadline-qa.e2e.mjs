@@ -15,8 +15,11 @@ import { networkAudit, protectedPorts } from '../../scripts/deadline-isolation-g
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const args = process.argv.slice(2);
-if (args[0] !== '--scenario' || !['baseline', 'recruitment-nav', 'knowledge-graphs'].includes(args[1]) || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|knowledge-graphs [--probe error|cancel]');
+if (args.length === 2 && args[0] === '--scenario' && args[1] === 'roles') {
+  assertIsolated();
+  await (await import('./deadline-roles-qa.mjs')).rolesScenario();
+} else if (args[0] !== '--scenario' || !['baseline', 'recruitment-nav', 'knowledge-graphs'].includes(args[1]) || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {
+  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|roles|knowledge-graphs [--probe error|cancel]');
   process.exitCode = 2;
 } else {
   assertIsolated();

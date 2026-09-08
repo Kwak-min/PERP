@@ -15,12 +15,11 @@ describe("member provisioning credentials and bounded role delegation", { timeou
   let owner;
   const actors = {};
 
-  const request = (actor, route, method = "GET", body) => api(server.baseUrl, route, {
-    token: actor.token,
-    orgId: actor.orgId ?? owner.orgId,
-    method,
-    body,
-  });
+  const request = (actor, route, method = "GET", body) => {
+    const id = /^\/members\/([^/]+)\/(roles|status)$/.exec(route)?.[1];
+    if (id && method === 'PATCH') body = { ...body, expected_roles_version: db().prepare('SELECT roles_version FROM membership WHERE id = ?').get(id).roles_version };
+    return api(server.baseUrl, route, { token: actor.token, orgId: actor.orgId ?? owner.orgId, method, body });
+  };
 
   async function signup(email = emailFor("account")) {
     const result = await api(server.baseUrl, "/auth/signup", {
@@ -149,7 +148,7 @@ describe("member provisioning credentials and bounded role delegation", { timeou
         const result = await request(actors.org_admin,
           target ? `/members/${target.membershipId}/roles` : `/members/${route}`,
           target ? "PATCH" : "POST",
-          { email: emailFor("bounded"), name: "Bounded", roles: [delegatedRole] });
+          target ? { roles: [delegatedRole] } : { email: emailFor("bounded"), name: "Bounded", roles: [delegatedRole] });
         assert.equal(result.status, 403);
         assert.equal(result.body.error.code, "PERMISSION_DENIED");
         if (target) {
@@ -184,7 +183,7 @@ describe("member provisioning credentials and bounded role delegation", { timeou
 
   it("allows owner role workflows and org_admin delegation within its authority", async () => {
     const member = await join();
-    for (const role of ["org_admin", "owner", "member"]) {
+    for (const role of ["org_admin", "company_admin", "member"]) {
       const changed = await request(owner, `/members/${member.membershipId}/roles`, "PATCH", { roles: [role] });
       assert.equal(changed.status, 200);
       assert.deepEqual(changed.body.roles, [role]);
@@ -229,10 +228,10 @@ describe("member provisioning credentials and bounded role delegation", { timeou
     assert.equal((await request({ token: claimed.body.access_token }, "/members")).status, 200);
   });
 
-  it("denies org_admin reset of an unclaimed owner without changing credentials or sessions, but permits owner reset", async () => {
+  it("denies org_admin reset of an unclaimed full administrator without changing credentials or sessions, but permits owner reset", async () => {
     const email = emailFor("unclaimed-owner");
     const provisioned = await request(owner, "/members/provision", "POST", {
-      email, name: "Unclaimed owner", roles: ["owner"],
+      email, name: "Unclaimed administrator", roles: ["company_admin"],
     });
     assert.equal(provisioned.status, 201);
     const login = await api(server.baseUrl, "/auth/login", {

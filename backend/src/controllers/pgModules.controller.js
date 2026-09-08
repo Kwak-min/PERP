@@ -10,6 +10,7 @@ import { pgEnabledFeatures } from "../middleware/features.js";
 import { validateSelection } from "../middleware/modules.js";
 import { hashPassword } from "../utils/crypto.js";
 import { isCompanyMember } from "../services/pg-company.service.js";
+import { mutatePgRoles } from '../services/pg-company-roles.service.js';
 import { readOrgActivity } from "../services/pg-org-audit.service.js";
 import { ApiError } from "../utils/errors.js";
 import { CANDIDATE_LIMIT, pgVaultScope, vaultSemantic } from "../services/vault-semantic.service.js";
@@ -1052,7 +1053,8 @@ export async function positionOptions(req, res) {
 
 // POST /api/v1/pg/members — 구성원 추가(회사에 사용자 생성)
 export async function createMember(req, res) {
-  const { companyId } = await resolveUser(req);
+  const principal = await resolvePgCompanyPrincipal(req);
+  const { companyId } = principal;
   if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 구성원을 추가할 수 있습니다");
   const body = req.body ?? {};
   const email = String(body.email ?? "").trim();
@@ -1060,6 +1062,7 @@ export async function createMember(req, res) {
   const password = String(body.password ?? "");
   const departmentId = body.department_id || null;
   const positionId = body.position_id || null;
+  if (Object.hasOwn(body, 'roles')) throw new ApiError('VALIDATION_ERROR', '역할 배정은 현재 역할 버전으로 역할 설정에서 요청하세요');
   if (!email || !email.includes("@")) throw new ApiError("VALIDATION_ERROR", "올바른 이메일을 입력하세요");
   if (!name) throw new ApiError("VALIDATION_ERROR", "이름은 필수입니다");
   if (password.length < 8) throw new ApiError("VALIDATION_ERROR", "초기 비밀번호는 8자 이상이어야 합니다");
@@ -1074,17 +1077,19 @@ export async function createMember(req, res) {
     const { rows } = await pgQuery(`SELECT 1 FROM org.positions WHERE id=$1 AND company_id=$2`, [positionId, companyId]);
     if (!rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 직급입니다");
   }
-  const { rows } = await pgTransaction(async client => {
-    const created = await client.query(
+  const value = await mutatePgRoles(principal, req.requestId, async ({ query, authority }) => {
+    authority.require('member.write');
+    const created = await query(
       `INSERT INTO auth.users (company_id, department_id, position_id, email, name, password_hash, approval_status, approved_at)
        VALUES ($1, $2, $3, $4, $5, $6, 'approved', now()) RETURNING id`,
       [companyId, departmentId, positionId, email, name, hashPassword(password)],
     );
-    await client.query(`INSERT INTO org.company_memberships (company_id, user_id, department_id, position_id, created_by)
-      VALUES ($1, $2, $3, $4, $5)`, [companyId, created.rows[0].id, departmentId, positionId, resolveUser(req).userId]);
-    return created;
-  });
-  res.status(201).json({ id: String(rows[0].id) });
+    await query(`INSERT INTO org.company_memberships (company_id, user_id, department_id, position_id, created_by)
+      VALUES ($1, $2, $3, $4, $5)`, [companyId, created.rows[0].id, departmentId, positionId, principal.userId]);
+    const value = { id: String(created.rows[0].id) };
+    return { action: 'member.provisioned', resourceId: value.id, after: { roles: [] }, value };
+  }, 'menu.members');
+  res.status(201).json(value);
 }
 
 // POST /api/v1/pg/tasks — 업무 생성 (project.tasks)

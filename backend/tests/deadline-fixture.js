@@ -108,7 +108,8 @@ export async function createDeadlineFixture(server) {
     actor.membershipId = members.items.find(member => member.user_id === actor.userId).membership_id;
   }
   // 생성자의 기존 owner 권한을 API를 통해 유한 company_admin으로 바꾼다.
-  await request(A.actor, `/settings/members/${A.actor.membershipId}/roles`, 'PUT', { roles: ['company_admin'] });
+  const roleMembers = await request(A.actor, '/settings/members');
+  await request(A.actor, `/settings/members/${A.actor.membershipId}/roles`, 'PUT', { roles: ['company_admin'], expected_roles_version: roleMembers.items.find(member => member.membership_id === A.actor.membershipId).roles_version });
   const assets = [];
   for (let index = 1; index <= 25; index++) assets.push(await request(A.actor, '/assets', 'POST', { asset_no: `DEADLINE-${String(index).padStart(2, '0')}`, name: `검증 자산 ${String(index).padStart(2, '0')}`, location: '격리 공간', quantity: 1 }, 201));
   const project = await request(A.actor, '/projects', 'POST', { name: '검증 프로젝트', description: '실제 격리 API로 생성한 기준 자료' }, 201);
