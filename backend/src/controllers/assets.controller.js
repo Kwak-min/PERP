@@ -133,6 +133,7 @@ export function assetAction(req, res) {
   );
 
   const asset = getScoped("asset", principal, req.params.assetId, "asset");
+  if (asset.status === 'disposed') throw new ApiError('CONFLICT', '폐기된 자산은 변경할 수 없습니다');
   if (payload.action === "loan" && asset.status !== "available") {
     throw new ApiError("CONFLICT", `asset is not available: ${asset.status}`);
   }

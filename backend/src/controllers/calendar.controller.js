@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-import { db } from "../config/db.js";
+import { db, transaction } from "../config/db.js";
+import { assertCorrectionVersion } from '../services/daily-corrections.service.js';
 import { resolvePrincipal } from "../middleware/auth.js";
 import {
   bumpVersion,
@@ -36,7 +37,7 @@ const responseSchema = z.object({
 });
 
 function assertWindow(startAt, endAt) {
-  if (endAt <= startAt) {
+  if (!Number.isFinite(Date.parse(startAt)) || !Number.isFinite(Date.parse(endAt)) || Date.parse(endAt) <= Date.parse(startAt)) {
     throw new ApiError("VALIDATION_ERROR", "end_at must be after start_at");
   }
 }
@@ -184,7 +185,14 @@ export function patch(req, res) {
   const endAt = payload.end_at ?? event.end_at;
   assertWindow(startAt, endAt);
   const { version, ...changes } = payload;
-  const updated = bumpVersion("event", { ...event, version }, changes, principal.userId);
+  assertCorrectionVersion(event, version);
+  if (changes.project_id) getScoped('project', principal, changes.project_id, 'project');
+  const updated = transaction(() => {
+    const row = bumpVersion('event', event, changes, principal.userId);
+    audit.record({ tenantId: principal.tenantId, action: 'event.updated', resourceType: 'event',
+      resourceId: event.id, actorId: principal.userId, before: eventView(event), after: eventView(row), requestId: req.requestId });
+    return row;
+  })();
   res.json(eventView(updated));
 }
 

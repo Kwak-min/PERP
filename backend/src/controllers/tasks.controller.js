@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { correctionVersion, assertCorrectionMember } from '../services/daily-corrections.service.js';
 
-import { db } from "../config/db.js";
+import { db, transaction } from "../config/db.js";
 import { resolvePrincipal } from "../middleware/auth.js";
 import { bumpVersion, getScoped, insert, listScoped, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
@@ -22,11 +23,11 @@ const createSchema = z.object({
 const patchSchema = z.object({
   title: z.string().optional(),
   description: z.string().optional(),
-  assignee_id: z.string().optional(),
+  assignee_id: z.string().nullable().optional(),
   status: z.string().optional(),
   priority: z.string().optional(),
   due_at: z.string().optional(),
-  version: z.number().int().optional(),
+  version: correctionVersion,
 });
 
 const checklistSchema = z.object({
@@ -193,6 +194,7 @@ export function patch(req, res) {
   if (payload.version !== undefined && payload.version !== task.version) {
     throw new ApiError("VERSION_CONFLICT", "task was modified by someone else");
   }
+  if (payload.assignee_id !== undefined) assertCorrectionMember(principal, payload.assignee_id);
   if (payload.status === "done") guardCompletion(principal, task);
 
   const before = view(task);
@@ -200,18 +202,12 @@ export function patch(req, res) {
   for (const field of ["title", "description", "assignee_id", "status", "priority", "due_at"]) {
     if (payload[field] !== undefined) changes[field] = payload[field];
   }
-  const updated = bumpVersion("task", task, changes, principal.userId);
-
-  audit.record({
-    tenantId: principal.tenantId,
-    action: "task.updated",
-    resourceType: "task",
-    resourceId: task.id,
-    actorId: principal.userId,
-    before,
-    after: view(updated),
-    requestId: req.requestId,
-  });
+  const updated = transaction(() => {
+    const row = bumpVersion('task', task, changes, principal.userId);
+    audit.record({ tenantId: principal.tenantId, action: 'task.updated', resourceType: 'task', resourceId: task.id,
+      actorId: principal.userId, before, after: view(row), requestId: req.requestId });
+    return row;
+  })();
 
   res.json(view(updated));
 }
