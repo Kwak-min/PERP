@@ -17,6 +17,8 @@ const notes = new Map([
 ]);
 let server, pool, originalQuery;
 const queries = [];
+// Model xmin::text at the SQL result boundary, not inside the product mapper.
+const sqlRow = row => ({ ...row, version: row.version == null ? row.version : String(row.version) });
 before(async () => {
   server = await startTestServer();
   ({ pgPool: pool } = await import("../src/config/pg.js")); originalQuery = pool.query;
@@ -35,12 +37,12 @@ before(async () => {
       if (values[3] !== null) row.content_md = values[3];
       if (values[4] !== null) row.folder_path = values[4];
       row.version += 100;
-      return { rows: [{ ...row }], rowCount: 1 };
+      return { rows: [sqlRow(row)], rowCount: 1 };
     }
     if (sql.includes("INSERT INTO notes.notes")) {
       assert.match(sql, /RETURNING.*xmin::text/s);
       const row = { id: "6", owner: "101", title: values[2], content_md: values[3], folder_path: values[1], version: 101 };
-      notes.set(row.id, row); return { rows: [row], rowCount: 1 };
+      notes.set(row.id, row); return { rows: [sqlRow(row)], rowCount: 1 };
     }
     if (sql.includes("DELETE FROM notes.notes")) {
       assert.match(sql, /v\.owner_id\s*=\s*\$2/);
@@ -52,9 +54,9 @@ before(async () => {
       assert.match(sql, /v\.owner_id\s*=\s*\$[12]/);
       if (sql.includes("n.id = $1")) {
         const row = notes.get(String(values[0]));
-        return { rows: row?.owner === values[1] ? [{ ...row }] : [] };
+        return { rows: row?.owner === values[1] ? [sqlRow(row)] : [] };
       }
-      return { rows: [...notes.values()].filter(row => row.owner === values[0]).map(row => ({ ...row })) };
+      return { rows: [...notes.values()].filter(row => row.owner === values[0]).map(sqlRow) };
     }
     throw new Error(`Unexpected query: ${sql}`);
   };
@@ -67,19 +69,38 @@ test("list and graph read the same owner-wide notes without creating a vault", a
   const list = await request("/notes");
   assert.equal(list.status, 200);
   assert.deepEqual(list.body.items.map(n => n.id).sort(), ["1", "2", "3", "4"]);
-  assert.equal(list.body.items[0].version, 21);
+  assert.equal(list.body.items[0].version, "21");
   assert.deepEqual(list.body.capabilities, { tags: false, pinned: false, agent_enabled: false });
   const graph = await request("/graph");
   assert.equal(graph.status, 200);
   assert.deepEqual(graph.body.nodes.map(n => n.id).sort(), ["1", "2", "3", "4"]);
-  assert.deepEqual(graph.body.edges, [
-    { source: "1", target_id: "2", target_title: "Target" },
-    { source: "1", target_id: null, target_title: "Duplicate" },
-    { source: "1", target_id: null, target_title: "Missing" },
+  assert.deepEqual(graph.body.edges.map(({ source, target_id, target_title, binding, resolution }) => ({ source, target_id, target_title, binding, resolution })), [
+    { source: "1", target_id: "2", target_title: "Target", binding: "title", resolution: "resolved" },
+    { source: "1", target_id: null, target_title: "Duplicate", binding: "title", resolution: "unresolved" },
+    { source: "1", target_id: null, target_title: "Missing", binding: "title", resolution: "unresolved" },
   ]);
+  assert.ok(graph.body.nodes.every(node => node.identity.store === "pg" && node.identity.company === null && node.identity.owner === "101"));
   assert.deepEqual(graph.body.orphans.sort(), ["3", "4"]);
   assert.ok(!queries.slice(before).some(q => /INSERT|UPDATE|DELETE/.test(q.sql)));
 });
+test("missing native xmin is rejected rather than fabricated as an opaque token", async () => {
+  const version = notes.get("2").version;
+  try {
+    notes.get("2").version = undefined;
+    const result = await request("/notes/2");
+    assert.notEqual(result.status, 200);
+  } finally { notes.get("2").version = version; }
+});
+
+test("PG xmin wire tokens reject numbers and invalid values without a write", async () => {
+  const before = structuredClone(notes.get("2"));
+  for (const version of [22, null, {}, [], "", "22.0", " 22", "NaN"]) {
+    const result = await request("/notes/2", { method: "PATCH", body: { version, content: "forged" } });
+    assert.equal(result.status, 400, JSON.stringify({ version, result }));
+    assert.deepEqual(notes.get("2"), before);
+  }
+});
+
 test("full detail and atomic versioned saves share ownership and reject lost updates", async () => {
   const detail = await request("/notes/1"); assert.equal(detail.status, 200);
   const body = { content: "saved", title: "Source", folder: "/", version: detail.body.version };
@@ -93,7 +114,7 @@ test("full detail and atomic versioned saves share ownership and reject lost upd
 });
 test("nonowners receive 404 for detail, update and delete without changing the record", async () => {
   for (const method of ["GET", "PATCH", "DELETE"]) {
-    const result = await request("/notes/1", { token: alien, method, ...(method === "PATCH" ? { body: { version: notes.get("1").version, content: "attack" } } : {}) });
+    const result = await request("/notes/1", { token: alien, method, ...(method === "PATCH" ? { body: { version: String(notes.get("1").version), content: "attack" } } : {}) });
     assert.equal(result.status, 404);
   }
   assert.equal(notes.get("1").content_md, "saved");
@@ -101,7 +122,7 @@ test("nonowners receive 404 for detail, update and delete without changing the r
 test("create returns persisted detail and version, not an id-only receipt", async () => {
   const created = await request("/notes", { method: "POST", body: { title: "Created", content: "persisted", folder: "/new" } });
   assert.equal(created.status, 201);
-  assert.equal(created.body.title, "Created"); assert.equal(created.body.content, "persisted"); assert.equal(created.body.version, 101);
+  assert.equal(created.body.title, "Created"); assert.equal(created.body.content, "persisted"); assert.equal(created.body.version, "101");
 });
 test("graph does not silently truncate a thousand persisted notes", async () => {
   for (let i = 100; i < 1100; i++) notes.set(String(i), { id: String(i), owner: "101", title: `Note ${i}`, content_md: "", folder_path: "/", version: i });

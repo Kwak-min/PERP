@@ -7,6 +7,7 @@ import { createServer } from "vite";
 import react from "@vitejs/plugin-react";
 import { api, createOwnerOrg, startTestServer } from "../../backend/tests/http.js";
 import { startGraphApi } from "./graph-local-api.mjs";
+import { graphResponseBody } from "./graph-response.mjs";
 
 const frontend = fileURLToPath(new URL("../", import.meta.url));
 const componentOnly = process.env.GRAPH_QA_COMPONENT === "1";
@@ -175,7 +176,7 @@ try {
   await check("company graph retains hub links rotation zoom and document picking",async()=>{
     const space=await api(server.baseUrl,"/documents/spaces",{...owner,method:"POST",body:{name:"QA Company Space"}});assert.equal(space.status,201);
     const docs=[];for(const [name,content]of[["QA Policy","# Policy"],["QA Guide","# Guide\n[[QA Policy]]"]]){const r=await api(server.baseUrl,"/documents",{...owner,method:"POST",body:{title:name,content,space_id:space.body.id}});assert.equal(r.status,201);docs.push(r.body);}
-    const response=page.waitForResponse(r=>r.url().endsWith("/api/v1/documents/graph"));await page.goto(`${origin}/documents/graph`);const data=await(await response).json();assert.equal(data.edges.length,3);
+    const response=graphResponseBody(page,r=>r.url().endsWith("/api/v1/documents/graph"));await page.goto(`${origin}/documents/graph`);const completed=await response;assert.equal(completed.status,200);const data=completed.body;assert.equal(data.edges.length,3);
     canvas=page.getByRole("application",{name:"조직 지식 3D 그래프"});await canvas.waitFor();await page.getByRole("button",{name:"자동 회전 끄기",exact:true}).click();
     // 회사 화면은 기존 애니메이션 배치를 유지한다. 사용자 드래그/휠 입력 뒤 실제 draw 이벤트를 검증한다.
     const box=await canvas.boundingBox();assert.ok(box);await arm("paint");await page.mouse.move(box.x+70,box.y+70);await page.mouse.down();await page.mouse.move(box.x+120,box.y+110);await page.mouse.up();await signal();

@@ -76,8 +76,8 @@ test("personal PG Vault remains owner-scoped without organization permissions", 
   const token = session(); grants = [];
   const result = await api(server.baseUrl, "/pg/vault/notes", { token, orgId: "pg:77" });
   assert.equal(result.status, 200);
-  assert.deepEqual(result.body.items, [{ id: "5", title: "Personal", content: "body", folder: "/", tags: [], pinned: false, agent_enabled: false, version: 1 }]);
-  const patched = await api(server.baseUrl, "/pg/vault/notes/5", { method: "PATCH", token, orgId: "pg:77", body: { content: "updated", version: 1 } });
+  assert.deepEqual(result.body.items, [{ id: "5", title: "Personal", content: "body", folder: "/", tags: [], pinned: false, agent_enabled: false, version: "1" }]);
+  const patched = await api(server.baseUrl, "/pg/vault/notes/5", { method: "PATCH", token, orgId: "pg:77", body: { content: "updated", version: result.body.items[0].version } });
   assert.equal(patched.status, 200);
   assert.ok(queries.some(q => q.sql.includes("UPDATE notes.notes") && q.values[1] === "101"));
 });

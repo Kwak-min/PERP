@@ -19,6 +19,7 @@ import {
   pgDocumentSemanticScope,
 } from "../services/document-semantic.service.js";
 import { extractSupportedTextUpload, persistUploadedSource } from "../services/document-ingestion.service.js";
+import { graphEdge, graphIdentity, graphNode } from "../services/graph-identity.service.js";
 
 // perp_db(PostgreSQL) 모듈 read 슬라이스.
 // strangler-fig 1단계: 홈/프로젝트/캘린더/재무/HR 화면을 실데이터로 전환.
@@ -409,6 +410,12 @@ export async function pgDocumentsGraph(req, res) {
     pgDocumentsFor(identity.companyId),
   ]);
   const projectName = new Map(projectRows.map((project) => [String(project.id), project.name]));
+  const projectIdentities = new Map(projectRows.map((project) => [String(project.id), graphIdentity({
+    store: "pg", company: identity.companyId, kind: "space", opaqueId: project.id,
+  })]));
+  const documentIdentities = new Map(documents.map((document) => [document.id, graphIdentity({
+    store: "pg", company: identity.companyId, kind: "document", opaqueId: document.id,
+  })]));
   const titleIds = new Map();
   for (const document of documents) {
     const ids = titleIds.get(document.title) ?? [];
@@ -418,19 +425,25 @@ export async function pgDocumentsGraph(req, res) {
   const chunks = new Map(documents.map((document) => [document.id,
     Math.max(1, document.content.split("\n\n").map((part) => part.trim()).filter(Boolean).length)]));
   const nodes = [
-    ...projectRows.map((project) => ({
+    ...projectRows.map((project) => graphNode({
       id: `project:${project.id}`, kind: "space", title: project.name, folder: project.name,
       sensitivity: "org", chunks: 0, tags: [], updated_at: project.updated_at instanceof Date ? project.updated_at.toISOString() : String(project.updated_at ?? ""),
-    })),
-    ...documents.map((document) => ({
+    }, projectIdentities.get(String(project.id)))),
+    ...documents.map((document) => graphNode({
       id: document.id, kind: "document", title: document.title, folder: document.project_name,
       sensitivity: "internal", chunks: chunks.get(document.id), tags: [], updated_at: document.updated_at,
-    })),
+    }, documentIdentities.get(document.id))),
   ];
   const edges = [];
   for (const document of documents) {
+    const sourceIdentity = documentIdentities.get(document.id);
     if (projectName.has(document.project_id)) {
-      edges.push({ source: document.id, target_id: `project:${document.project_id}`, target_title: document.project_name, kind: "space" });
+      edges.push(graphEdge(
+        { source: document.id, target_id: `project:${document.project_id}`, target_title: document.project_name, kind: "space" },
+        sourceIdentity,
+        projectIdentities.get(document.project_id),
+        { binding: "membership", resolution: "resolved" },
+      ));
     }
     const seen = new Set();
     for (const match of document.content.matchAll(/\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g)) {
@@ -440,12 +453,25 @@ export async function pgDocumentsGraph(req, res) {
       const ids = titleIds.get(title) ?? [];
       const targetId = ids.length === 1 ? ids[0] : null;
       if (targetId === document.id) continue;
-      edges.push({ source: document.id, target_id: targetId, target_title: targetId ? title : "", kind: "link" });
+      const targetIdentity = targetId ? documentIdentities.get(targetId) : null;
+      edges.push(graphEdge(
+        { source: document.id, target_id: targetId, target_title: targetId ? title : "", kind: "link" },
+        sourceIdentity,
+        targetIdentity,
+        targetIdentity
+          ? { binding: "title", resolution: "resolved" }
+          : { binding: "title", resolution: "unresolved", reason: ids.length > 1 ? "duplicate_title" : "title_not_found" },
+      ));
     }
   }
   const semantic = documentSemantic.graph(scope, documents);
-  edges.push(...semantic.edges);
-  const linked = new Set(edges.flatMap((edge) => [edge.source, edge.target_id]).filter(Boolean));
+  for (const edge of semantic.edges) {
+    const sourceIdentity = documentIdentities.get(edge.source);
+    const targetIdentity = documentIdentities.get(edge.target_id);
+    if (sourceIdentity && targetIdentity) edges.push(graphEdge(edge, sourceIdentity, targetIdentity, { binding: "inference", resolution: "resolved" }));
+  }
+  const linked = new Set(edges.filter((edge) => edge.resolution === "resolved")
+    .flatMap((edge) => [edge.source, edge.target_id]).filter(Boolean));
   res.json({
     nodes,
     edges,
@@ -672,7 +698,7 @@ export async function getRecord(req, res) {
     : `t.${col} AS ${col}`,
   ).join(", ");
   const { rows } = await pgQuery(
-    `SELECT ${selects}${Object.hasOwn(MONEY_TABLES, resource) ? ', t.version' : ''} FROM ${def.table} t WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")}`,
+    `SELECT t.id::text AS id, ${selects}${Object.hasOwn(MONEY_TABLES, resource) || resource === "documents" ? ', t.version' : ''} FROM ${def.table} t WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")}`,
     [id, companyId],
   );
   if (!rows[0]) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
@@ -688,7 +714,17 @@ export async function updateRecord(req, res) {
   const def = EDITABLE[resource];
   if (!def) throw new ApiError("VALIDATION_ERROR", "수정할 수 없는 항목입니다");
   if (!/^\d+$/.test(String(id))) throw new ApiError("VALIDATION_ERROR", "잘못된 id");
+  if (resource === "documents") {
+    const visible = await pgQuery(
+      `SELECT t.id FROM ${def.table} t WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")}`,
+      [id, companyId],
+    );
+    if (visible.rowCount === 0) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
+  }
   const body = req.body ?? {};
+  const documentVersion = resource === "documents"
+    ? z.object({ version: z.number().int().positive() }).passthrough().parse(body).version
+    : null;
   const sets = [];
   const params = [id, companyId];
   for (const [col, type] of def.fields) {
@@ -706,13 +742,31 @@ export async function updateRecord(req, res) {
   }
   if (sets.length === 0) throw new ApiError("VALIDATION_ERROR", "변경할 내용이 없습니다");
   if (Object.hasOwn(MONEY_TABLES, resource)) return res.json(await mutateFinancialRecord(req, resource, id, sets, params));
-  if (resource === "documents") sets.push("version = t.version + 1");
+  if (resource === "documents") {
+    params.push(documentVersion);
+    sets.push("version = t.version + 1");
+    const result = await pgQuery(
+      `UPDATE ${def.table} t SET ${sets.join(", ")}
+        WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")} AND t.version = $${params.length}
+        RETURNING t.id, t.version`,
+      params,
+    );
+    if (result.rowCount === 0) {
+      const visible = await pgQuery(
+        `SELECT t.id FROM ${def.table} t WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")}`,
+        [id, companyId],
+      );
+      if (visible.rowCount === 0) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
+      throw new ApiError("VERSION_CONFLICT", "문서가 다른 곳에서 수정되었습니다");
+    }
+    documentSemantic.invalidate(pgDocumentSemanticScope(identity), String(id), Number(result.rows[0].version));
+    return res.json({ id: String(result.rows[0].id), version: Number(result.rows[0].version) });
+  }
   const result = await pgQuery(
     `UPDATE ${def.table} t SET ${sets.join(", ")} WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")}`,
     params,
   );
   if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
-  if (resource === "documents") documentSemantic.invalidate(pgDocumentSemanticScope(identity), String(id));
   res.json({ ok: true });
 }
 
@@ -755,13 +809,14 @@ const toNote = (r) => ({
   tags: [],
   pinned: false,
   agent_enabled: false,
-  version: Number(r.version),
+  // PostgreSQL xmin is an opaque concurrency token, not an application sequence.
+  version: z.string().regex(/^\d+$/).parse(r.version),
 });
 const noteFields = "n.id, n.title, n.content_md, n.folder_path, n.xmin::text AS version";
 const noteInput = z.object({
   title: z.string().trim().min(1), content: z.string().default(""), folder: z.string().min(1).default("/"),
 }).strict();
-const notePatch = noteInput.partial().extend({ version: z.number().int().nonnegative() }).strict();
+const notePatch = noteInput.partial().extend({ version: z.string().regex(/^\d+$/) }).strict();
 const noteId = z.string().regex(/^\d+$/);
 async function ownedNotes(userId, bounded = false) {
   const { rows } = await pgQuery(
@@ -796,6 +851,9 @@ export async function vaultGraph(req, res) {
   const scope = pgVaultScope(identity);
   if (req.query.wait === "1") await vaultSemantic.wait(scope);
   const items = await ownedNotes(identity.userId);
+  const identities = new Map(items.map((note) => [note.id, graphIdentity({
+    store: "pg", owner: identity.userId, kind: "note", opaqueId: note.id,
+  })]));
   const byTitle = new Map();
   for (const note of items) {
     const key = note.title.trim().toLowerCase();
@@ -811,15 +869,33 @@ export async function vaultGraph(req, res) {
       if (!title || seen.has(key)) continue;
       seen.add(key);
       const target = byTitle.get(key) ?? null;
-      edges.push({ source: note.id, target_id: target, target_title: title });
+      const targetIdentity = target ? identities.get(target) : null;
+      edges.push(graphEdge(
+        { source: note.id, target_id: target, target_title: title },
+        identities.get(note.id),
+        targetIdentity,
+        targetIdentity
+          ? { binding: "title", resolution: "resolved" }
+          : { binding: "title", resolution: "unresolved", reason: byTitle.has(key) ? "duplicate_title" : "title_not_found" },
+      ));
       if (target) { connected.add(note.id); connected.add(target); }
     }
   }
   const semantic = vaultSemantic.graph(scope, items);
-  edges.push(...semantic.edges);
-  for (const edge of semantic.edges) { connected.add(edge.source); connected.add(edge.target_id); }
-  res.json({ nodes: items.map(({ id, title, folder }) => ({ id, title, folder })), edges, analysis: semantic.analysis,
-    orphans: items.filter(note => !connected.has(note.id)).map(note => note.id) });
+  for (const edge of semantic.edges) {
+    const sourceIdentity = identities.get(edge.source);
+    const targetIdentity = identities.get(edge.target_id);
+    if (sourceIdentity && targetIdentity) {
+      edges.push(graphEdge(edge, sourceIdentity, targetIdentity, { binding: "inference", resolution: "resolved" }));
+      connected.add(edge.source); connected.add(edge.target_id);
+    }
+  }
+  res.json({
+    nodes: items.map(({ id, title, folder }) => graphNode({ id, title, folder }, identities.get(id))),
+    edges,
+    analysis: semantic.analysis,
+    orphans: items.filter(note => !connected.has(note.id)).map(note => note.id),
+  });
 }
 
 // GET /api/v1/pg/vault/notes/:id
@@ -864,7 +940,7 @@ export async function vaultUpdateNote(req, res) {
        FROM notes.vaults v
       WHERE n.id = $1 AND n.vault_id = v.id AND v.owner_id = $2 AND n.xmin::text = $6
       RETURNING ${noteFields}`,
-    [id, userId, body.title ?? null, body.content ?? null, body.folder ?? null, String(body.version)],
+    [id, userId, body.title ?? null, body.content ?? null, body.folder ?? null, body.version],
   );
   if (result.rowCount === 0) {
     const owned = await pgQuery(`SELECT n.id FROM notes.notes n JOIN notes.vaults v ON v.id = n.vault_id

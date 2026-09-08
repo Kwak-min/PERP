@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-for (const [scenarioName, taskId] of [['baseline', 1], ['recruitment-nav', 3]])
+for (const [scenarioName, taskId] of [['baseline', 1], ['recruitment-nav', 3], ['knowledge-graphs', 26]])
 for (const probe of ['error', 'cancel']) test(`${scenarioName}: real Chrome/API resources close on ${probe}; stale artifacts cannot pass`, { timeout: 90000 }, async () => {
   const evidence = path.join(root, `.omo/evidence/task-${taskId}-deadline-erp-redesign`, `probe-${probe}`);
   await mkdir(evidence, { recursive: true });

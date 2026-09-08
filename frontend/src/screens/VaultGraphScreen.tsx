@@ -31,8 +31,8 @@ import {
 import {
   EMPTY_DRAFT,
   draftOf,
-  noteDetailSchema,
-  noteSchema,
+  parseNoteDetail,
+  parseNoteResult,
   tagsOf,
   type NoteDraft,
 } from "./vault/model";
@@ -62,10 +62,10 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
   const selectionEpoch = useRef(0);
   const selectedId = useRef<string | null>(null);
 
-  const [stats, setStats] = useState({ nodes: 0, links: 0, orphans: 0, unresolved: 0 });
+  const [stats, setStats] = useState({ nodes: 0, links: 0, orphans: 0, unresolved: 0, unavailable: 0 });
   const [graphEdges, setGraphEdges] = useState<VaultGraph["edges"]>([]);
   const [pendingAnalysis, setPendingAnalysis] = useState(0);
-  const [selected, setSelected] = useState<{ id: string; title: string; version: number } | null>(null);
+  const [selected, setSelected] = useState<{ id: string; title: string; version: string | number } | null>(null);
   const [draft, setDraft] = useState<NoteDraft>(EMPTY_DRAFT);
   const [folders, setFolders] = useState<readonly string[]>([]);
   const [spin, setSpin] = useState(!reducedMotion.current);
@@ -267,6 +267,7 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
         links: scene.linkCount,
         orphans: Array.from(scene.degree).filter(degree => degree === 0).length,
         unresolved: scene.unresolved,
+        unavailable: scene.unavailable,
       });
       setError(null);
       kick();
@@ -296,7 +297,7 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
     setNodeOptions([]);
     setGraphEdges([]);
     setPendingAnalysis(0);
-    setStats({ nodes: 0, links: 0, orphans: 0, unresolved: 0 });
+    setStats({ nodes: 0, links: 0, orphans: 0, unresolved: 0, unavailable: 0 });
     void loadGraph();
     return () => {
       openRequest.current?.abort();
@@ -336,7 +337,8 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
       setNotice(null);
       kick();
       try {
-        const detail = noteDetailSchema.parse(
+        const detail = parseNoteDetail(
+          node.id,
           await apiRequest(`${vaultBase}/notes/${node.id}`, { session: apiSession, signal: controller.signal }),
         );
         if (controller.signal.aborted) return;
@@ -362,7 +364,8 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
     setSaving(true);
     setError(null);
     try {
-      const updated = noteSchema.parse(
+      const updated = parseNoteResult(
+        selected.id,
         await apiRequest(`${vaultBase}/notes/${selected.id}`, {
           method: "PATCH",
           session: apiSession,
@@ -467,6 +470,10 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
     return { x: event.clientX - (box?.left ?? 0), y: event.clientY - (box?.top ?? 0) };
   }
 
+  const selectedRendererId = selected
+    ? nodeOptions.find((node) => node.id === selected.id)?.renderer_id ?? null
+    : null;
+
   return (
     <div className="screen" data-screen-id={screen.id}>
       <header className="screen-header">
@@ -523,7 +530,7 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
         <SectionCard
           padded={false}
           title="지식 그래프"
-          subtitle={`노드 ${stats.nodes} · 연결 ${stats.links} · 고립 ${stats.orphans}${stats.unresolved > 0 ? ` · 끊어진 링크 ${stats.unresolved}` : ""}`}
+          subtitle={`노드 ${stats.nodes} · 연결 ${stats.links} · 고립 ${stats.orphans}${stats.unresolved > 0 ? ` · 미해결 ${stats.unresolved}` : ""}${stats.unavailable > 0 ? ` · 접근 불가 ${stats.unavailable}` : ""}`}
           foot="드래그/방향키: 회전 · 휠/+/-: 확대 · Home: 맞춤 · 아래 목록: 노트 선택"
         >
           <p className="graph-note-picker">실선: 직접 위키 링크 · 청록 점선: AI 추론 (확정 관계가 아님)</p>
@@ -638,11 +645,13 @@ export function VaultGraphScreen({ screen }: Readonly<{ screen: ScreenDefinition
             <fieldset className="graph-editor" data-note-id={selected.id} disabled={busy}>
             {apiSession && <NoteAnalysisPanel noteId={selected.id} version={selected.version} base={vaultBase} session={apiSession} onSettled={loadGraph} />}
             <ul aria-label="선택 노트 연결">
-              {graphEdges.filter(edge => edge.source === selected.id || edge.target_id === selected.id).map((edge, index) => {
-                const related = edge.source === selected.id ? edge.target_id : edge.source;
-                const title = nodeOptions.find(node => node.id === related)?.title ?? edge.target_title;
-                return <li key={`${edge.source}:${edge.target_id}:${index}`} data-edge-kind={edge.kind ?? "manual"} data-related-note-id={related ?? ""}>
-                  {edge.kind === "ai_similarity" ? `AI 추론 · ${((edge.score ?? 0) * 100).toFixed(1)}% 코사인 유사도` : "직접 위키 링크"}: {title}
+              {graphEdges.filter(edge => edge.source_renderer_id === selectedRendererId || edge.target_renderer_id === selectedRendererId).map((edge, index) => {
+                const relatedRendererId = edge.source_renderer_id === selectedRendererId ? edge.target_renderer_id : edge.source_renderer_id;
+                const related = nodeOptions.find(node => node.renderer_id === relatedRendererId);
+                const title = related?.title ?? edge.target_title;
+                const resolution = edge.resolution === "resolved" ? "" : edge.resolution === "unavailable" ? " · 대상 접근 불가" : " · 대상 미해결";
+                return <li key={`${edge.source_renderer_id}:${edge.target_renderer_id}:${index}`} data-edge-kind={edge.kind ?? "manual"} data-edge-resolution={edge.resolution} data-related-note-id={related?.id ?? ""}>
+                  {edge.kind === "ai_similarity" ? `AI 추론 · ${((edge.score ?? 0) * 100).toFixed(1)}% 코사인 유사도` : "직접 위키 링크"}: {title}{resolution}
                   {edge.provenance && <small> · {edge.provenance.model} · v{edge.provenance.source_version}/v{edge.provenance.target_version}</small>}
                 </li>;
               })}

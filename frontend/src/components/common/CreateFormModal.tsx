@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { apiRequest, userMessageOf, type ApiSession } from "../../services/api";
 import { useModalFocus } from "../../hooks/useModalFocus";
 import type { CreateConfig } from "../../routes/catalog";
+import { buildFormRequestBody, validateDocumentFormResult, type FormVersionField } from "./createFormContract";
 import { Button } from "../ui/Button";
 
 type Props = Readonly<{
@@ -13,14 +14,16 @@ type Props = Readonly<{
   onCreated: () => void;
   method?: "POST" | "PATCH";
   initialValues?: Record<string, string>;
+  versionField?: FormVersionField;
 }>;
 
 // 설정(CreateConfig)에 따라 입력 폼을 렌더하고 perp_db 로 생성/수정 요청을 보낸다.
-export function CreateFormModal({ entityLabel, config, session, onClose, onCreated, method = "POST", initialValues }: Props) {
+export function CreateFormModal({ entityLabel, config, session, onClose, onCreated, method = "POST", initialValues, versionField }: Props) {
   const firstRef = useRef<HTMLInputElement>(null);
   // Keep the same request key after a timeout/error, including changed payload conflicts.
   const requestKey = useRef(crypto.randomUUID());
   const isEdit = method === "PATCH";
+  const documentTarget = isEdit ? /^\/pg\/records\/documents\/([^/]+)$/.exec(config.endpoint)?.[1] : undefined;
   const [values, setValues] = useState<Record<string, string>>(initialValues ?? {});
   const [options, setOptions] = useState<Record<string, readonly { value: string; label: string }[]>>({});
   const [error, setError] = useState<string | null>(null);
@@ -68,17 +71,30 @@ export function CreateFormModal({ entityLabel, config, session, onClose, onCreat
         return;
       }
     }
+    let body: Record<string, string | number>;
+    try {
+      if (documentTarget && initialValues?.id !== documentTarget) throw new Error("DETAIL_ID_MISMATCH");
+      body = buildFormRequestBody(
+        config.fields.map((field) => field.name),
+        values,
+        isEdit ? versionField : undefined,
+        initialValues,
+      );
+    } catch {
+      setError("서버에서 최신 버전을 다시 불러온 뒤 수정해 주세요.");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
-      await apiRequest(config.endpoint, {
+      const result = await apiRequest(config.endpoint, {
         method,
-        body: { ...values, ...(isEdit && /^\/pg\/records\/(budgets|settlements|dues)\//.test(config.endpoint) && initialValues?.version
-          ? { expected_version: Number(initialValues.version) } : {}) },
+        body,
         ...(method === 'POST' && /^\/pg\/(assets|finance\/(transactions|budgets|settlements|dues))$/.test(config.endpoint)
           ? { headers: { 'Idempotency-Key': requestKey.current } } : {}),
         ...(session ? { session } : {}),
       });
+      if (documentTarget) validateDocumentFormResult(documentTarget, result);
       onCreated();
       onClose();
     } catch (err) {
