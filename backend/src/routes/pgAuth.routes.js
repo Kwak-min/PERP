@@ -66,6 +66,8 @@ pgRouter.get('/assets/:id/custody', asyncRoute(pgRoute(corrections.getAssetCusto
 pgRouter.patch('/assets/:id/custody', asyncRoute(pgRoute(corrections.patchAssetCustody, 'asset.write', 'assets')));
 pgRouter.get("/tasks", asyncRoute(pgRoute(mod.tasks, "task.read", "tasks")));
 pgRouter.post("/tasks", asyncRoute(pgRoute(projectMembers.createPgProjectTask, "task.write", "tasks")));
+pgRouter.get('/projects/:id/candidates', asyncRoute(pgRoute(projectMembers.listPgProjectCandidates, 'project.write', 'projects')));
+pgRouter.get('/tasks/:id/assignees', asyncRoute(pgRoute(projectMembers.listPgTaskAssignees, 'task.write', 'tasks')));
 pgRouter.get('/projects/:id/members', asyncRoute(pgRoute(projectMembers.listPgProjectMembers, 'project.read', 'projects')));
 pgRouter.post('/projects/:id/members', asyncRoute(pgRoute(projectMembers.addPgProjectMember, 'project.write', 'projects')));
 pgRouter.get("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.approvals))));

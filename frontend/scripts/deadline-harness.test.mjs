@@ -9,12 +9,13 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-for (const probe of ['error', 'cancel']) test(`real Chrome/API resources close on ${probe}; stale artifacts cannot pass`, { timeout: 90000 }, async () => {
-  const evidence = path.join(root, '.omo/evidence/task-1-deadline-erp-redesign', `probe-${probe}`);
+for (const [scenarioName, taskId] of [['baseline', 1], ['recruitment-nav', 3]])
+for (const probe of ['error', 'cancel']) test(`${scenarioName}: real Chrome/API resources close on ${probe}; stale artifacts cannot pass`, { timeout: 90000 }, async () => {
+  const evidence = path.join(root, `.omo/evidence/task-${taskId}-deadline-erp-redesign`, `probe-${probe}`);
   await mkdir(evidence, { recursive: true });
   await writeFile(path.join(evidence, 'scenario.json'), JSON.stringify({ runId: 'stale', status: 'passed' }));
   await writeFile(path.join(evidence, 'screen.png'), 'stale');
-  const child = spawn(process.execPath, [path.join(root, 'scripts/run_deadline_isolated.mjs'), 'node', 'frontend/scripts/deadline-qa.e2e.mjs', '--scenario', 'baseline', '--probe', probe], {
+  const child = spawn(process.execPath, [path.join(root, 'scripts/run_deadline_isolated.mjs'), 'node', 'frontend/scripts/deadline-qa.e2e.mjs', '--scenario', scenarioName, '--probe', probe], {
     cwd: root, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true,
   });
   let stdout = '', stderr = '', ready;
