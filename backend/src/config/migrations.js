@@ -1,3 +1,5 @@
+import { migrateReceipts } from './receipt-migration.js';
+
 function columnsOf(conn, table) {
   return new Set(conn.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
 }
@@ -227,6 +229,8 @@ const MIGRATIONS = [
     },
   },
 ];
+
+MIGRATIONS.push({ version: 9, up: migrateReceipts });
 
 export function applyMigrations(conn) {
   conn.exec(`

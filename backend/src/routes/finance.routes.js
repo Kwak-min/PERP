@@ -3,7 +3,11 @@ import { Router } from "express";
 import * as controller from "../controllers/finance.controller.js";
 import { asyncRoute } from "../middleware/error.js";
 
+import { authorizeReceiptUpload, receiptRaw, uploadReceipt, downloadReceipt } from '../controllers/receiptFiles.controller.js';
+
 export const financeRouter = Router();
+financeRouter.post('/transactions/receipt-uploads', asyncRoute(authorizeReceiptUpload('legacy', 'transaction')), receiptRaw, asyncRoute(uploadReceipt('legacy', 'transaction')));
+financeRouter.get('/transactions/:id/receipts/:fileId', asyncRoute(downloadReceipt('legacy', 'transaction')));
 
 financeRouter.post("/accounts", asyncRoute(controller.createAccount));
 financeRouter.get("/accounts", asyncRoute(controller.listAccounts));

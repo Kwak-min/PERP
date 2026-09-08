@@ -15,7 +15,13 @@ import { duesPaymentHistory, recordDuesPayment } from '../controllers/pgDuesPaym
 
 // perp_db (PostgreSQL) 슬라이스 라우터. strangler-fig: 기존 SQLite 라우트와 분리.
 // 마운트 지점: /api/v1/pg
+import { receiptRaw, uploadReceipt, downloadReceipt } from '../controllers/receiptFiles.controller.js';
+
 export const pgRouter = Router();
+pgRouter.post('/finance/transactions/receipt-uploads', (req, res, next) => asyncRoute(pgRoute(() => next(), 'transaction.write', 'finance'))(req, res, next), receiptRaw, asyncRoute(uploadReceipt('perp_db', 'transaction')));
+pgRouter.get('/finance/transactions/:id/receipts/:fileId', asyncRoute(pgRoute(downloadReceipt('perp_db', 'transaction'), 'transaction.read', 'finance')));
+pgRouter.post('/approvals/receipt-uploads', (req, res, next) => asyncRoute(pgRoute(withPgFeature('approvals', () => next()), 'approval.request', null))(req, res, next), receiptRaw, asyncRoute(uploadReceipt('perp_db', 'approval')));
+pgRouter.get('/approvals/:id/receipts/:fileId', asyncRoute(pgRoute(withPgFeature('approvals', downloadReceipt('perp_db', 'approval')))));
 
 pgRouter.use("/agent/api-key", pgAgentKeyRouter);
 pgRouter.get("/health", asyncRoute(controller.health));

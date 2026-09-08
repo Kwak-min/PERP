@@ -14,7 +14,7 @@ export function createApp() {
     cors({
       origin: env.corsOrigins,
       credentials: true,
-      exposedHeaders: ["X-Request-Id"],
+      exposedHeaders: ["X-Request-Id", "Content-Disposition"],
     }),
   );
   app.use(requestContext);
