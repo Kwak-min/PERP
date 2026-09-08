@@ -1,0 +1,8 @@
+.member-pagination { display: flex; flex: none; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--of-border); color: var(--of-text-muted); font-size: 12px; }
+.member-pagination > span { margin-right: auto; }
+.member-modal > .member-pagination { margin: 0 -20px; }
+.member-modal > .modal__head, .member-modal > .member-modal__toolbar { flex: none; }
+@media (max-width: 700px) {
+  .member-pagination .button { min-height: 44px; min-width: 44px; }
+  .member-modal .modal__head p { word-break: keep-all; }
+}

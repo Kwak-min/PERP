@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { z } from "zod";
 
+import { MemberListModal } from "../components/data/MemberListModal";
 import { CreateFormModal } from "../components/common/CreateFormModal";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
@@ -43,6 +44,7 @@ function OrganizationWorkspace({ screen, session }: Readonly<{ screen: ScreenDef
   const [revision, setRevision] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
   const [showLog, setShowLog] = useState(false);
+  const [showMembers, setShowMembers] = useState(false);
   const can = (permission: string) => permissions.includes(permission) || (!pg && permissions.includes("*"));
   const canAssign = can(pg ? "department.write" : "member.write");
   const canSetup = can("department.write") && canAssign;
@@ -51,10 +53,11 @@ function OrganizationWorkspace({ screen, session }: Readonly<{ screen: ScreenDef
 
   useEffect(() => {
     const controller = new AbortController();
-    setState({ status: "loading", chart: null, members: [], error: null });
+    // 같은 회사의 재조회는 필터·페이지를 유지하고 새 전체 결과에서 clamp한다.
+    setState(previous => ({ ...previous, status: "loading", error: null }));
     Promise.all([
       apiRequest("/pg/members/org-chart", { session, signal: controller.signal }),
-      pg ? Promise.resolve(null) : apiRequest("/pg/members?limit=1000", { session, signal: controller.signal }),
+      pg ? Promise.resolve(null) : apiRequest("/members?limit=-1", { session, signal: controller.signal }),
     ]).then(([chartData, memberData]) => {
       const chart = orgChartSchema.parse(chartData);
       if (pg) z.string().regex(/^[1-9]\d*$/).parse(chart.revision);
@@ -143,6 +146,7 @@ function OrganizationWorkspace({ screen, session }: Readonly<{ screen: ScreenDef
     <header className="screen-header"><div><div className="screen-header__meta"><span className="eyebrow">사람</span><Badge>{screen.id}</Badge></div><h1>구성원·조직도</h1><p>구성원과 부서 구조를 함께 확인하고 관리합니다.</p></div>
       <div className="screen-header__actions">
         {pg && createConfig && can("member.write") && can("role.assign") && <Button size="small" onClick={() => setShowCreate(true)}>구성원 추가</Button>}
+        <Button tone="neutral" size="small" aria-haspopup="dialog" disabled={state.status !== "ready"} onClick={() => setShowMembers(true)}>구성원 목록 팝업</Button>
         <Button tone="neutral" size="small" id="org-log-trigger" aria-haspopup="dialog" aria-controls="org-log-dialog" aria-expanded={showLog} disabled={!canReadLog} onClick={() => setShowLog(true)}>변경 로그</Button>
         <Button tone="neutral" size="small" disabled={busy || state.status === "loading"} onClick={reload}>새로 고침</Button>
       </div>
@@ -151,9 +155,9 @@ function OrganizationWorkspace({ screen, session }: Readonly<{ screen: ScreenDef
     {requestedLog && permissionState === "ready" && !canReadLog && <div className="form-error" role="alert">조직 변경 로그를 볼 권한이 없습니다.</div>}
     {mutationError && <div className="form-error" role="alert">{mutationError}</div>}
     {notice && <div className="screen-notice" role="status"><span>{notice}</span><Button tone="ghost" size="small" onClick={() => setNotice(null)}>닫기</Button></div>}
-    {state.status === "loading" ? <p className="orgchart__empty" role="status">구성원과 조직도를 불러오는 중입니다…</p>
+    {state.status === "loading" && !state.chart ? <p className="orgchart__empty" role="status">구성원과 조직도를 불러오는 중입니다…</p>
       : state.error ? <div className="form-error" role="alert">{state.error}</div>
-      : <div className="orgchart-layout"><div className="orgchart-main">
+      : <div className="orgchart-layout" aria-busy={state.status === "loading"} inert={state.status === "loading"}><div className="orgchart-main">
         <MemberDirectory members={state.members} seats={seats} selectedMemberId={selectedMemberId} initialQuery={search.get("q") ?? ""} onSelect={selectMember} />
         <SectionCard title="조직도" subtitle="부서 구조와 책임자" foot="직접 등록한 부서만 표시합니다">
           <OrgChartTree roots={state.chart?.roots ?? []} selectedMemberId={selectedMemberId} selectedSeatId={setupSeat?.id ?? null} onSelectMember={selectMember} onSetupSeat={seat => { setSetupSeat(seat); setSelectedMemberId(null); }} busy={busy} canSetup={canSetup} canAdd={can("department.write")} onAddChild={(seat, name) => void addChild(seat, name)} />
@@ -164,6 +168,7 @@ function OrganizationWorkspace({ screen, session }: Readonly<{ screen: ScreenDef
           : selectedMember ? <MemberDetailPanel member={selectedMember} departmentName={seats.find(seat => seat.id === selectedMember.department_id)?.name ?? selectedMember.department_id ?? "미배정"} busy={busy} canAssign={canAssign && selectedMember.status === "active"} session={session} onChangeTitle={(member, title) => void changeTitle(member, title)} />
           : <p className="orgchart__hint">목록이나 조직도에서 이름을 선택하면 이메일·부서·전화번호와 인사 프로필을 확인할 수 있습니다.</p>}
       </aside></div>}
+    {showMembers && <MemberListModal session={session} onClose={() => setShowMembers(false)} />}
     {showLog && canReadLog && <OrgLogModal session={session} onClose={closeLog} />}
     {showCreate && pg && createConfig && can("member.write") && can("role.assign") && <CreateFormModal entityLabel="구성원" config={createConfig} session={session} onClose={() => setShowCreate(false)} onCreated={() => { setNotice("구성원을 추가했습니다."); reload(); }} />}
   </div>;
