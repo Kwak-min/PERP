@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { changeAssetCustody } from '../controllers/dailyCorrections.controller.js';
 
 import * as controller from "../controllers/assets.controller.js";
 import { asyncRoute } from "../middleware/error.js";
@@ -14,4 +15,5 @@ assetsRouter.post("/reservations/:reservationId/check-in", asyncRoute(controller
 assetsRouter.delete("/reservations/:reservationId", asyncRoute(controller.cancelReservation));
 
 assetsRouter.get("/:assetId", asyncRoute(controller.getAsset));
+assetsRouter.patch('/:assetId/custody', asyncRoute(changeAssetCustody));
 assetsRouter.post("/:assetId/actions", asyncRoute(controller.assetAction));

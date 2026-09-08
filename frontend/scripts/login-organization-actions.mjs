@@ -73,7 +73,7 @@ export async function creationAndNavigationScenarios(qa) {
     await page.getByRole('button', { name: '다음', exact: true }).click();
     await page.getByRole('button', { name: '다음', exact: true }).click();
     const saved = page.waitForResponse(response => /\/api\/v1\/(tenants|pg\/companies)$/.test(response.url()) && response.request().method() === 'POST');
-    const refreshed = page.waitForResponse(response => response.url().endsWith('/api/v1/auth/me'));
+    const refreshed = page.waitForResponse(response => response.url().endsWith(mode === 'legacy' ? '/api/v1/auth/me' : '/api/v1/pg/auth/workspace'));
     const home = page.waitForURL(origin + '/');
     await page.getByRole('button', { name: '조직 만들기', exact: true }).click();
     const response = await saved;
@@ -122,6 +122,32 @@ export async function creationAndNavigationScenarios(qa) {
       const selected = await page.evaluate(key => JSON.parse(localStorage.getItem(key)), storageKey);
       assert.equal(selected.orgId, created.org_id, 'selected secondary PG membership survives reauthentication');
     }
+  });
+
+  await scenario('legacy-branch-preserves-access-roles', async page => {
+    const session = await seedSession(page);
+    const roles = await api(server.baseUrl, '/members/roles', session);
+    assert.equal(roles.status, 200);
+    const memberRole = roles.body.items.find(role => role.key === 'member');
+    assert.ok(memberRole);
+    await page.locator('.workspace-picker__button').click();
+    await page.getByRole('button', { name: '브랜치 만들기', exact: true }).click();
+    await page.getByLabel('브랜치 이름', { exact: true }).fill('QA_LEGACY_RESTRICTED_BRANCH');
+    await page.locator('.branch-create__roles').getByLabel(memberRole.label, { exact: true }).check();
+    const response = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/members/departments' && response.request().method() === 'POST');
+    await page.locator('.branch-create__submit').click();
+    const saved = await response;
+    assert.equal(saved.status(), 201);
+    assert.deepEqual(saved.request().postDataJSON(), { name: 'QA_LEGACY_RESTRICTED_BRANCH', access_roles: ['member'] });
+    const branch = await saved.json();
+    assert.deepEqual(branch.access_roles, ['member']);
+    const listed = await api(server.baseUrl, '/members/departments', session);
+    assert.equal(listed.status, 200);
+    assert.deepEqual(listed.body.items.find(row => row.id === branch.id).access_roles, ['member']);
+    await page.getByRole('menuitemradio', { name: /QA_LEGACY_RESTRICTED_BRANCH/ }).waitFor();
+    await page.reload();
+    await page.locator('.workspace-picker__button').click();
+    await page.getByRole('menuitemradio', { name: /QA_LEGACY_RESTRICTED_BRANCH/ }).waitFor();
   });
 
   await scenario('creation-refresh-retry-does-not-duplicate', async page => {

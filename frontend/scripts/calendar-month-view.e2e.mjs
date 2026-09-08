@@ -133,7 +133,24 @@ try {
       assert.deepEqual(await dayList.locator('strong').allTextContents(), samples.slice(3).map(event => event.title));
       assert.equal(await dayList.getByRole('link').count(), 5);
       assert.equal(await page.locator('button.calendar__cell :is(a, button, details, summary)').count(), 0);
+      await expect(page.locator('.calendar-summary')).toBeVisible();
+      assert.equal(parseInt(await page.locator('.calendar-summary__stats dd').first().textContent(), 10), 7);
+      assert.equal(parseInt(await page.locator('.calendar-summary__stats dd').last().textContent(), 10), 5);
+      assert.deepEqual(await page.locator('.calendar-upcoming strong').allTextContents(), [...samples.slice(3), samples[1]].map(event => event.title));
+      assert.deepEqual(await page.locator('.calendar-summary').evaluate(element => ({
+        occupiedDays: parseInt(element.querySelectorAll('.calendar-summary__stats dd')[1].textContent, 10),
+        titlesFit: [...element.querySelectorAll('.calendar-upcoming strong')].every(title => title.scrollWidth <= title.clientWidth && title.getBoundingClientRect().right <= element.getBoundingClientRect().right),
+      })), { occupiedDays: 6, titlesFit: true });
+      const summaryLink = page.locator('.calendar-upcoming__item').first();
+      await expect(summaryLink).toHaveAttribute('href', `/calendar/${ids[3]}?month=2026-09&day=2026-09-07`);
+      const summaryDetail = page.waitForResponse(r => session.pg ? new URL(r.url()).searchParams.get('event_id') === ids[3] : new URL(r.url()).pathname === `${calendarPath}/${ids[3]}`);
+      await summaryLink.click(); assert.equal((await summaryDetail).status(), 200);
+      await page.locator('.kv-list').waitFor();
+      assert.equal(await page.locator('.calendar-summary').count(), 0);
+      await page.getByRole('link', { name: '캘린더로', exact: true }).click();
+      await expect(cell('2026-09-07')).toHaveAttribute('aria-pressed', 'true');
       await shot('populated-complete-list');
+      results.push(`${session.name}: summary total/today counts, sorted six upcoming links, detail hides summary, return preserves selected date`);
       results.push(`${session.name}: selected local dates, multi-day, exclusive midnight, company scope, all five events below three previews, full title/time`);
 
       // When: following the actual event link and reloading its detail URL. Then: server detail survives direct navigation.
@@ -207,6 +224,9 @@ try {
           finally { clearTimeout(timer); }
         });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `no page overflow at ${width}`);
+        assert.equal(await page.locator('.calendar-body').evaluate(element => getComputedStyle(element).gridTemplateColumns.split(' ').length), width <= 1024 ? 1 : 2);
+        await expect(page.locator('.calendar-summary')).toBeVisible();
+        assert.equal(await page.locator('.calendar-summary').evaluate(element => [...element.querySelectorAll('.calendar-upcoming strong')].every(title => title.scrollWidth <= title.clientWidth && title.getBoundingClientRect().right <= element.getBoundingClientRect().right)), true, 'upcoming titles wrap inside summary');
         await select('2026-09-07');
         assert.equal(await dayList.getByRole('link').count(), 5);
         assert.equal(await dayList.locator('strong').last().textContent(), longTitle);

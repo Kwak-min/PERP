@@ -5,6 +5,7 @@ export function isPgWorkspace(orgId: string | null | undefined): boolean {
 
 const legacyEndpoints: Readonly<Record<string, string>> = {
   "/pg/usage": "/tenants/usage",
+  '/pg/notifications': '/notifications',
   "/pg/finance/summary": "/finance/reports/summary",
   "/pg/finance/dues": "/finance/dues/charges",
   "/pg/approvals": "/approvals/requests",

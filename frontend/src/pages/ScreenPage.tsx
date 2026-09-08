@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 
 import { StateBoundary } from "../components/common/StateBoundary";
+import { AssetCustodyModal } from '../components/common/AssetCustodyModal';
 import { CalendarSurface } from "../components/data/CalendarSurface";
 import { isOperationalScreen, OperationalSurface } from "../components/data/OperationalSurface";
 import { CreateFormModal } from "../components/common/CreateFormModal";
@@ -11,7 +12,8 @@ import { SectionCard } from "../components/ui/SectionCard";
 import { StatCard, type Stat } from "../components/ui/StatCard";
 import { StatTrendModal, metricKeyOf, type MetricKey } from "../components/data/StatTrendModal";
 import { MemberListModal, membersSchema, type Member } from "../components/data/MemberListModal";
-import { screenFilters } from "./screenFilters";
+import { allFilter, screenFilters } from "./screenFilters";
+import { downloadCsv, filterTable, liveTable, notificationTaskLink, paginateTable, type TableData, type TableRow } from "./screenTable";
 import { apiRequest, userMessageOf } from "../services/api";
 import { isPgWorkspace, workspaceEndpoint } from "../services/workspace";
 import { useDepartments } from "../hooks/useDepartments";
@@ -20,12 +22,6 @@ import { useRoles } from "../hooks/useRoles";
 import { sectionLabels, type ScreenDefinition, type CreateConfig } from "../routes/catalog";
 import { useSession } from "../store/session";
 import { useBranch } from "../store/branch";
-
-type TableData = Readonly<{
-  columns: readonly string[];
-  rows: readonly (readonly string[])[];
-  ids?: readonly (string | null)[];
-}>;
 
 const NUMERIC_HINT = ["금액", "수량", "진행률", "시간", "건수", "잔액"];
 
@@ -52,7 +48,7 @@ function liveStats(data: unknown): readonly Stat[] | null {
         { label: "전체 항목", value: String(records.length), unit: "건", delta: "실시간 조회", trend: "flat", foot: "서버 데이터" },
         { label: "완료·확정", value: String(done), unit: "건", delta: `${rate}%`, trend: rate >= 50 ? "up" : "down", foot: "서버 데이터" },
         { label: "확인 필요", value: String(risk), unit: "건", delta: risk > 0 ? "처리 권장" : "없음", trend: risk > 0 ? "down" : "flat", foot: "서버 데이터" },
-        { label: "표시 중", value: String(Math.min(records.length, 8)), unit: "건", delta: "상위 8건", trend: "flat", foot: "서버 데이터" },
+        { label: "조회 항목", value: String(records.length), unit: "건", delta: "전체 목록", trend: "flat", foot: "서버 데이터" },
       ];
     }
   }
@@ -96,34 +92,6 @@ function liveStats(data: unknown): readonly Stat[] | null {
   return null;
 }
 
-function liveTable(data: unknown): TableData | null {
-  if (!data || typeof data !== "object" || !("items" in data)) return null;
-  const items = (data as { items?: unknown }).items;
-  if (!Array.isArray(items) || items.length === 0) return null;
-  const records = items.filter(
-    (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object",
-  );
-  if (records.length === 0) return null;
-  // __id 는 삭제/식별용 숨은 필드 → 표 컬럼에서는 제외.
-  const columns = Object.keys(records[0] ?? {}).filter((k) => k !== "__id").slice(0, 6);
-  const shown = records.slice(0, 8);
-  return {
-    columns,
-    ids: shown.map((record) => (record.__id != null ? String(record.__id) : null)),
-    rows: shown.map((record) =>
-      columns.map((column) => {
-        const value = record[column];
-        if (value === null || value === undefined) return "—";
-        if (typeof value === "number") return value.toLocaleString("ko-KR");
-        if (typeof value === "boolean") return value ? "예" : "아니요";
-        if (Array.isArray(value)) return `${value.length}개`;
-        if (typeof value === "object") return "상세";
-        return String(value);
-      }),
-    ),
-  };
-}
-
 const MEMBER_STATUS_LABELS: Readonly<Record<string, string>> = {
   active: "활성",
   inactive: "휴면",
@@ -144,13 +112,13 @@ function membersTable(
   const deptName = new Map(departments.map((department) => [department.id, department.name]));
   const roleLabel = new Map(roles.map((role) => [role.key, role.label]));
   const columns = ["이름", "이메일", "역할", "부서", "상태"];
-  const rows = parsed.data.items.slice(0, 8).map((member: Member): readonly string[] => {
+  const rows = parsed.data.items.map((member: Member): TableRow => {
     const role = member.roles.map((key) => roleLabel.get(key) ?? key).join(" · ") || "역할 미지정";
     const department = member.department_id
       ? deptName.get(member.department_id) ?? member.department_id
       : "미지정";
     const status = MEMBER_STATUS_LABELS[member.status] ?? member.status;
-    return [member.name, member.email, role, department, status];
+    return { id: member.membership_id, values: member, cells: [member.name, member.email, role, department, status] };
   });
   return { columns, rows };
 }
@@ -240,21 +208,26 @@ function DataTable({
   onRowClick,
   onDelete,
   onEdit,
+  onCustody,
+  taskLinks = false,
 }: Readonly<{
   table: TableData;
+  taskLinks?: boolean;
   onRowClick?: (row: readonly string[], index: number) => void;
-  onDelete?: (id: string) => void;
+  onDelete?: (row: TableRow) => void;
   onEdit?: (id: string) => void;
+  onCustody?: (row: TableRow) => void;
 }>) {
-  const canDelete = Boolean(onDelete && table.ids);
-  const canEdit = Boolean(onEdit && table.ids);
-  const canAct = canDelete || canEdit;
+  const canDelete = Boolean(onDelete);
+  const canEdit = Boolean(onEdit);
+  const canAct = canDelete || canEdit || Boolean(onCustody);
   return (
     <div className="table-wrap" role="region" aria-label="데이터 표" tabIndex={0}>
       <p className="table-scroll-hint">표를 좌우로 스크롤해 모든 열을 확인할 수 있습니다.</p>
       <table>
         <thead>
           <tr>
+            {taskLinks && <th>업무</th>}
             {table.columns.map((column) => (
               <th key={column} className={isNumericColumn(column) ? "num" : undefined}>
                 {column.replaceAll("_", " ")}
@@ -264,17 +237,19 @@ function DataTable({
           </tr>
         </thead>
         <tbody>
-          {table.rows.map((row, index) => (
-            <tr
-              key={index}
+          {table.rows.map((row, index) => {
+            const taskLink = taskLinks ? notificationTaskLink(row) : null;
+            return <tr
+              key={row.id ?? index}
               className={onRowClick ? "table-row--interactive" : undefined}
               tabIndex={onRowClick ? 0 : undefined}
-              onClick={onRowClick ? () => onRowClick(row, index) : undefined}
+              onClick={onRowClick ? () => onRowClick(row.cells, index) : undefined}
               onKeyDown={onRowClick ? (event) => {
-                if (event.key === "Enter" || event.key === " ") onRowClick(row, index);
+                if (event.key === "Enter" || event.key === " ") onRowClick(row.cells, index);
               } : undefined}
             >
-              {row.map((cell, cellIndex) => (
+              {taskLinks && <td>{taskLink ? <Link to={taskLink}>업무 보기</Link> : '—'}</td>}
+              {row.cells.map((cell, cellIndex) => (
                 <td key={cellIndex} className={isNumericColumn(table.columns[cellIndex] ?? "") ? "num" : undefined}>
                   {cell}
                 </td>
@@ -282,27 +257,26 @@ function DataTable({
               {canAct && (
                 <td>
                   <span className="row-actions">
-                    {canEdit && table.ids?.[index] ? (
+                    {onCustody && row.id && <Button tone="ghost" size="small" onClick={event => { event.stopPropagation(); onCustody(row); }}>담당·상태</Button>}
+                    {canEdit && row.id ? (
                       <Button
                         tone="ghost"
                         size="small"
                         onClick={(event) => {
                           event.stopPropagation();
-                          const id = table.ids?.[index];
-                          if (id) onEdit?.(id);
+                          if (row.id) onEdit?.(row.id);
                         }}
                       >
                         수정
                       </Button>
                     ) : null}
-                    {canDelete && table.ids?.[index] ? (
+                    {canDelete && row.id ? (
                       <Button
                         tone="ghost"
                         size="small"
                         onClick={(event) => {
                           event.stopPropagation();
-                          const id = table.ids?.[index];
-                          if (id && window.confirm("이 항목을 삭제할까요?")) onDelete?.(id);
+                          if (row.id && window.confirm("이 항목을 삭제할까요?")) onDelete?.(row);
                         }}
                       >
                         삭제
@@ -311,8 +285,8 @@ function DataTable({
                   </span>
                 </td>
               )}
-            </tr>
-          ))}
+            </tr>;
+          })}
         </tbody>
       </table>
     </div>
@@ -336,21 +310,6 @@ function DetailAction({
       자세히
     </Button>
   );
-}
-
-function toCsv(table: TableData): string {
-  const escape = (cell: string) => (/[",\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell);
-  return [table.columns.map(escape).join(","), ...table.rows.map((row) => row.map(escape).join(","))].join("\n");
-}
-
-function downloadCsv(name: string, table: TableData): void {
-  const blob = new Blob(["\uFEFF" + toCsv(table)], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `${name}.csv`;
-  anchor.click();
-  URL.revokeObjectURL(url);
 }
 
 export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
@@ -380,11 +339,13 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const resource = useResource(endpoint, apiSession, reloadKey);
   const [query, setQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState(0);
+  const [page, setPage] = useState(1);
   const [notice, setNotice] = useState<string | null>(null);
   // 구성원 지표는 실제 가입·탈퇴 기록으로 기간별 추이를 보여줄 수 있다.
   const trendable = (screen.endpoint ?? "").startsWith("/members");
   const [trend, setTrend] = useState<{ stat: Stat; metric: MetricKey } | null>(null);
   const [showMembers, setShowMembers] = useState(false);
+  const [custodyId, setCustodyId] = useState<string | null>(null);
   const [quickModal, setQuickModal] = useState<"create" | "edit" | null>(null);
   const [editModal, setEditModal] = useState<{ config: CreateConfig; initialValues: Record<string, string> } | null>(null);
   const departments = useDepartments(apiSession);
@@ -392,7 +353,13 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
 
   useEffect(() => {
     setQuery(new URLSearchParams(location.search).get("q") ?? "");
+    setPage(1);
   }, [location.search]);
+
+  useEffect(() => {
+    setActiveFilter(0);
+    setPage(1);
+  }, [screen.id, session?.orgId, endpoint]);
 
   // 로딩·오류·빈 응답은 서버 상태 그대로 표시한다.
   const serverAnswered = resource.status === "ready" || resource.status === "empty";
@@ -409,12 +376,14 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const serverEmpty = resource.status === "empty" && !hasServerContent;
 
   const pgWorkspace = isPgWorkspace(session?.orgId);
-  const deleteResource = pgWorkspace ? screen.deleteResource : undefined;
+  const deleteResource = pgWorkspace && screen.id !== 'AST-001' ? screen.deleteResource : undefined;
   const handleDelete = deleteResource
-    ? async (id: string) => {
+    ? async (row: TableRow) => {
         try {
-          await apiRequest(`/pg/records/${deleteResource}/${id}`, {
+          const financial = ['transactions', 'budgets', 'settlements', 'dues'].includes(deleteResource);
+          await apiRequest(`/pg/records/${deleteResource}/${row.id}`, {
             method: "DELETE",
+            ...(financial ? { body: { expected_version: row.values.__version ?? row.values.version } } : {}),
             ...(apiSession ? { session: apiSession } : {}),
           });
           setReloadKey((key) => key + 1);
@@ -425,7 +394,7 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
       }
     : undefined;
 
-  const editResource = pgWorkspace ? screen.editResource : undefined;
+  const editResource = pgWorkspace && screen.id !== 'AST-001' ? screen.editResource : undefined;
   const editCreateConfig = screen.create;
   const handleEdit = editResource && editCreateConfig
     ? async (id: string) => {
@@ -453,17 +422,11 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const detailFacts = passedFacts ?? serverFacts ?? [];
   const stats = serverStats ?? passedStats ?? [];
   const baseTable = serverTable;
-  const filters = screenFilters[screen.id] ?? ["전체", "진행", "완료"];
-  const filterWord = activeFilter === 0 ? "" : (filters[activeFilter] ?? "");
-
-  const table = useMemo(() => {
-    if (!baseTable) return undefined;
-    const needle = query.trim().toLowerCase();
-    let rows = baseTable.rows;
-    if (needle) rows = rows.filter((row) => row.some((cell) => cell.toLowerCase().includes(needle)));
-    if (filterWord) rows = rows.filter((row) => row.some((cell) => cell.includes(filterWord)));
-    return { ...baseTable, rows };
-  }, [baseTable, query, filterWord]);
+  const filters = screenFilters[screen.id] ?? [allFilter];
+  const selectedFilter = filters[activeFilter] ?? allFilter;
+  // 검색/상태는 전체 응답에 적용하고, 화면 페이지만 마지막에 잘라낸다.
+  const table = baseTable ? filterTable(baseTable, { query, filter: selectedFilter }) : undefined;
+  const pagination = table ? paginateTable(table, page) : undefined;
 
   if (!pgWorkspace && isOperationalScreen(screen.id) && apiSession) {
     const operationalScreen = { ...screen, endpoint: screen.endpoint ? workspaceEndpoint(screen.endpoint, apiSession.orgId) : null };
@@ -493,11 +456,11 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             onClick={() => {
               if (table) {
                 downloadCsv(screen.label, table);
-                setNotice(`${screen.label} ${table.rows.length}행을 CSV로 내려받았습니다.`);
+                setNotice(`${screen.label} 필터 결과 전체 ${table.rows.length}행을 CSV로 내려받았습니다.`);
               }
             }}
           >
-            내보내기
+            필터 결과 전체 내보내기
           </Button>
           {pgWorkspace && !isDetail && screen.create && (
             <Button
@@ -603,18 +566,18 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
                 type="search"
                 placeholder="이 화면에서 검색"
                 value={query}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => { setQuery(event.target.value); setPage(1); }}
               />
             </label>
             {filters.map((filter, index) => (
               <button
-                key={filter}
+                key={filter.id}
                 type="button"
                 aria-pressed={index === activeFilter}
                 className={index === activeFilter ? "chip chip--on" : "chip"}
-                onClick={() => setActiveFilter(index)}
+                onClick={() => { setActiveFilter(index); setPage(1); }}
               >
-                {filter}
+                {filter.label}
               </button>
             ))}
             {/* 전체를 포함한 모든 필터에서 같은 자리에 건수를 보여준다. */}
@@ -634,14 +597,27 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
                 : "첫 항목을 추가하면 팀과 바로 공유할 수 있습니다."
             }
           >
-            {table ? (
+            {pagination ? (
               <DataTable
-                table={table}
+                table={pagination.table}
+                taskLinks={screen.id === 'NOT-001'}
+                {...(screen.id === 'AST-001' ? { onCustody: (row: TableRow) => {
+                  if (row.id) setCustodyId(row.id);
+                } } : {})}
                 {...(handleDelete ? { onDelete: handleDelete } : {})}
                 {...(handleEdit ? { onEdit: handleEdit } : {})}
               />
             ) : null}
           </StateBoundary>
+          {pagination && table && (
+            <nav className="filter-bar" aria-label="목록 페이지">
+              <Button tone="ghost" size="small" aria-label="이전 페이지" disabled={pagination.currentPage === 1}
+                onClick={() => setPage(pagination.currentPage - 1)}>이전</Button>
+              <span aria-live="polite">{pagination.start}–{pagination.end} / {table.rows.length}건 · {pagination.currentPage} / {pagination.pageCount}페이지</span>
+              <Button tone="ghost" size="small" aria-label="다음 페이지" disabled={pagination.currentPage === pagination.pageCount}
+                onClick={() => setPage(pagination.currentPage + 1)}>다음</Button>
+            </nav>
+          )}
         </SectionCard>
       )}
       {quickModal && screen.create && quickModal === "create" && (
@@ -656,6 +632,7 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
           }}
         />
       )}
+      {custodyId && apiSession && <AssetCustodyModal id={custodyId} session={apiSession} onClose={() => setCustodyId(null)} onSaved={() => { setReloadKey(key => key + 1); setNotice('자산 담당·상태를 저장했습니다.'); }} />}
       {editModal && (
         <CreateFormModal
           entityLabel={screen.label}

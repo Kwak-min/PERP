@@ -1,7 +1,8 @@
+import { z } from "zod";
 import { pgIdentity } from "../middleware/pgAccess.js";
-import { pgQuery } from "../config/pg.js";
+import { pgQuery, pgTransaction } from "../config/pg.js";
 import { ApiError } from "../utils/errors.js";
-import { isCompanyMember } from "../services/pg-company.service.js";
+import { orgIdSchema, orgMutation, recordOrgChange, withOrgAuditSchema } from "../services/pg-org-audit.service.js";
 
 // perp_db(PostgreSQL) 구성원 슬라이스.
 // strangler-fig: 레거시 SQLite /members 를 대체하는 /api/v1/pg/members/*.
@@ -9,8 +10,8 @@ import { isCompanyMember } from "../services/pg-company.service.js";
 
 const resolveAuthUser = pgIdentity;
 
-async function companyMembers(companyId) {
-  return (await pgQuery(`SELECT u.id, u.email, u.name, m.department_id, m.position_id,
+async function companyMembers(companyId, query = pgQuery) {
+  return (await query(`SELECT u.id, u.email, u.name, m.department_id, m.position_id,
       CASE WHEN u.account_status = 'active' THEN m.status ELSE u.account_status::text END AS account_status,
       p.name AS position_name,
       ARRAY(SELECT DISTINCT r.name FROM org.user_roles ur JOIN org.roles r ON r.id = ur.role_id
@@ -69,11 +70,12 @@ export async function listDepartments(req, res) {
 export async function orgChart(req, res) {
   const { companyId } = await resolveAuthUser(req);
   if (!companyId) return res.json({ roots: [], unassigned: [] });
-  const { rows: depts } = await pgQuery(
-    `SELECT id, name, parent_id, manager_id FROM org.departments WHERE company_id = $1 ORDER BY id`,
-    [companyId],
-  );
-  const users = await companyMembers(companyId);
+  const { depts, users, revision } = await withOrgAuditSchema(() => pgTransaction(async client => {
+    await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    const company = (await client.query('SELECT org_revision FROM org.companies WHERE id = $1', [companyId])).rows[0];
+    const depts = (await client.query('SELECT id, name, parent_id, manager_id FROM org.departments WHERE company_id = $1 ORDER BY id', [companyId])).rows;
+    return { depts, users: await companyMembers(companyId, client.query.bind(client)), revision: String(company.org_revision) };
+  }));
   const toMember = (u) => ({
     membership_id: String(u.id),
     user_id: String(u.id),
@@ -116,83 +118,109 @@ export async function orgChart(req, res) {
     };
   };
   const roots = depts.filter((d) => !d.parent_id).map(buildSeat);
-  res.json({ roots, unassigned });
+  res.json({ roots, unassigned, revision });
 }
 
-// PATCH /api/v1/pg/members/:membershipId/assignment — 부서/직책 배정
+const assignmentSchema = z.object({ department_id: orgIdSchema.nullable().optional(), title: z.string().trim().min(1).max(200).optional() }).strict()
+  .refine(body => Object.keys(body).length > 0);
+const departmentSchema = z.object({ leader_id: orgIdSchema.nullable().optional(), name: z.string().trim().min(1).max(200).optional() }).strict()
+  .refine(body => Object.keys(body).length > 0);
+const seatSchema = z.object({ expected_revision: orgIdSchema, leader_id: orgIdSchema.nullable(), assigned: z.array(orgIdSchema).max(1000) }).strict()
+  .refine(body => new Set(body.assigned).size === body.assigned.length);
+const nullableId = value => value == null ? null : String(value);
+const departmentData = row => ({ name: row.name, parent_id: nullableId(row.parent_id), leader_id: nullableId(row.manager_id) });
+const assignmentData = row => ({ department_id: nullableId(row.department_id), title: row.position_name ?? null });
+
+async function departmentForUpdate(client, companyId, id) {
+  const row = (await client.query('SELECT id, name, parent_id, manager_id FROM org.departments WHERE id = $1 AND company_id = $2 FOR UPDATE', [id, companyId])).rows[0];
+  if (!row) throw new ApiError('NOT_FOUND', '부서를 찾을 수 없습니다');
+  return row;
+}
+async function activeMembers(client, companyId) {
+  return (await client.query(`SELECT m.user_id, m.department_id, m.position_id, u.name, p.name AS position_name
+    FROM org.company_memberships m JOIN auth.users u ON u.id = m.user_id
+    LEFT JOIN org.positions p ON p.id = m.position_id AND p.company_id = m.company_id
+    WHERE m.company_id = $1 AND m.status = 'active' AND u.account_status = 'active' AND u.approval_status = 'approved'
+    ORDER BY m.user_id FOR UPDATE OF m`, [companyId])).rows;
+}
+async function writeDepartment(client, req, companyId, row, after) {
+  const before = departmentData(row);
+  if (JSON.stringify(before) === JSON.stringify(after)) return;
+  await client.query('UPDATE org.departments SET manager_id = $3, name = $4 WHERE id = $1 AND company_id = $2', [row.id, companyId, after.leader_id, after.name]);
+  await recordOrgChange(client, req, { action: 'department.updated', resourceType: 'department', resourceId: String(row.id), target: after.name, before, after });
+}
+async function writeAssignment(client, req, companyId, row, departmentId, positionId, title) {
+  const before = assignmentData(row), after = { department_id: departmentId, title };
+  if (JSON.stringify(before) === JSON.stringify(after)) return;
+  await client.query('UPDATE org.company_memberships SET department_id = $3, position_id = $4 WHERE user_id = $1 AND company_id = $2', [row.user_id, companyId, departmentId, positionId]);
+  await recordOrgChange(client, req, { action: 'member.assignment.updated', resourceType: 'member', resourceId: String(row.user_id), target: row.name, before, after });
+}
+
+// PATCH /api/v1/pg/members/departments/:id/seat — 책임자와 배치 전체를 한 트랜잭션으로 저장한다.
+export async function saveSeat(req, res) {
+  const id = orgIdSchema.parse(req.params.id), body = seatSchema.parse(req.body);
+  const result = await orgMutation(req, body.expected_revision, async (client, { companyId }) => {
+    const department = await departmentForUpdate(client, companyId, id);
+    const members = await activeMembers(client, companyId);
+    const allowed = new Set(members.map(row => String(row.user_id)));
+    if ((body.leader_id && !allowed.has(body.leader_id)) || body.assigned.some(uid => !allowed.has(uid))) {
+      throw new ApiError('VALIDATION_ERROR', '활성 회사 구성원만 책임자 또는 배치 인원으로 지정할 수 있습니다');
+    }
+    // 모든 외부 ID 검증을 끝낸 뒤 첫 쓰기를 시작한다.
+    await writeDepartment(client, req, companyId, department, { ...departmentData(department), leader_id: body.leader_id });
+    const assigned = new Set(body.assigned);
+    for (const row of members) {
+      if (assigned.has(String(row.user_id))) await writeAssignment(client, req, companyId, row, id, nullableId(row.position_id), row.position_name ?? null);
+      else if (String(row.department_id) === id) await writeAssignment(client, req, companyId, row, null, nullableId(row.position_id), row.position_name ?? null);
+    }
+    return { ok: true };
+  });
+  res.json(result);
+}
+
+// 기존 단건 배정도 변경과 감사를 함께 커밋한다. 알 수 없는 직책은 일부 적용하지 않는다.
 export async function assignMember(req, res) {
-  const { companyId } = await resolveAuthUser(req);
-  if (!companyId) throw new ApiError("PERMISSION_DENIED", "권한이 없습니다");
-  const uid = req.params.membershipId; // 본 스킴에서 membership_id = user id
-  const body = req.body ?? {};
-  const sets = [];
-  const params = [uid, companyId];
-  if ("department_id" in body) {
-    const dep = body.department_id || null;
-    if (dep) {
-      const { rows } = await pgQuery(`SELECT 1 FROM org.departments WHERE id=$1 AND company_id=$2`, [dep, companyId]);
-      if (!rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 부서입니다");
+  const uid = orgIdSchema.parse(req.params.membershipId), body = assignmentSchema.parse(req.body);
+  const result = await orgMutation(req, undefined, async (client, { companyId }) => {
+    const row = (await activeMembers(client, companyId)).find(member => String(member.user_id) === uid);
+    if (!row) throw new ApiError('NOT_FOUND', '구성원을 찾을 수 없습니다');
+    const departmentId = body.department_id === undefined ? nullableId(row.department_id) : body.department_id;
+    if (departmentId) await departmentForUpdate(client, companyId, departmentId);
+    let positionId = nullableId(row.position_id), title = row.position_name ?? null;
+    if (body.title !== undefined) {
+      const position = (await client.query('SELECT id FROM org.positions WHERE company_id = $1 AND name = $2', [companyId, body.title])).rows[0];
+      if (!position) throw new ApiError('VALIDATION_ERROR', '회사에 등록되지 않은 직책입니다');
+      positionId = String(position.id); title = body.title;
     }
-    params.push(dep);
-    sets.push(`department_id = $${params.length}`);
-  }
-  if ("title" in body && body.title) {
-    const { rows } = await pgQuery(
-      `SELECT id FROM org.positions WHERE company_id=$1 AND name=$2`, [companyId, String(body.title).trim()]);
-    if (rows[0]) {
-      params.push(rows[0].id);
-      sets.push(`position_id = $${params.length}`);
-    }
-  }
-  if (sets.length === 0) throw new ApiError("VALIDATION_ERROR", "변경할 내용이 없습니다");
-  const result = await pgQuery(
-    `UPDATE org.company_memberships SET ${sets.join(", ")} WHERE user_id = $1 AND company_id = $2 AND status = 'active'`, params);
-  if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "구성원을 찾을 수 없습니다");
-  res.json({ ok: true });
+    await writeAssignment(client, req, companyId, row, departmentId, positionId, title);
+    return { ok: true };
+  });
+  res.json(result);
 }
 
-// PATCH /api/v1/pg/members/departments/:id — 부서 설정(책임자 등)
 export async function updateDepartment(req, res) {
-  const { companyId } = await resolveAuthUser(req);
-  if (!companyId) throw new ApiError("PERMISSION_DENIED", "권한이 없습니다");
-  const body = req.body ?? {};
-  const sets = [];
-  const params = [req.params.id, companyId];
-  if ("leader_id" in body) {
-    if (body.leader_id) {
-      if (!await isCompanyMember(body.leader_id, companyId)) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 책임자입니다");
+  const id = orgIdSchema.parse(req.params.id), body = departmentSchema.parse(req.body);
+  const result = await orgMutation(req, undefined, async (client, { companyId }) => {
+    const row = await departmentForUpdate(client, companyId, id);
+    if (body.leader_id && !(await activeMembers(client, companyId)).some(member => String(member.user_id) === body.leader_id)) {
+      throw new ApiError('VALIDATION_ERROR', '유효하지 않은 책임자입니다');
     }
-    params.push(body.leader_id || null);
-    sets.push(`manager_id = $${params.length}`);
-  }
-  if ("name" in body && body.name) {
-    params.push(String(body.name).trim());
-    sets.push(`name = $${params.length}`);
-  }
-  if (sets.length === 0) throw new ApiError("VALIDATION_ERROR", "변경할 내용이 없습니다");
-  const result = await pgQuery(
-    `UPDATE org.departments SET ${sets.join(", ")} WHERE id = $1 AND company_id = $2`, params);
-  if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "부서를 찾을 수 없습니다");
-  res.json({ ok: true });
+    await writeDepartment(client, req, companyId, row, { ...departmentData(row), ...body });
+    return { ok: true };
+  });
+  res.json(result);
 }
 
-// POST /api/v1/pg/members/departments — 부서 생성
 export async function createDepartment(req, res) {
-  const { companyId } = await resolveAuthUser(req);
-  if (!companyId) throw new ApiError("PERMISSION_DENIED", "권한이 없습니다");
-  const body = req.body ?? {};
-  const name = String(body.name ?? "").trim();
-  const parentId = body.parent_id || null;
-  if (!name) throw new ApiError("VALIDATION_ERROR", "부서명은 필수입니다");
-  if (parentId) {
-    const parent = await pgQuery("SELECT 1 FROM org.departments WHERE id = $1 AND company_id = $2", [parentId, companyId]);
-    if (!parent.rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 상위 부서입니다");
-  }
-  const { rows } = await pgQuery(
-    `INSERT INTO org.departments (company_id, name, parent_id) VALUES ($1, $2, $3) RETURNING id`,
-    [companyId, name, parentId],
-  );
-  res.status(201).json({ id: String(rows[0].id) });
+  const body = z.object({ name: z.string().trim().min(1).max(200), parent_id: orgIdSchema.nullable().optional() }).strict().parse(req.body);
+  const result = await orgMutation(req, undefined, async (client, { companyId }) => {
+    if (body.parent_id) await departmentForUpdate(client, companyId, body.parent_id);
+    const row = (await client.query('INSERT INTO org.departments (company_id, name, parent_id) VALUES ($1, $2, $3) RETURNING id', [companyId, body.name, body.parent_id ?? null])).rows[0];
+    await recordOrgChange(client, req, { action: 'department.created', resourceType: 'department', resourceId: String(row.id), target: body.name,
+      before: null, after: { name: body.name, parent_id: body.parent_id ?? null, leader_id: null } });
+    return { id: String(row.id) };
+  });
+  res.status(201).json(result);
 }
 
 // GET /api/v1/pg/members/roles

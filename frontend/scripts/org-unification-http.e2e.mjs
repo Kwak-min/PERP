@@ -56,8 +56,8 @@ try {
     await page.screenshot({ path: `${evidence}/${plan.pg ? "pg" : "legacy"}-directory.png`, fullPage: true });
     const popupResponse = page.waitForResponse(response => response.url().includes("/members/activity?limit=200"));
     await page.locator('button[aria-controls="org-log-dialog"]').click();
-    assert.equal((await popupResponse).status(), plan.pg ? 501 : 200);
-    await page.locator(plan.pg ? '[data-org-log-state="unsupported"]' : '[data-org-log-state="ready"]').waitFor();
+    assert.equal((await popupResponse).status(), 200);
+    await page.locator(plan.pg ? '[data-org-log-state="empty"]' : '[data-org-log-state="ready"]').waitFor();
     assert.equal(await page.locator(".orglog-list > li").count(), plan.auditCount);
     if (!plan.pg) assert.equal(await page.locator(".orglog-item__target").allTextContents().then(items => items.includes("명시적 검증 부서")), true);
     await page.screenshot({ path: `${evidence}/${plan.pg ? "pg" : "legacy"}-audit.png` });

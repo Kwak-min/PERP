@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useDepartmentResource } from "../../hooks/useDepartments";
 import { useRoles } from "../../hooks/useRoles";
 import { apiRequest, userMessageOf } from "../../services/api";
+import { isPgWorkspace } from "../../services/workspace";
 import { branchStore, useBranch } from "../../store/branch";
 import { sessionStore, type SessionState } from "../../store/session";
 
@@ -25,6 +26,7 @@ export function WorkspaceSwitcher({ session }: Readonly<{ session: SessionState 
   const [reloadKey, setReloadKey] = useState(0);
   const wrapRef = useRef<HTMLDivElement>(null);
 
+  const pg = isPgWorkspace(session.orgId);
   const apiSession = session.orgId ? { token: session.token, orgId: session.orgId } : null;
   const { departments, status: departmentStatus, error: departmentError } = useDepartmentResource(apiSession, reloadKey);
   const departmentsReady = departmentStatus === "ready" || departmentStatus === "empty";
@@ -67,7 +69,7 @@ export function WorkspaceSwitcher({ session }: Readonly<{ session: SessionState 
         body: {
           name: name.trim(),
           ...(branchId ? { parent_id: branchId } : {}),
-          access_roles: accessRoles,
+          ...(!pg ? { access_roles: accessRoles } : {}),
         },
       });
       setName("");
@@ -177,7 +179,7 @@ export function WorkspaceSwitcher({ session }: Readonly<{ session: SessionState 
                       autoFocus
                     />
                   </label>
-                  <fieldset className="branch-create__roles">
+                  {pg ? <p>PG 브랜치는 브랜치별 접근 그룹 설정을 지원하지 않습니다.</p> : <fieldset className="branch-create__roles">
                     <legend>들어갈 수 있는 그룹</legend>
                     {roles.map((role) => (
                       <label key={role.key}>
@@ -190,7 +192,7 @@ export function WorkspaceSwitcher({ session }: Readonly<{ session: SessionState 
                       </label>
                     ))}
                     <p>선택하지 않으면 조직 전체가 들어갈 수 있습니다.</p>
-                  </fieldset>
+                  </fieldset>}
                   {error && <p className="branch-create__error">{error}</p>}
                   <div className="branch-create__actions">
                     <button type="button" onClick={() => setCreating(false)}>취소</button>
@@ -242,7 +244,7 @@ export function WorkspaceSwitcher({ session }: Readonly<{ session: SessionState 
                 >
                   <b>{department.name}</b>
                   <span>
-                    {department.access_roles.length === 0
+                    {pg ? "브랜치별 접근 그룹 미지원" : department.access_roles.length === 0
                       ? "조직 전체 공개"
                       : `${department.access_roles.length}개 그룹만 접근`}
                   </span>

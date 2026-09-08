@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams, useSearchParams, useNavigate } from "react-router-dom";
 import { z } from "zod";
 import type { ScreenDefinition } from "../../routes/catalog";
 import { ApiError, apiRequest, userMessageOf, type ApiSession } from "../../services/api";
@@ -26,6 +26,7 @@ export function CalendarSurface({ screen }: Readonly<{ screen: ScreenDefinition 
 
 function CalendarWorkspace({ screen, session }: Readonly<{ screen: ScreenDefinition; session: ApiSession }>) {
   const { eventId } = useParams();
+  const navigate = useNavigate();
   const [search, setSearch] = useSearchParams();
   const requestedMonth = search.get("month");
   const today = new Date();
@@ -39,6 +40,7 @@ function CalendarWorkspace({ screen, session }: Readonly<{ screen: ScreenDefinit
   const [permissions, setPermissions] = useState<readonly string[]>([]);
   const [revision, setRevision] = useState(0);
   const [modal, setModal] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
@@ -66,6 +68,16 @@ function CalendarWorkspace({ screen, session }: Readonly<{ screen: ScreenDefinit
 
   const cells = calendarCells(state.records, shown);
   const detail = state.records[0];
+  const canWrite = permissions.includes('event.write') || (!pg && permissions.includes('*'));
+  async function cancelEvent(): Promise<void> {
+    if (!detail || !globalThis.confirm('일정을 취소할까요? 변경 이력은 보관됩니다.')) return;
+    setCancelling(true); setNotice(null);
+    try {
+      await apiRequest(`${pg ? '/pg' : ''}/calendar/${encodeURIComponent(detail.id)}/cancel`, { session, method: 'POST', body: { version: detail.version } });
+      navigate(`/calendar?${calendarQuery}`);
+    } catch (caught: unknown) { setNotice(userMessageOf(caught)); }
+    finally { setCancelling(false); }
+  }
   const currentMonth = today.getFullYear() === shown.getFullYear() && today.getMonth() === shown.getMonth();
   const month = localDateInput(shown).slice(0, 7);
   const requestedDay = search.get("day");
@@ -76,7 +88,7 @@ function CalendarWorkspace({ screen, session }: Readonly<{ screen: ScreenDefinit
   const selectedEvents = calendarRecordsForDate(state.records, selected);
   const calendarQuery = new URLSearchParams({ month, day: selectedDate }).toString();
   function changeMonth(date: Date): void { setSearch({ month: localDateInput(date).slice(0, 7), day: localDateInput(date) }); }
-  const daysWithEvents = new Set(state.records.map(event => localDateInput(new Date(event.start_at)))).size;
+  const daysWithEvents = new Set(cells.map(event => event.day)).size;
   const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
   const upcoming = [...state.records]
     .filter(event => Date.parse(event.start_at) >= todayStart)
@@ -85,7 +97,7 @@ function CalendarWorkspace({ screen, session }: Readonly<{ screen: ScreenDefinit
   const todayCount = calendarRecordsForDate(state.records, today).length;
   return <div className="screen calendar-screen" data-screen-id={screen.id}>
     <header className="screen-header"><div><div className="screen-header__meta"><Badge>{screen.id}</Badge><Badge>calendar</Badge></div><h1>{screen.label}</h1><p>{screen.description}</p></div>
-      <div className="screen-header__actions">{eventId ? <Link className="button button--neutral" to={`/calendar?${calendarQuery}`}>캘린더로</Link>
+      <div className="screen-header__actions">{eventId ? <><Link className="button button--neutral" to={`/calendar?${calendarQuery}`}>캘린더로</Link><Button disabled={!canWrite || !detail?.version || cancelling} onClick={() => setModal(true)}>일정 수정</Button><Button tone="danger" disabled={!canWrite || !detail?.version || cancelling} onClick={() => void cancelEvent()}>일정 취소</Button></>
         : <Button disabled={!(permissions.includes("event.write") || (!pg && permissions.includes("*")))} onClick={() => setModal(true)}>새로 만들기</Button>}</div></header>
     {notice && <div className="screen-notice" role="status"><span>{notice}</span><Button tone="ghost" size="small" onClick={() => setNotice(null)}>닫기</Button></div>}
     <div className={eventId ? "" : "calendar-body"}>
@@ -131,7 +143,7 @@ function CalendarWorkspace({ screen, session }: Readonly<{ screen: ScreenDefinit
       </SectionCard>
     </aside>}
     </div>
-    {modal && <CalendarCreateModal session={session} shown={selected} onClose={() => setModal(false)} onSaved={start => {
+    {modal && <CalendarCreateModal session={session} {...(eventId && detail ? { initialEvent: detail } : {})} shown={selected} onClose={() => setModal(false)} onSaved={start => {
       setModal(false); changeMonth(start); setRevision(value => value + 1); setNotice("일정을 서버에 저장했습니다.");
     }} />}
   </div>;

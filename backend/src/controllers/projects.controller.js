@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { transaction } from '../config/db.js';
+import { correctionDate, correctionVersion, assertCorrectionWindow } from '../services/daily-corrections.service.js';
 
 import { assertBranchAccess } from "./members.controller.js";
 import { resolvePrincipal } from "../middleware/auth.js";
@@ -17,20 +19,17 @@ const createSchema = z.object({
 });
 
 const patchSchema = z.object({
-  name: z.string().optional(),
+  name: z.string().trim().min(1).max(200).optional(),
   description: z.string().optional(),
   status: z.string().optional(),
-  version: z.number().int().optional(),
+  start_date: correctionDate.optional(),
+  end_date: correctionDate.optional(),
+  version: correctionVersion,
 });
 
 const milestoneSchema = z.object({
   name: z.string().min(1).max(200),
   due_at: z.string().nullable().optional(),
-});
-
-const memberSchema = z.object({
-  user_id: z.string(),
-  role: z.string().default("member"),
 });
 
 const view = (p) => ({
@@ -133,23 +132,19 @@ export function patch(req, res) {
     throw new ApiError("VERSION_CONFLICT", "project was modified by someone else");
   }
 
+  assertCorrectionWindow(payload.start_date === undefined ? project.start_date : payload.start_date,
+    payload.end_date === undefined ? project.end_date : payload.end_date);
   const before = view(project);
   const changes = {};
-  for (const field of ["name", "description", "status"]) {
+  for (const field of ["name", "description", "status", "start_date", "end_date"]) {
     if (payload[field] !== undefined) changes[field] = payload[field];
   }
-  const updated = bumpVersion("project", project, changes, principal.userId);
-
-  audit.record({
-    tenantId: principal.tenantId,
-    action: "project.updated",
-    resourceType: "project",
-    resourceId: project.id,
-    actorId: principal.userId,
-    before,
-    after: view(updated),
-    requestId: req.requestId,
-  });
+  const updated = transaction(() => {
+    const row = bumpVersion('project', project, changes, principal.userId);
+    audit.record({ tenantId: principal.tenantId, action: 'project.updated', resourceType: 'project',
+      resourceId: project.id, actorId: principal.userId, before, after: view(row), requestId: req.requestId });
+    return row;
+  })();
 
   res.json(view(updated));
 }
@@ -187,17 +182,4 @@ export function addMilestone(req, res) {
   res.status(201).json({ id: milestone.id, name: milestone.name, due_at: milestone.due_at });
 }
 
-export function addMember(req, res) {
-  const principal = resolvePrincipal(req);
-  principal.require("project.write");
-  const payload = memberSchema.parse(req.body);
-  const project = getScoped("project", principal, req.params.projectId, "project");
-  const member = insert("project_member", {
-    tenant_id: principal.tenantId,
-    project_id: project.id,
-    user_id: payload.user_id,
-    role: payload.role,
-    created_by: principal.userId,
-  });
-  res.status(201).json({ project_id: project.id, user_id: member.user_id, role: member.role });
-}
+export { addLegacyProjectMember as addMember } from './projectMembers.controller.js';

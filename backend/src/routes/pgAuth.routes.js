@@ -4,11 +4,14 @@ import * as controller from "../controllers/pgAuth.controller.js";
 import { createCompany } from "../controllers/pgCompanies.controller.js";
 import * as members from "../controllers/pgMembers.controller.js";
 import * as mod from "../controllers/pgModules.controller.js";
+import * as corrections from '../controllers/pgDailyCorrections.controller.js';
+import * as projectMembers from '../controllers/projectMembers.controller.js';
 import { pgRoute, pgRecordRoute } from "../middleware/pgAccess.js";
 import { asyncRoute } from "../middleware/error.js";
 import { withPgFeature } from "../middleware/features.js";
 import { pgAgentKeyRouter } from "./pg-agent-key.routes.js";
 import { decidePgApproval } from '../controllers/pgApprovalDecision.controller.js';
+import { duesPaymentHistory, recordDuesPayment } from '../controllers/pgDuesPayments.controller.js';
 
 // perp_db (PostgreSQL) 슬라이스 라우터. strangler-fig: 기존 SQLite 라우트와 분리.
 // 마운트 지점: /api/v1/pg
@@ -29,6 +32,7 @@ pgRouter.post("/members", asyncRoute(pgRoute(mod.createMember, ["member.write", 
 pgRouter.get("/members/departments", asyncRoute(pgRoute(members.listDepartments, "member.read", null)));
 pgRouter.post("/members/departments", asyncRoute(pgRoute(members.createDepartment, "department.write", null)));
 pgRouter.patch("/members/departments/:id", asyncRoute(pgRoute(members.updateDepartment, "department.write", null)));
+pgRouter.patch("/members/departments/:id/seat", asyncRoute(pgRoute(members.saveSeat, "department.write", null)));
 pgRouter.get("/members/roles", asyncRoute(pgRoute(members.listRoles, "member.read", null)));
 pgRouter.get("/members/org-chart", asyncRoute(pgRoute(members.orgChart, "member.read", null)));
 pgRouter.get("/members/activity", asyncRoute(pgRoute(mod.membersActivity, "audit.read", null)));
@@ -54,9 +58,17 @@ pgRouter.get("/usage", asyncRoute(pgRoute(mod.usage, ["member.read", "project.re
 pgRouter.get("/projects", asyncRoute(pgRoute(mod.projects, "project.read", "projects")));
 pgRouter.post("/projects", asyncRoute(pgRoute(mod.createProject, "project.write", "projects")));
 pgRouter.get("/projects/options", asyncRoute(pgRoute(mod.projectOptions, "project.read", "projects")));
+pgRouter.patch('/projects/:id', asyncRoute(pgRoute(corrections.patchProject, 'project.write', 'projects')));
+pgRouter.patch('/tasks/:id', asyncRoute(pgRoute(corrections.patchTask, 'task.write', 'tasks')));
+pgRouter.patch('/calendar/:id', asyncRoute(pgRoute(corrections.patchCalendar, 'event.write', 'calendar')));
+pgRouter.post('/calendar/:id/cancel', asyncRoute(pgRoute(corrections.cancelCalendar, 'event.write', 'calendar')));
+pgRouter.get('/assets/:id/custody', asyncRoute(pgRoute(corrections.getAssetCustody, 'asset.read', 'assets')));
+pgRouter.patch('/assets/:id/custody', asyncRoute(pgRoute(corrections.patchAssetCustody, 'asset.write', 'assets')));
 pgRouter.get("/tasks", asyncRoute(pgRoute(mod.tasks, "task.read", "tasks")));
-pgRouter.post("/tasks", asyncRoute(pgRoute(mod.createTask, "task.write", "tasks")));
-pgRouter.get("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.approvals), "approval.decide", null)));
+pgRouter.post("/tasks", asyncRoute(pgRoute(projectMembers.createPgProjectTask, "task.write", "tasks")));
+pgRouter.get('/projects/:id/members', asyncRoute(pgRoute(projectMembers.listPgProjectMembers, 'project.read', 'projects')));
+pgRouter.post('/projects/:id/members', asyncRoute(pgRoute(projectMembers.addPgProjectMember, 'project.write', 'projects')));
+pgRouter.get("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.approvals))));
 pgRouter.post("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.createApproval), "approval.request", null)));
 pgRouter.post('/approvals/:id/decide', asyncRoute(pgRoute(withPgFeature('approvals', decidePgApproval), 'approval.decide', null)));
 pgRouter.get("/documents/graph", asyncRoute(pgRoute(mod.pgDocumentsGraph, "document.read", "documents")));
@@ -77,6 +89,8 @@ pgRouter.get("/finance/budgets", asyncRoute(pgRoute(mod.budgets, "budget.read", 
 pgRouter.post("/finance/budgets", asyncRoute(pgRoute(mod.createBudget, "budget.write", "finance")));
 pgRouter.get("/finance/dues", asyncRoute(pgRoute(mod.dues, "dues.read", "finance")));
 pgRouter.post("/finance/dues", asyncRoute(pgRoute(mod.createDuesCharge, "dues.write", "finance")));
+pgRouter.get('/finance/dues/:id/payments', asyncRoute(pgRoute(duesPaymentHistory, 'dues.read', 'finance')));
+pgRouter.post('/finance/dues/:id/payments', asyncRoute(pgRoute(recordDuesPayment, 'dues.write', 'finance')));
 pgRouter.get("/finance/settlements", asyncRoute(pgRoute(mod.settlements, "transaction.read", "finance")));
 pgRouter.post("/finance/settlements", asyncRoute(pgRoute(mod.createSettlement, "settlement.create", "finance")));
 pgRouter.get("/members/options", asyncRoute(pgRoute(mod.memberOptions, "member.read", null)));
@@ -89,9 +103,9 @@ pgRouter.post("/agent/templates", asyncRoute(pgRoute(mod.createAgentTemplate, "a
 pgRouter.get("/agent/memory", asyncRoute(pgRoute(mod.agentMemory, "agent.chat", "agent")));
 pgRouter.post("/agent/memory", asyncRoute(pgRoute(mod.createAgentMemory, "agent.chat", "agent")));
 pgRouter.get("/automation/runs", asyncRoute(pgRoute(mod.automationRuns, "automation.manage", "automations")));
-pgRouter.get("/records/:resource/:id", asyncRoute(pgRecordRoute(mod.getRecord)));
-pgRouter.patch("/records/:resource/:id", asyncRoute(pgRecordRoute(mod.updateRecord)));
-pgRouter.delete("/records/:resource/:id", asyncRoute(pgRecordRoute(mod.deleteRecord)));
+pgRouter.get("/records/:resource/:id", asyncRoute(pgRecordRoute(corrections.dailyRecordRoute(mod.getRecord))));
+pgRouter.patch("/records/:resource/:id", asyncRoute(pgRecordRoute(corrections.dailyRecordRoute(mod.updateRecord))));
+pgRouter.delete("/records/:resource/:id", asyncRoute(pgRecordRoute(corrections.dailyRecordRoute(mod.deleteRecord))));
 pgRouter.get("/hr/attendance", asyncRoute(pgRoute(withPgFeature("attendance", mod.hrAttendance), "attendance.read", null)));
 pgRouter.post("/hr/attendance/check-in", asyncRoute(pgRoute(withPgFeature("attendance", mod.hrCheckIn), "attendance.read", null)));
 pgRouter.post("/hr/attendance/check-out", asyncRoute(pgRoute(withPgFeature("attendance", mod.hrCheckOut), "attendance.read", null)));

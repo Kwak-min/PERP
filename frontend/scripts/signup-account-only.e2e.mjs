@@ -145,11 +145,18 @@ try {
       assert.deepEqual(me.body.organizations, []);
       await login(page, email, '/welcome');
     } else {
-      await page.waitForURL(origin + '/');
-      assert.deepEqual((await stored(page)).organizations.map(org => org.org_id), [owner.orgId]);
-      assert.equal((await stored(page)).orgId, owner.orgId);
+      // Acceptance persists in SQLite, but cannot become authority for a PG session.
+      await page.waitForURL(origin + '/welcome');
+      assert.deepEqual((await stored(page)).organizations, []);
+      assert.equal((await stored(page)).orgId, null);
+      const me = await api(server.baseUrl, '/auth/me', { token: payload.token });
+      assert.equal(me.status, 200);
+      assert.deepEqual(me.body.organizations.map(org => org.org_id), [owner.orgId]);
       const workspace = await api(server.baseUrl, '/pg/auth/workspace', { token: payload.token });
+      assert.equal(workspace.status, 200);
       assert.deepEqual(workspace.body.organizations, []);
+      await login(page, email, '/welcome');
+      assert.deepEqual((await stored(page)).organizations, []);
     }
   });
 } finally {

@@ -19,13 +19,31 @@ export async function installCompanyFixture() {
     permissions: [{ role_id: '1', code: 'task.read' }],
     modules: [{ company_id: '77', module_key: 'tasks' }],
     featureSettings: [],
-    departments: [], projects: [], tasks: [], events: [], sessions: [], logs: [],
+    departments: [], projects: [], tasks: [], notifications: [], events: [], orgEvents: [], sessions: [], logs: [], replays: [], duesCharges: [],
   };
   let failMembership = false, schemaAvailable = true, featureSchemaAvailable = true, failSettingsAudit = false;
   const queries = [];
+  function bumpOrg(data, companyId) {
+    const company = data.companies.find(c => c.id === companyId);
+    company.org_revision = String(BigInt(company.org_revision ?? '1') + 1n);
+  }
   function execute(data, sql, values = []) {
     const text = sql.replace(/\s+/g, ' ').trim();
     queries.push({ sql: text, values });
+    if (text === 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY') return { rows: [] };
+    if (text.startsWith('SELECT id, org_revision FROM org.companies') || text.startsWith('SELECT org_revision FROM org.companies')) {
+      return { rows: data.companies.filter(c => c.id === values[0] && c.is_active).map(c => ({ ...c, org_revision: c.org_revision ?? '1' })) };
+    }
+    if (text.includes('INSERT INTO org.organization_change_events')) {
+      const actor = data.users.find(u => u.id === values[1]);
+      data.orgEvents.push({ id: String(data.orgEvents.length + 1), company_id: values[0], actor_id: actor.id, actor_name: actor.name,
+        action: values[2], resource_type: values[3], resource_id: values[4], target: values[5],
+        before_data: values[6] === null ? null : JSON.parse(values[6]), after_data: JSON.parse(values[7]), request_id: values[8], created_at: '2026-09-08T00:00:00.000Z' });
+      return { rows: [], rowCount: 1 };
+    }
+    if (text.includes('FROM org.organization_change_events')) {
+      return { rows: data.orgEvents.filter(e => e.company_id === values[0] && (!values[1] || (e.resource_type === 'member' && e.resource_id === values[1]))).reverse().slice(0, values[2]) };
+    }
     if (text.includes('FROM auth.sessions s')) {
       const s = data.sessions.find(row => row.token === values[0] && row.active);
       return { rows: s ? [{ ...data.users.find(user => user.id === s.user_id), session_id: s.id, login_at: s.login_at }] : [] };
@@ -76,12 +94,12 @@ export async function installCompanyFixture() {
     }
     if (text.includes('INSERT INTO org.departments')) {
       const department = { id: String(data.departments.length + 100), company_id: values[0], name: values[1], parent_id: values[2] ?? null, manager_id: null };
-      data.departments.push(department); return { rows: [department], rowCount: 1 };
+      data.departments.push(department); bumpOrg(data, values[0]); return { rows: [department], rowCount: 1 };
     }
     if (text.includes('INSERT INTO org.company_memberships')) {
       if (failMembership) throw new Error('injected membership failure');
       const membership = { company_id: values[0], user_id: values[1], department_id: values[2] ?? null, position_id: values[3] ?? null, status: 'active' };
-      data.memberships.push(membership); return { rows: [membership], rowCount: 1 };
+      data.memberships.push(membership); bumpOrg(data, values[0]); return { rows: [membership], rowCount: 1 };
     }
     if (text.includes('INSERT INTO org.permissions')) return { rows: [], rowCount: values[0].length };
     if (text.includes('INSERT INTO org.roles')) {
@@ -131,6 +149,12 @@ export async function installCompanyFixture() {
         .filter(m => data.companies.some(c => c.id === m.company_id && c.is_active)).map(m => ({ ...m, name: data.companies.find(c => c.id === m.company_id).name })) };
     }
     if (text.includes('AS members') && text.includes('org.company_memberships')) return { rows: [{ members: data.memberships.filter(m => m.company_id === values[0] && m.status === 'active').length, projects: 0, tasks: 0, documents: 0 }] };
+    if (text.includes('JOIN project.projects p ON p.company_id = m.company_id')) {
+      const [companyId, projectId, userId] = values;
+      return { rows: data.memberships.filter(m => m.company_id === companyId && m.user_id === userId && m.status === 'active')
+        .filter(m => data.users.some(u => u.id === m.user_id && u.account_status === 'active' && u.approval_status === 'approved'))
+        .filter(m => data.projects.some(p => p.id === projectId && p.company_id === companyId && p.lead_id === m.user_id)) };
+    }
     if (text.includes('FROM org.company_memberships m JOIN auth.users u')) {
       return { rows: data.memberships.filter(m => m.company_id === values[values.length - 1] && (values.length === 1 || m.user_id === values[0]) && m.status === 'active')
         .filter(m => !text.includes("AND u.account_status = 'active'") || data.users.some(u => u.id === m.user_id && u.account_status === 'active' && u.approval_status === 'approved'))
@@ -138,22 +162,44 @@ export async function installCompanyFixture() {
     }
     if (text.startsWith('UPDATE org.company_memberships')) {
       const membership = data.memberships.find(m => m.user_id === values[0] && m.company_id === values[1]);
-      if (membership) membership.department_id = values[2];
+      if (membership) {
+        membership.department_id = values[2];
+        if (text.includes('position_id = $4')) membership.position_id = values[3];
+        bumpOrg(data, values[1]);
+      }
       return { rows: [], rowCount: membership ? 1 : 0 };
     }
     if (text.includes('FROM org.departments')) return { rows: data.departments.filter(d => d.company_id === values[values.length - 1] && (values.length === 1 || d.id === values[0])) };
     if (text.startsWith('UPDATE org.departments')) {
       const department = data.departments.find(d => d.id === values[0] && d.company_id === values[1]);
-      if (department) department.manager_id = values[2];
+      if (department) {
+        department.manager_id = values[2];
+        if (text.includes('name = $4')) department.name = values[3];
+        bumpOrg(data, values[1]);
+      }
       return { rows: [], rowCount: department ? 1 : 0 };
     }
     if (text.includes('INSERT INTO project.projects')) {
-      const project = { id: String(data.projects.length + 200), company_id: values[0], name: values[1] };
+      const project = { id: String(data.projects.length + 200), company_id: values[0], name: values[1], lead_id: values[5] };
       data.projects.push(project); return { rows: [project], rowCount: 1 };
     }
     if (text.includes('FROM project.projects')) return { rows: data.projects.filter(p => p.company_id === values[values.length - 1] && (values.length === 1 || p.id === values[0])) };
-    if (text.includes('INSERT INTO project.tasks')) { data.tasks.push(values); return { rows: [{ id: '300' }], rowCount: 1 }; }
-    if (text.includes('INSERT INTO org.approval_requests') || text.includes('INSERT INTO accounting.dues_charges')) return { rows: [{ id: '301' }], rowCount: 1 };
+    if (text.includes('INSERT INTO project.tasks')) { data.tasks.push(values); return { rows: [{ id: '300', assignee_id: values[1], title: values[2], version: 1 }], rowCount: 1 }; }
+    if (text.includes('INSERT INTO notice.notifications')) { data.notifications.push(values); return { rows: [], rowCount: 1 }; }
+    if (text.includes('accounting.request_replays')) {
+      const replay = data.replays.find(r => r.scope.every((value, i) => value === values[i]));
+      if (text.startsWith('INSERT')) {
+        if (!replay) data.replays.push({ scope: values.slice(0,4), payload: JSON.parse(values[4]), response: null });
+        return { rows: [], rowCount: replay ? 0 : 1 };
+      }
+      if (text.startsWith('SELECT')) return { rows: replay ? [{ response: replay.response, matches: JSON.stringify(replay.payload) === JSON.stringify(JSON.parse(values[4])) }] : [] };
+      if (text.startsWith('UPDATE')) { replay.response = JSON.parse(values[4]); return { rows: [], rowCount: 1 }; }
+    }
+    if (text.includes('INSERT INTO accounting.dues_charges')) {
+      const charge = { id: String(301 + data.duesCharges.length), company_id: values[0], target_user_id: values[1], amount: values[2] };
+      data.duesCharges.push(charge); return { rows: [charge], rowCount: 1 };
+    }
+    if (text.includes('INSERT INTO org.approval_requests')) return { rows: [{ id: '301' }], rowCount: 1 };
     if (text.includes('FROM org.approval_requests ar')) return { rows: [] };
     // 이 fixture가 주장하지 않는 대시보드/옵션 읽기만 빈 결과로 둔다. 쓰기와 auth는 절대 폴백하지 않는다.
     if (text.startsWith('SELECT') && !text.includes('auth.') && !text.includes('company_memberships')) return { rows: [] };

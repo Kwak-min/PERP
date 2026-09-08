@@ -50,7 +50,7 @@ try {
     const createTask = async (id, title, status = 'todo') => {
       const created = await api(server.baseUrl, `${prefix}/tasks`, { ...session, method: 'POST', body: { project_id: id, title } }); assert.equal(created.status, 201);
       const taskId = String(created.body.id);
-      if (status !== 'todo') assert.equal((await api(server.baseUrl, session.pg ? `/pg/records/tasks/${taskId}` : `/tasks/${taskId}`, { ...session, method: 'PATCH', body: { status } })).status, 200);
+      if (status !== 'todo') assert.equal((await api(server.baseUrl, session.pg ? `/pg/records/tasks/${taskId}` : `/tasks/${taskId}`, { ...session, method: 'PATCH', body: { status, version: 1 } })).status, 200);
       return taskId;
     };
     try {
@@ -92,7 +92,7 @@ try {
       await row(a).locator('.project-tasks__expand').click();
       assert.equal(await row(a).getByRole('link', { name: '다른 프로젝트 업무', exact: true }).count(), 0);
       assert.equal(await page.getByRole('link', { name: 'OTHER_ORG_SECRET', exact: true }).count(), 0);
-      const updatePath = session.pg ? `records/tasks/${taskId}` : `tasks/${taskId}`;
+      const updatePath = `tasks/${taskId}`;
       const updated = responseFor(updatePath, 'PATCH');
       await row(a).getByLabel('브라우저 업무 상태', { exact: true }).selectOption('done'); assert.equal((await updated).status(), 200);
       await expect(row(a).locator('.project-tasks__progress progress')).toHaveAttribute('value', '100');

@@ -1,37 +1,32 @@
-// 화면별 검색 필터 정의. 표시할 데이터는 서버 응답에서만 가져온다.
-export const screenFilters: Readonly<Record<string, readonly string[]>> = {
-  "DASH-001": ["전체"], "DASH-002": ["전체"],
-  "ORG-002": ["전체", "활성", "초대 대기", "휴면"],
-  "PRJ-001": ["전체", "진행", "완료", "보관"],
-  "TSK-001": ["전체", "내 업무", "오늘 마감", "차단"],
-  "TSK-002": ["전체"], "TSK-004": ["전체"], "ORG-003": ["전체"],
-  "VLT-002": ["전체"], "AUT-001": ["전체"], "TSK-005": ["전체"],
-  "ORG-004": ["전체"], "AGT-002": ["전체"], "AGT-004": ["전체"],
-  "FIN-003": ["전체", "정상", "경고", "초과"],
-  "AST-003": ["전체", "확정", "대기", "취소"],
-  "HR-004": ["전체"],
-  "ADM-002": ["전체", "AI 생성", "권한 변경", "재무"],
-  "FIN-005": ["전체", "검토 대기", "결재 중", "지급 완료"],
-  "ORG-001": ["전체"],
-  "FIN-004": ["전체", "납부", "미납", "면제"],
-  "FIN-006": ["전체", "마감", "진행", "재오픈"],
-  "HR-003": ["전체", "대기", "승인", "반려"],
-  "HND-001": ["전체", "진행", "완료", "보관"],
-  "AGT-003": ["전체", "개인", "조직 공유", "만료 임박"],
-  "AGT-005": ["전체", "조회", "생성", "고위험"],
-  "AUT-002": ["전체", "성공", "실패", "샌드박스"],
-  "INT-001": ["전체", "캘린더", "메신저", "웹훅"],
-  "SET-001": ["전체", "사용 중", "초안", "보관"],
-  "ADM-003": ["전체"], "ADM-004": ["전체", "가져오기", "내보내기", "보존"],
-  "ADM-005": ["전체"], "PRJ-002": ["전체"], "TSK-003": ["전체"],
-  "CAL-002": ["전체"], "AST-002": ["전체"], "HR-001": ["전체"],
-  "DOC-002": ["전체"], "DOC-003": ["전체"], "CAL-001": ["전체"], "FIN-001": ["전체"],
-  "FIN-002": ["전체", "수입", "지출", "미확정"],
-  "AST-001": ["전체", "가용", "대여 중", "점검"],
-  "APR-001": ["받은", "보낸", "참조", "완료"],
-  "AGT-001": ["전체"], "ANL-001": ["전체"], "ADM-001": ["전체"],
-  "HR-002": ["전체", "출근", "지각", "원격", "휴가"],
-  "DOC-001": ["전체", "규정", "회의록", "템플릿"],
-  "VLT-001": ["전체", "운영", "개인", "고정"],
-  "NOT-001": ["읽지 않음", "업무", "결재", "시스템"],
+// 표시 문구가 아니라 API의 원시 status 값으로 필터링한다.
+// 서버가 제공하지 않는 '내 업무', '수입/지출' 등의 추정 필터는 표시하지 않는다.
+type RecordStatus =
+  | "active" | "inactive" | "invited" | "left" | "completed" | "archived"
+  | "todo" | "in_progress" | "done" | "blocked" | "cancelled"
+  | "draft" | "closed" | "confirmed" | "pending" | "approved" | "rejected"
+  | "unpaid" | "partial" | "paid" | "waived" | "overdue"
+  | "stored" | "in_use" | "repair" | "disposed" | "lost"
+  | "reserved" | "checked_out" | "returned" | "running" | "succeeded" | "failed";
+
+export type ScreenFilter =
+  | Readonly<{ kind: "all"; id: "all"; label: string }>
+  | Readonly<{ kind: "status"; id: RecordStatus; label: string; values: readonly RecordStatus[] }>;
+
+export const allFilter: ScreenFilter = { kind: "all", id: "all", label: "전체" };
+
+const status = (id: RecordStatus, label: string): ScreenFilter => ({ kind: "status", id, label, values: [id] });
+
+export const screenFilters: Readonly<Record<string, readonly ScreenFilter[]>> = {
+  "ORG-002": [allFilter, status("active", "활성"), status("invited", "초대 대기"), status("inactive", "휴면"), status("left", "탈퇴")],
+  "PRJ-001": [allFilter, status("active", "진행"), status("completed", "완료"), status("archived", "보관")],
+  "TSK-001": [allFilter, status("todo", "할 일"), status("in_progress", "진행"), status("done", "완료"), status("blocked", "차단"), status("cancelled", "취소")],
+  "FIN-002": [allFilter, status("confirmed", "확정"), status("pending", "미확정")],
+  "FIN-003": [allFilter, status("draft", "초안"), status("active", "활성"), status("closed", "마감")],
+  "FIN-004": [allFilter, status("paid", "납부"), status("unpaid", "미납"), status("partial", "부분 납부"), status("overdue", "연체"), status("waived", "면제")],
+  "FIN-005": [allFilter, status("pending", "검토 대기"), status("approved", "승인"), status("rejected", "반려")],
+  "AST-001": [allFilter, status("stored", "보관"), status("in_use", "사용 중"), status("repair", "수리"), status("disposed", "폐기"), status("lost", "분실")],
+  "AST-003": [allFilter, status("reserved", "예약"), status("checked_out", "대여 중"), status("returned", "반납"), status("cancelled", "취소")],
+  "APR-001": [allFilter, status("pending", "대기"), status("approved", "승인"), status("rejected", "반려")],
+  "AUT-002": [allFilter, status("running", "실행 중"), status("succeeded", "성공"), status("failed", "실패"), status("cancelled", "취소")],
+  "NOT-001": [allFilter, status("pending", "읽지 않음"), status("done", "읽음")],
 };

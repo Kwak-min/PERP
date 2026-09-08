@@ -5,12 +5,11 @@ import type { CalendarEvent } from "./MonthCalendar";
 const instant = z.iso.datetime({ offset: true });
 const id = z.union([z.string().min(1), z.number().int()]).transform(String);
 export const calendarRecordSchema = z.object({
-  id: z.string().min(1), title: z.string(), start_at: instant, end_at: instant, location: z.string().nullable(),
+  id: z.string().min(1), version: z.number().int().optional(), title: z.string(), start_at: instant, end_at: instant, location: z.string().nullable(),
 }).refine(event => Date.parse(event.end_at) >= Date.parse(event.start_at), "일정 기간이 올바르지 않습니다");
 export type CalendarRecord = Readonly<z.infer<typeof calendarRecordSchema>>;
-const pgRecordSchema = z.object({ __id: id, 일정: z.string(), 시작: instant, 종료: instant, 장소: z.string().nullable() })
-  .transform(event => ({ id: event.__id, title: event.일정, start_at: event.시작, end_at: event.종료, location: event.장소 }))
-  .pipe(calendarRecordSchema);
+const pgRecordSchema = z.object({ __id: id, version: z.number().int().optional(), 일정: z.string(), 시작: instant, 종료: instant, 장소: z.string().nullable() })
+  .transform(event => calendarRecordSchema.parse({ id: event.__id, ...(event.version === undefined ? {} : { version: event.version }), title: event.일정, start_at: event.시작, end_at: event.종료, location: event.장소 }));
 
 export function parseCalendarRecords(payload: unknown, pg: boolean): readonly CalendarRecord[] {
   return z.object({ items: z.array(pg ? pgRecordSchema : calendarRecordSchema) }).parse(payload).items;

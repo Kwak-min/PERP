@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { correctionVersion } from '../services/daily-corrections.service.js';
+import { assertProjectAssignee, notifyTaskAssignment } from '../services/project-assignment.service.js';
 
-import { db } from "../config/db.js";
+import { db, transaction } from "../config/db.js";
 import { resolvePrincipal } from "../middleware/auth.js";
 import { bumpVersion, getScoped, insert, listScoped, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
@@ -22,11 +24,11 @@ const createSchema = z.object({
 const patchSchema = z.object({
   title: z.string().optional(),
   description: z.string().optional(),
-  assignee_id: z.string().optional(),
+  assignee_id: z.string().nullable().optional(),
   status: z.string().optional(),
   priority: z.string().optional(),
   due_at: z.string().optional(),
-  version: z.number().int().optional(),
+  version: correctionVersion,
 });
 
 const checklistSchema = z.object({
@@ -64,30 +66,29 @@ export function create(req, res) {
   // 연결 대상도 현재 테넌트/조직 소속이어야 한다.
   if (payload.project_id) getScoped("project", principal, payload.project_id, "project");
 
-  const task = insert("task", {
-    tenant_id: principal.tenantId,
-    org_id: principal.orgId,
-    project_id: payload.project_id ?? null,
-    parent_id: payload.parent_id ?? null,
-    title: payload.title,
-    description: payload.description,
-    assignee_id: payload.assignee_id ?? principal.userId,
-    priority: payload.priority,
-    due_at: payload.due_at ?? null,
-    recurrence: payload.recurrence ?? null,
-    estimate_hours: payload.estimate_hours,
-    created_by: principal.userId,
-  });
+  const assigneeId = payload.assignee_id === undefined ? principal.userId : payload.assignee_id;
+  assertProjectAssignee(principal, payload.project_id ?? null, assigneeId);
+  const task = transaction(() => {
+    const created = insert("task", {
+      tenant_id: principal.tenantId,
+      org_id: principal.orgId,
+      project_id: payload.project_id ?? null,
+      parent_id: payload.parent_id ?? null,
+      title: payload.title,
+      description: payload.description,
+      assignee_id: assigneeId,
+      priority: payload.priority,
+      due_at: payload.due_at ?? null,
+      recurrence: payload.recurrence ?? null,
+      estimate_hours: payload.estimate_hours,
+      created_by: principal.userId,
+    });
 
-  audit.record({
-    tenantId: principal.tenantId,
-    action: "task.created",
-    resourceType: "task",
-    resourceId: task.id,
-    actorId: principal.userId,
-    after: { title: task.title },
-    requestId: req.requestId,
-  });
+    audit.record({ tenantId: principal.tenantId, action: 'task.created', resourceType: 'task',
+      resourceId: created.id, actorId: principal.userId, after: { title: created.title }, requestId: req.requestId });
+    notifyTaskAssignment(principal, created);
+    return created;
+  })();
 
   res.status(201).json(view(task));
 }
@@ -193,6 +194,7 @@ export function patch(req, res) {
   if (payload.version !== undefined && payload.version !== task.version) {
     throw new ApiError("VERSION_CONFLICT", "task was modified by someone else");
   }
+  if (payload.assignee_id !== undefined) assertProjectAssignee(principal, task.project_id, payload.assignee_id);
   if (payload.status === "done") guardCompletion(principal, task);
 
   const before = view(task);
@@ -200,18 +202,16 @@ export function patch(req, res) {
   for (const field of ["title", "description", "assignee_id", "status", "priority", "due_at"]) {
     if (payload[field] !== undefined) changes[field] = payload[field];
   }
-  const updated = bumpVersion("task", task, changes, principal.userId);
-
-  audit.record({
-    tenantId: principal.tenantId,
-    action: "task.updated",
-    resourceType: "task",
-    resourceId: task.id,
-    actorId: principal.userId,
-    before,
-    after: view(updated),
-    requestId: req.requestId,
-  });
+  if (Object.keys(changes).length === 1 && Object.hasOwn(changes, 'assignee_id') && changes.assignee_id === task.assignee_id) {
+    res.json(view(task)); return;
+  }
+  const updated = transaction(() => {
+    const row = bumpVersion('task', task, changes, principal.userId);
+    audit.record({ tenantId: principal.tenantId, action: 'task.updated', resourceType: 'task', resourceId: task.id,
+      actorId: principal.userId, before, after: view(row), requestId: req.requestId });
+    if (row.assignee_id !== task.assignee_id) notifyTaskAssignment(principal, row);
+    return row;
+  })();
 
   res.json(view(updated));
 }

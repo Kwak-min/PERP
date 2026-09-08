@@ -43,7 +43,7 @@ try {
     const m1 = { membership_id: "101", user_id: "101", name: "김검증", email: "kim@example.invalid", roles: ["custom-fixture-role"], status: "active", department_id: "10", title: "선임", phone: null };
     const m2 = { membership_id: "102", user_id: "102", name: "이기록", email: "lee@example.invalid", roles: ["reader"], status: "inactive", department_id: null, title: null };
     let members = [m1, m2], roots = [{ id: "10", name: "직접 만든 부서", parent_id: null, leader_id: "101", configured: true, leader: m1, members: [m1], member_count: 1, children: [] }];
-    let dataStatus = 200, auditStatus = pg ? 501 : 200, grants = permissions;
+    let dataStatus = 200, auditStatus = 200, grants = permissions;
     let auditItems = [{ id: "audit-real-fixture", seq: 7, action: "member.assignment.changed", action_label: "부서·직책 변경", resource_type: "membership", resource_id: "101", target: m1.name, actor_name: "감사 작성자", actor_kind: "user", before: { title: "사원" }, after: { title: "선임" }, created_at: "2026-09-07T00:00:00Z" }];
     const requests = [], mutations = [], errors = [];
     let auditRelease, auditStarted;
@@ -56,7 +56,7 @@ try {
       if (path === "/tenants/current") body = { ...organization, permissions: grants, enabled_modules: [] };
       if (path === "/settings/access") body = { org_id: orgId, permissions: grants, modules: ["members", "dashboard"], features: [], menus: ["menu.members", "menu.home"], scope: "all" };
       if (path === prefix) { status = dataStatus; body = { items: members }; }
-      if (path === `${prefix}/org-chart`) { status = dataStatus; body = { roots, unassigned: members.filter(m => !m.department_id) }; }
+      if (path === `${prefix}/org-chart`) { status = dataStatus; body = { roots, unassigned: members.filter(m => !m.department_id), ...(pg ? { revision: '1' } : {}) }; }
       if (path === `${prefix}/activity`) {
         if (auditStarted) { auditStarted(); await new Promise(resolve => { auditRelease = resolve; }); }
         status = auditStatus; body = { items: auditItems };
@@ -105,9 +105,9 @@ try {
     assert.equal(await dialog.evaluate(el => el.contains(document.activeElement)), true);
     await page.screenshot({ path: `${evidence}/${pg ? "pg" : "legacy"}-loading.png`, fullPage: true });
     auditStarted = null; auditRelease();
-    await settle(() => document.querySelector('[data-org-log-state="ready"], [data-org-log-state="unsupported"]'));
-    assert.equal(await page.locator(".orglog-list > li").count(), pg ? 0 : 1);
-    assert.equal(await page.locator('[data-org-log-state="unsupported"]').count(), pg ? 1 : 0);
+    await settle(() => document.querySelector('[data-org-log-state="ready"]'));
+    assert.equal(await page.locator(".orglog-list > li").count(), 1);
+    assert.equal(await page.locator('[data-org-log-state="ready"]').count(), 1);
     assert.equal(await page.locator('[data-org-log-state="empty"]').count(), 0);
     await page.screenshot({ path: `${evidence}/${pg ? "pg" : "legacy"}-popup.png`, fullPage: true });
     const focusables = dialog.locator('button:not([disabled]), input:not([disabled])');
@@ -127,7 +127,7 @@ try {
     assert.equal(await page.locator('.sidebar').evaluate(element => element.getBoundingClientRect().right <= 0), true);
     await page.screenshot({ path: `${evidence}/${pg ? "pg" : "legacy"}-mobile.png`, fullPage: true, animations: "disabled" });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-    await trigger.click(); await settle(() => document.querySelector('[data-org-log-state="ready"], [data-org-log-state="unsupported"]'));
+    await trigger.click(); await settle(() => document.querySelector('[data-org-log-state="ready"]'));
     await page.screenshot({ path: `${evidence}/${pg ? "pg" : "legacy"}-mobile-popup.png`, animations: "disabled" });
     await dialog.locator('button[data-org-log-close]').click();
     assert.equal(await dialog.count(), 0);

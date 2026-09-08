@@ -29,7 +29,7 @@ test('PG task queries preserve association and intersect project/task/company fi
 test('PG task status writes persist, reject invalid values and enforce company and explicit grant', async () => {
   const p = fixture.project('상태'), id = fixture.task(p, '상태 업무');
   const foreign = fixture.task(fixture.project('외부', '88'), '외부 업무');
-  const save = (id, status) => api(server.baseUrl, `/pg/records/tasks/${id}`, { ...pg, method: 'PATCH', body: { status } });
+  const save = (id, status) => api(server.baseUrl, `/pg/records/tasks/${id}`, { ...pg, method: 'PATCH', body: { status, version: 1 } });
   assert.equal((await save(id, 'done')).status, 200);
   assert.equal((await api(server.baseUrl, `/pg/tasks?task_id=${id}`, pg)).body.items[0].status, 'done');
   assert.equal((await save(id, 'invented')).status, 400);

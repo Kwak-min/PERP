@@ -6,7 +6,7 @@
 .calendar-summary__stats dt { margin: 0; color: var(--of-text-muted); font-size: 13px; }
 .calendar-summary__stats dd { margin: 0; font-weight: 700; font-size: 15px; }
 .calendar-upcoming { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.calendar-upcoming__item { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--of-border); border-radius: var(--r-md); text-decoration: none; color: inherit; }
+.calendar-upcoming__item { display: grid; grid-template-columns: minmax(0, 1fr); overflow-wrap: anywhere; gap: 2px; padding: 10px 12px; border: 1px solid var(--of-border); border-radius: var(--r-md); text-decoration: none; color: inherit; }
 .calendar-upcoming__item:hover { background: var(--of-surface-muted); }
 .calendar-upcoming__date { font-size: 12px; color: var(--of-primary); font-weight: 700; }
 .calendar-upcoming__item strong { font-size: 14px; }
