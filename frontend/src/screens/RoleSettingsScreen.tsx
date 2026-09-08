@@ -9,6 +9,28 @@ import { Button } from '../components/ui/Button';
 import { assignmentSchema, canDelegateRole, effectiveRoleSources, membersSchema, roleAccessSchema, roleSchema, roleScopeSchema, rolesSchema, scopeLabels, scopes, toggleRoleValue, type Member, type Role, type Roles } from './role-settings-model';
 import './role-settings.css';
 
+const roleFeatureCatalog = [
+  { key: 'attendance', label: '근태', includes: (code: string) => code === 'menu.attendance' || code.startsWith('attendance.') },
+  { key: 'leave', label: '휴가', includes: (code: string) => code === 'menu.leave' || code.startsWith('leave.') },
+] as const;
+
+function RoleFeatureGrants({ role, enabledFeatures }: Readonly<{ role: Role; enabledFeatures: ReadonlySet<string> }>) {
+  const grants = roleFeatureCatalog.map(feature => ({
+    ...feature,
+    count: role.permissions.filter(feature.includes).length,
+    enabled: enabledFeatures.has(feature.key),
+  })).filter(feature => feature.count > 0);
+  if (grants.length === 0) return null;
+  return <div className="role-settings__feature-grants" aria-label={`${role.name}의 근태 및 휴가 저장 권한`}>
+    {grants.map(feature => <span key={feature.key} data-testid={`role-feature-${feature.key}`}>
+      <strong>{feature.label} 저장 권한 {feature.count}개</strong>
+      <small data-feature-status={feature.enabled ? 'enabled' : 'disabled'}>
+        {feature.enabled ? '조직 기능 켜짐' : '조직 기능 꺼짐 · 권한과 자료는 보존됨'}
+      </small>
+    </span>)}
+  </div>;
+}
+
 type Conflict = Readonly<{ kind: 'role' | 'member' | 'delete'; latest: Readonly<{ roles: Roles; members: Member[] }> | null }>;
 export function RoleSettingsScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const stored = useSession();
@@ -18,6 +40,7 @@ export function RoleSettingsScreen({ screen }: Readonly<{ screen: ScreenDefiniti
 function RoleEditor({ screen, session }: Readonly<{ screen: ScreenDefinition; session: ApiSession }>) {
   const pg = Boolean(session.orgId?.startsWith('pg:'));
   const access = useAccess();
+  const enabledFeatures = new Set(access?.features ?? []);
   const [data, setData] = useState<Roles | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -147,11 +170,16 @@ function RoleEditor({ screen, session }: Readonly<{ screen: ScreenDefinition; se
           <strong>{role.name}</strong><small>{role.system ? '기본 역할' : '사용자 정의'} · {scopeLabels[role.scope]} · 권한 {role.permissions.length}개 · v{role.version}</small>
           {editable(role) && <><Button tone="neutral" size="small" disabled={locked} onClick={() => { setEditing(role); setName(role.name); setScope(role.scope); setPermissions(role.permissions); }}>수정</Button>
             <Button tone="danger" size="small" disabled={locked} onClick={() => setDeleting(role)}>삭제</Button></>}
+          <RoleFeatureGrants role={role} enabledFeatures={enabledFeatures} />
           {deleting?.id === role.id && <div role="alert"><p>이 역할을 삭제하면 모든 배정이 해제됩니다. v{deleting.version} 기준으로 삭제합니다.</p><Button tone="danger" disabled={locked} onClick={() => mutate('delete')}>삭제 확정</Button><Button tone="neutral" disabled={locked} onClick={() => setDeleting(null)}>취소</Button></div>}
         </div>)}</div>
       </section>
       <form className="role-settings__card" data-testid="role-definition-editor" data-version={editing?.version ?? 'new'} onSubmit={event => { event.preventDefault(); void mutate('role'); }}>
         <h2>{editing ? '역할 수정' : '역할 만들기'}</h2><p>{editing ? `기준 버전 v${editing.version}` : '새 역할'} · 아래 선택은 저장 전까지 적용되지 않습니다.</p>
+        <p className="role-settings__feature-note">
+          근태·휴가 체크는 역할에 저장할 권한입니다. 조직 기능이 꺼져 있어도 편집할 수 있으며,
+          여기서 권한을 바꿔도 조직 기능은 켜지지 않습니다.
+        </p>
         <label>역할 이름<input required maxLength={80} disabled={locked} value={name} onChange={event => setName(event.target.value)} /></label>
         <label>역할 위임 범위<select value={scope} disabled={locked || pg} onChange={event => setScope(roleScopeSchema.parse(event.target.value))}>
           {(pg ? ['all'] as const : scopes.slice(0, scopes.indexOf(data.scope) + 1)).map(value => <option value={value} key={value}>{scopeLabels[value]}</option>)}
@@ -160,10 +188,15 @@ function RoleEditor({ screen, session }: Readonly<{ screen: ScreenDefinition; se
         {adminPreset && <Button type="button" tone="neutral" disabled={locked || !canDelegateRole(adminPreset, data)} onClick={() => { setPermissions([...adminPreset.permissions]); setScope('all'); }}>관리자 프리셋 · 모든 회사 권한 선택</Button>}
         {(['menu', 'action', 'delegation'] as const).map(kind => <fieldset key={kind} data-permission-kind={kind}><legend>{kind === 'menu' ? '접근 가능한 메뉴' : kind === 'action' ? '실행 가능한 업무 동작' : '역할·권한 관리'}</legend>
           {kind === 'delegation' && <p>역할 정의 생성·변경·삭제와 구성원 배정·회수를 허용합니다. 메뉴 접근(menu.roles)과 별개이며 구성원 경로의 위임에도 필요합니다.</p>}
-          <div className="role-settings__checks">{data.catalog.filter(item => kind === 'delegation' ? item.code === 'role.assign' : item.kind === kind && item.code !== 'role.assign').map(item => <label key={item.code}>
-            <input type="checkbox" data-permission={item.code} checked={permissions.includes(item.code)} disabled={locked || !data.grantable.includes(item.code)} onChange={() => setPermissions(toggleRoleValue(permissions, item.code))} />
-            <span>{item.label}<small>{item.code}</small></span>
-          </label>)}</div>
+          <div className="role-settings__checks">{data.catalog.filter(item => kind === 'delegation' ? item.code === 'role.assign' : item.kind === kind && item.code !== 'role.assign').map(item => {
+            const feature = roleFeatureCatalog.find(feature => feature.includes(item.code));
+            return <label key={item.code}>
+              <input type="checkbox" data-permission={item.code} checked={permissions.includes(item.code)} disabled={locked || !data.grantable.includes(item.code)} onChange={() => setPermissions(toggleRoleValue(permissions, item.code))} />
+              <span>{item.label}<small data-feature-status={feature ? enabledFeatures.has(feature.key) ? 'enabled' : 'disabled' : undefined}>
+                {item.code}{feature ? ` · 조직 기능 ${enabledFeatures.has(feature.key) ? '켜짐' : '꺼짐 (저장 권한 유지)'}` : ''}
+              </small></span>
+            </label>;
+          })}</div>
         </fieldset>)}
         <div className="role-settings__actions"><Button type="submit" disabled={locked || Boolean(editing && !editable(editing))}>{editing ? '역할 저장' : '역할 생성'}</Button>{editing && <Button type="button" tone="neutral" disabled={locked} onClick={reset}>새 역할</Button>}</div>
       </form>

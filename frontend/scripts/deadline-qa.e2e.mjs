@@ -21,8 +21,11 @@ if (args.length === 2 && args[0] === '--scenario' && ['role-toggles', 'role-togg
 } else if (args.length === 2 && args[0] === '--scenario' && args[1] === 'roles') {
   assertIsolated();
   await (await import('./deadline-roles-qa.mjs')).rolesScenario();
+} else if (args.length === 2 && args[0] === '--scenario' && args[1] === 'disabled-hr-features') {
+  assertIsolated();
+  await (await import('./deadline-disabled-hr-features-qa.mjs')).disabledHrFeaturesScenario();
 } else if (args[0] !== '--scenario' || !['baseline', 'recruitment-nav', 'nav-pref', 'sidebar'].includes(args[1]) || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario roles | --scenario baseline|recruitment-nav|nav-pref|sidebar [--probe error|cancel]');
+  console.error('Usage: deadline-qa.e2e.mjs --scenario roles|role-toggles|role-toggles-native|disabled-hr-features | --scenario baseline|recruitment-nav|nav-pref|sidebar [--probe error|cancel]');
   process.exitCode = 2;
 } else {
   assertIsolated();
