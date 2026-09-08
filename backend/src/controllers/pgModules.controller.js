@@ -56,6 +56,7 @@ export async function createCalendarEvent(req, res) {
 }
 
 // GET /api/v1/pg/usage — 홈/조직 대시보드 집계
+// 업무 총계는 목록과 동일하게 취소(cancelled)를 포함한 회사의 모든 업무 행을 센다.
 export async function usage(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) {
@@ -65,8 +66,8 @@ export async function usage(req, res) {
     `SELECT
        (SELECT count(*) FROM org.company_memberships WHERE company_id = $1 AND status = 'active') AS members,
        (SELECT count(*) FROM project.projects  WHERE company_id = $1) AS projects,
-       (SELECT count(*) FROM project.assignments a
-          JOIN project.projects p ON p.id = a.project_id
+       (SELECT count(*) FROM project.tasks t
+          JOIN project.projects p ON p.id = t.project_id
          WHERE p.company_id = $1) AS tasks,
        (SELECT count(*) FROM project.documents d
           JOIN project.projects p ON p.id = d.project_id
