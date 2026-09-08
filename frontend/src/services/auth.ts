@@ -47,14 +47,17 @@ export function isPgToken(token: string): boolean {
 
 /** 검증된 계정의 운영 조직 소속만 조회한다. 조회 실패는 빈 소속과 구분한다. */
 export async function organizationsOf(token: string): Promise<readonly Organization[]> {
+  // UUID PG 토큰은 perp_db 워크스페이스가 유일한 권위 소스다.
+  // 레거시 SQLite(/auth/me)는 조회하지 않는다 — 옛 소속이 pg 회사보다 먼저 선택돼
+  // pg 세션을 레거시 인증 경로로 보내 접근이 차단되던 문제를 근본 제거한다.
+  if (isPgToken(token)) {
+    const pg = legacyMeSchema.parse(await apiRequest("/pg/auth/workspace", { session: { token, orgId: null } }));
+    return pg.organizations;
+  }
+  // 레거시 폴백 로그인(비-PG 토큰)만 기존 SQLite 소속을 사용한다.
   const parsed = legacyMeSchema.parse(
     await apiRequest("/auth/me", { session: { token, orgId: null } }),
   );
-  // UUID PG 토큰은 서버가 검증한 별도 PG 회사 목록을 가져온다.
-  if (isPgToken(token)) {
-    const pg = legacyMeSchema.parse(await apiRequest("/pg/auth/workspace", { session: { token, orgId: null } }));
-    return [...parsed.organizations, ...pg.organizations];
-  }
   return parsed.organizations;
 }
 

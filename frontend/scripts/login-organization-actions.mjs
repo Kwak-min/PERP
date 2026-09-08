@@ -73,7 +73,7 @@ export async function creationAndNavigationScenarios(qa) {
     await page.getByRole('button', { name: '다음', exact: true }).click();
     await page.getByRole('button', { name: '다음', exact: true }).click();
     const saved = page.waitForResponse(response => /\/api\/v1\/(tenants|pg\/companies)$/.test(response.url()) && response.request().method() === 'POST');
-    const refreshed = page.waitForResponse(response => response.url().endsWith('/api/v1/auth/me'));
+    const refreshed = page.waitForResponse(response => response.url().endsWith(mode === 'legacy' ? '/api/v1/auth/me' : '/api/v1/pg/auth/workspace'));
     const home = page.waitForURL(origin + '/');
     await page.getByRole('button', { name: '조직 만들기', exact: true }).click();
     const response = await saved;

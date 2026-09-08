@@ -88,11 +88,19 @@ function CalendarWorkspace({ screen, session }: Readonly<{ screen: ScreenDefinit
   const selectedEvents = calendarRecordsForDate(state.records, selected);
   const calendarQuery = new URLSearchParams({ month, day: selectedDate }).toString();
   function changeMonth(date: Date): void { setSearch({ month: localDateInput(date).slice(0, 7), day: localDateInput(date) }); }
+  const daysWithEvents = new Set(cells.map(event => event.day)).size;
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const upcoming = [...state.records]
+    .filter(event => Date.parse(event.start_at) >= todayStart)
+    .sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at) || a.id.localeCompare(b.id))
+    .slice(0, 6);
+  const todayCount = calendarRecordsForDate(state.records, today).length;
   return <div className="screen calendar-screen" data-screen-id={screen.id}>
     <header className="screen-header"><div><div className="screen-header__meta"><Badge>{screen.id}</Badge><Badge>calendar</Badge></div><h1>{screen.label}</h1><p>{screen.description}</p></div>
       <div className="screen-header__actions">{eventId ? <><Link className="button button--neutral" to={`/calendar?${calendarQuery}`}>캘린더로</Link><Button disabled={!canWrite || !detail?.version || cancelling} onClick={() => setModal(true)}>일정 수정</Button><Button tone="danger" disabled={!canWrite || !detail?.version || cancelling} onClick={() => void cancelEvent()}>일정 취소</Button></>
         : <Button disabled={!(permissions.includes("event.write") || (!pg && permissions.includes("*")))} onClick={() => setModal(true)}>새로 만들기</Button>}</div></header>
     {notice && <div className="screen-notice" role="status"><span>{notice}</span><Button tone="ghost" size="small" onClick={() => setNotice(null)}>닫기</Button></div>}
+    <div className={eventId ? "" : "calendar-body"}>
     <SectionCard title={eventId ? "일정 상세" : "월간 일정"} subtitle={`기기 시간대: ${Intl.DateTimeFormat().resolvedOptions().timeZone}`} foot="권한 범위 안의 서버 일정만 표시합니다">
       {!eventId && <nav className="calendar-nav" aria-label="월 선택"><Button tone="neutral" size="small" aria-label="이전 달" onClick={() => changeMonth(new Date(shown.getFullYear(), shown.getMonth() - 1, 1))}>이전</Button>
         <strong aria-live="polite">{shown.getFullYear()}년 {shown.getMonth() + 1}월</strong><Button tone="neutral" size="small" aria-label="다음 달" onClick={() => changeMonth(new Date(shown.getFullYear(), shown.getMonth() + 1, 1))}>다음</Button>
@@ -115,6 +123,26 @@ function CalendarWorkspace({ screen, session }: Readonly<{ screen: ScreenDefinit
             </section></>}
       </StateBoundary>
     </SectionCard>
+    {!eventId && state.status === "ready" && <aside className="calendar-summary" aria-label="일정 요약">
+      <SectionCard title="이번 달 요약" subtitle={`${shown.getFullYear()}년 ${shown.getMonth() + 1}월`}>
+        <dl className="calendar-summary__stats">
+          <div><dt>총 일정</dt><dd>{state.records.length}건</dd></div>
+          <div><dt>일정 있는 날</dt><dd>{daysWithEvents}일</dd></div>
+          {currentMonth && <div><dt>오늘 일정</dt><dd>{todayCount}건</dd></div>}
+        </dl>
+      </SectionCard>
+      <SectionCard title="다가오는 일정" subtitle="오늘 이후 예정된 일정">
+        {upcoming.length === 0 ? <p className="calendar-empty" role="status">예정된 일정이 없습니다.</p>
+          : <ul className="calendar-upcoming">{upcoming.map(event => <li key={event.id}>
+            <Link className="calendar-upcoming__item" to={`/calendar/${encodeURIComponent(event.id)}?${calendarQuery}`}>
+              <span className="calendar-upcoming__date">{new Date(event.start_at).toLocaleDateString("ko-KR", { month: "short", day: "numeric", weekday: "short" })}</span>
+              <strong>{event.title}</strong>
+              <span className="calendar-upcoming__time">{new Date(event.start_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}{event.location ? ` · ${event.location}` : ""}</span>
+            </Link>
+          </li>)}</ul>}
+      </SectionCard>
+    </aside>}
+    </div>
     {modal && <CalendarCreateModal session={session} {...(eventId && detail ? { initialEvent: detail } : {})} shown={selected} onClose={() => setModal(false)} onSaved={start => {
       setModal(false); changeMonth(start); setRevision(value => value + 1); setNotice("일정을 서버에 저장했습니다.");
     }} />}
