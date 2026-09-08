@@ -13,7 +13,7 @@ import { StatCard, type Stat } from "../components/ui/StatCard";
 import { StatTrendModal, metricKeyOf, type MetricKey } from "../components/data/StatTrendModal";
 import { MemberListModal, membersSchema, type Member } from "../components/data/MemberListModal";
 import { allFilter, screenFilters } from "./screenFilters";
-import { downloadCsv, filterTable, liveTable, paginateTable, type TableData, type TableRow } from "./screenTable";
+import { downloadCsv, filterTable, liveTable, notificationTaskLink, paginateTable, type TableData, type TableRow } from "./screenTable";
 import { apiRequest, userMessageOf } from "../services/api";
 import { isPgWorkspace, workspaceEndpoint } from "../services/workspace";
 import { useDepartments } from "../hooks/useDepartments";
@@ -209,8 +209,10 @@ function DataTable({
   onDelete,
   onEdit,
   onCustody,
+  taskLinks = false,
 }: Readonly<{
   table: TableData;
+  taskLinks?: boolean;
   onRowClick?: (row: readonly string[], index: number) => void;
   onDelete?: (row: TableRow) => void;
   onEdit?: (id: string) => void;
@@ -225,6 +227,7 @@ function DataTable({
       <table>
         <thead>
           <tr>
+            {taskLinks && <th>업무</th>}
             {table.columns.map((column) => (
               <th key={column} className={isNumericColumn(column) ? "num" : undefined}>
                 {column.replaceAll("_", " ")}
@@ -234,8 +237,9 @@ function DataTable({
           </tr>
         </thead>
         <tbody>
-          {table.rows.map((row, index) => (
-            <tr
+          {table.rows.map((row, index) => {
+            const taskLink = taskLinks ? notificationTaskLink(row) : null;
+            return <tr
               key={row.id ?? index}
               className={onRowClick ? "table-row--interactive" : undefined}
               tabIndex={onRowClick ? 0 : undefined}
@@ -244,6 +248,7 @@ function DataTable({
                 if (event.key === "Enter" || event.key === " ") onRowClick(row.cells, index);
               } : undefined}
             >
+              {taskLinks && <td>{taskLink ? <Link to={taskLink}>업무 보기</Link> : '—'}</td>}
               {row.cells.map((cell, cellIndex) => (
                 <td key={cellIndex} className={isNumericColumn(table.columns[cellIndex] ?? "") ? "num" : undefined}>
                   {cell}
@@ -280,8 +285,8 @@ function DataTable({
                   </span>
                 </td>
               )}
-            </tr>
-          ))}
+            </tr>;
+          })}
         </tbody>
       </table>
     </div>
@@ -595,6 +600,7 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             {pagination ? (
               <DataTable
                 table={pagination.table}
+                taskLinks={screen.id === 'NOT-001'}
                 {...(screen.id === 'AST-001' ? { onCustody: (row: TableRow) => {
                   if (row.id) setCustodyId(row.id);
                 } } : {})}

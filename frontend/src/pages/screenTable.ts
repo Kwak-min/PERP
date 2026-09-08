@@ -13,6 +13,12 @@ export type TableData = Readonly<{
   rows: readonly TableRow[];
 }>;
 
+// 서버 링크도 외부 URL로 해석하지 않는다. 실제 업무 상세 경로만 허용한다.
+export function notificationTaskLink(row: TableRow): string | null {
+  const link = row.values.link;
+  return typeof link === 'string' && /^\/tasks\/[A-Za-z0-9_-]+$/.test(link) ? link : null;
+}
+
 const listSchema = z.object({ items: z.array(z.record(z.string(), z.unknown())) });
 
 export function liveTable(data: unknown): TableData | null {

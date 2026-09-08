@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { chromium, expect } from '@playwright/test';
 import { createServer, preview } from 'vite';
 import react from '@vitejs/plugin-react';
@@ -18,7 +18,8 @@ try {
   else { server = await startTestServer(); fixture = await installDailyPgFixture(); }
   if (!fixture.pool) {
     fixture.identity.state.roles.push({ id: '2', company_id: '77', name: 'recipient' });
-    fixture.identity.state.grants.push({ user_id: '102', role_id: '2' }); fixture.identity.state.permissions.push({ role_id: '2', code: 'notification.read' });
+    fixture.identity.state.grants.push({ user_id: '102', role_id: '2' });
+    for (const code of ['notification.read','task.read','project.read','member.read','menu.notifications','menu.tasks','menu.projects','menu.members','menu.home','menu.configured']) fixture.identity.state.permissions.push({ role_id: '2', code });
   }
   const owner = await createOwnerOrg(server.baseUrl, ['projects','tasks','calendar','assets']);
   const colleague = await createOwnerOrg(server.baseUrl, ['projects','tasks','calendar','assets']);
@@ -188,7 +189,34 @@ try {
     const reloadedResponse = await reloadedNotifications; assert.equal(reloadedResponse.status(), 200);
     assert.deepEqual((await reloadedResponse.json()).items.map(item => item.link).sort(), expectedLinks);
     await expect(targetPage.getByRole('row').filter({ hasText: 'Second browser task' })).toHaveCount(1);
-    await targetPage.screenshot({ path: `${evidence}/${session.pg ? 'pg' : 'legacy'}-recipient-notifications.png`, fullPage: true }); await targetContext.close();
+    const links = targetPage.locator('tbody a[href^="/tasks/"]');
+    await expect(links).toHaveCount(3);
+    assert.deepEqual((await links.evaluateAll(nodes => nodes.map(node => node.getAttribute('href')))).sort(), expectedLinks);
+    await expect(targetPage.getByText('Foreign company notification', { exact: true })).toHaveCount(0);
+    await expect(targetPage.getByText('Other recipient notification', { exact: true })).toHaveCount(0);
+    await targetPage.screenshot({ path: `${evidence}/${session.pg ? 'pg' : 'legacy'}-recipient-notifications.png`, fullPage: true });
+    const taskLink = targetPage.getByRole('row').filter({ hasText: 'Second browser task' }).getByRole('link', { name: '업무 보기' });
+    await expect(taskLink).toHaveAttribute('href', `/tasks/${secondTask}`);
+    await expect(taskLink).toBeInViewport();
+    const detailResponse = () => targetPage.waitForResponse(response => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && (session.pg ? url.pathname === '/api/v1/pg/tasks' && url.searchParams.get('task_id') === secondTask : url.pathname === `/api/v1/tasks/${secondTask}`);
+    }, { timeout: 10000 });
+    const [opened] = await Promise.all([detailResponse(), taskLink.click()]);
+    assert.equal(opened.status(), 200);
+    const openedDetail = await opened.json();
+    assert.equal(String(session.pg ? openedDetail.items[0].__id : openedDetail.id), secondTask);
+    await expect(targetPage).toHaveURL(origin + `/tasks/${secondTask}`);
+    await expect(targetPage.locator('.project-tasks__detail h2')).toHaveText('Second browser task');
+    await expect(targetPage.getByLabel('제목', { exact: true })).toHaveValue('Second browser task');
+    if (session.pg) await expect(targetPage.getByRole('button', { name: '변경 저장', exact: true })).toBeDisabled();
+    const [detailReload] = await Promise.all([detailResponse(), targetPage.reload()]);
+    assert.equal(detailReload.status(), 200);
+    await expect(targetPage.locator('.project-tasks__detail h2')).toHaveText('Second browser task');
+    await writeFile(`${evidence}/${session.pg ? 'pg' : 'legacy'}-recipient-link.json`, JSON.stringify({ expectedLinks, openedUrl: targetPage.url(), detailStatus: opened.status(), detail: openedDetail, reloadStatus: detailReload.status() }, null, 2));
+    await targetPage.screenshot({ path: `${evidence}/${session.pg ? 'pg' : 'legacy'}-recipient-task-detail.png`, fullPage: true });
+    await targetContext.unrouteAll({ behavior: 'wait' }); await targetContext.close();
+    console.log(session.pg ? 'PG' : 'LEGACY', 'recipient internal task link + actual task detail GET200 + reload + isolation PASS');
     console.log(session.pg ? 'PG' : 'LEGACY', 'actual recipient login + two task-row assignments + assigned task creation + exact recipient-only durable notification list PASS');
     console.log(session.pg ? process.env.DAILY_TEST_PG_BIN ? 'PG_NATIVE_REAL_AUTH' : 'PG_SQL_ENGINE' : 'LEGACY_SQLITE', 'project/date, reassignment, reschedule/cancel, custody/reload, stale draft PASS');
     await context.close();
