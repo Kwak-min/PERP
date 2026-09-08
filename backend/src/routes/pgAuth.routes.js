@@ -9,6 +9,7 @@ import { asyncRoute } from "../middleware/error.js";
 import { withPgFeature } from "../middleware/features.js";
 import { pgAgentKeyRouter } from "./pg-agent-key.routes.js";
 import { decidePgApproval } from '../controllers/pgApprovalDecision.controller.js';
+import { duesPaymentHistory, recordDuesPayment } from '../controllers/pgDuesPayments.controller.js';
 
 // perp_db (PostgreSQL) 슬라이스 라우터. strangler-fig: 기존 SQLite 라우트와 분리.
 // 마운트 지점: /api/v1/pg
@@ -57,7 +58,7 @@ pgRouter.post("/projects", asyncRoute(pgRoute(mod.createProject, "project.write"
 pgRouter.get("/projects/options", asyncRoute(pgRoute(mod.projectOptions, "project.read", "projects")));
 pgRouter.get("/tasks", asyncRoute(pgRoute(mod.tasks, "task.read", "tasks")));
 pgRouter.post("/tasks", asyncRoute(pgRoute(mod.createTask, "task.write", "tasks")));
-pgRouter.get("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.approvals), "approval.decide", null)));
+pgRouter.get("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.approvals))));
 pgRouter.post("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.createApproval), "approval.request", null)));
 pgRouter.post('/approvals/:id/decide', asyncRoute(pgRoute(withPgFeature('approvals', decidePgApproval), 'approval.decide', null)));
 pgRouter.get("/documents/graph", asyncRoute(pgRoute(mod.pgDocumentsGraph, "document.read", "documents")));
@@ -78,6 +79,8 @@ pgRouter.get("/finance/budgets", asyncRoute(pgRoute(mod.budgets, "budget.read", 
 pgRouter.post("/finance/budgets", asyncRoute(pgRoute(mod.createBudget, "budget.write", "finance")));
 pgRouter.get("/finance/dues", asyncRoute(pgRoute(mod.dues, "dues.read", "finance")));
 pgRouter.post("/finance/dues", asyncRoute(pgRoute(mod.createDuesCharge, "dues.write", "finance")));
+pgRouter.get('/finance/dues/:id/payments', asyncRoute(pgRoute(duesPaymentHistory, 'dues.read', 'finance')));
+pgRouter.post('/finance/dues/:id/payments', asyncRoute(pgRoute(recordDuesPayment, 'dues.write', 'finance')));
 pgRouter.get("/finance/settlements", asyncRoute(pgRoute(mod.settlements, "transaction.read", "finance")));
 pgRouter.post("/finance/settlements", asyncRoute(pgRoute(mod.createSettlement, "settlement.create", "finance")));
 pgRouter.get("/members/options", asyncRoute(pgRoute(mod.memberOptions, "member.read", null)));

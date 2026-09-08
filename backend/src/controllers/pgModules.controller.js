@@ -1,7 +1,8 @@
 import path from "node:path";
 
 import { z } from "zod";
-import { pgIdentity } from "../middleware/pgAccess.js";
+import { pgIdentity, resolvePgCompanyPrincipal } from "../middleware/pgAccess.js";
+import { money, idempotentMutation, MONEY_TABLES, mutateFinancialRecord } from '../services/pg-finance.service.js';
 import { pgQuery, pgTransaction } from "../config/pg.js";
 import { MODULE_CATALOG } from "../config/modules.js";
 import { enabledFeatures, FEATURE_CATALOG, modulesForFeatures, validateFeatureSelection } from "../config/features.js";
@@ -197,36 +198,34 @@ export async function createTransaction(req, res) {
   }
   const body = req.body ?? {};
   const accountId = body.account_id;
-  const amount = Number(body.amount);
-  const entryDate = body.entry_date || new Date().toISOString().slice(0, 10);
+  const amount = money(body.amount);
+  const entryDate = body.entry_date || null;
+  if (entryDate) z.string().date().parse(entryDate);
   const memo = String(body.memo ?? "").trim() || null;
   if (!accountId) throw new ApiError("VALIDATION_ERROR", "계정을 선택하세요");
-  if (!Number.isFinite(amount) || amount <= 0) {
-    throw new ApiError("VALIDATION_ERROR", "금액은 0보다 큰 숫자여야 합니다");
-  }
-
-  // 선택 계정(회사 소유·수입/지출) 확인
-  const { rows: accRows } = await pgQuery(
+  const result = await idempotentMutation(req, 'transaction.create', { account_id: String(accountId), amount, entry_date: entryDate, memo }, async client => {
+  // 계정 조회부터 게시까지 같은 트랜잭션이다.
+  const { rows: accRows } = await client.query(
     `SELECT id, account_type FROM accounting.accounts
-      WHERE id = $1 AND company_id = $2 AND account_type IN ('revenue','expense')`,
+      WHERE id = $1 AND company_id = $2 AND is_active = true AND account_type IN ('revenue','expense') FOR SHARE`,
     [accountId, companyId],
   );
   const account = accRows[0];
   if (!account) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 계정입니다");
 
   // 상대 계정 = 회사의 자산(현금) 계정 중 코드 최소값
-  const { rows: cashRows } = await pgQuery(
+  const { rows: cashRows } = await client.query(
     `SELECT id FROM accounting.accounts
       WHERE company_id = $1 AND account_type = 'asset' AND is_active = true
-      ORDER BY code LIMIT 1`,
+      ORDER BY code LIMIT 1 FOR SHARE`,
     [companyId],
   );
   const cash = cashRows[0];
   if (!cash) throw new ApiError("VALIDATION_ERROR", "현금(자산) 계정이 없어 거래를 만들 수 없습니다");
 
-  const { rows: entryRows } = await pgQuery(
+  const { rows: entryRows } = await client.query(
     `INSERT INTO accounting.journal_entries (company_id, entry_date, memo, created_by, posted)
-     VALUES ($1, $2, $3, $4, true) RETURNING id`,
+     VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3, $4, false) RETURNING id`,
     [companyId, entryDate, memo, userId],
   );
   const entryId = entryRows[0].id;
@@ -243,13 +242,16 @@ export async function createTransaction(req, res) {
           { accountId: cash.id, debit: 0, credit: amount },
         ];
   for (const l of lines) {
-    await pgQuery(
+    await client.query(
       `INSERT INTO accounting.journal_lines (entry_id, account_id, debit, credit)
        VALUES ($1, $2, $3, $4)`,
       [entryId, l.accountId, l.debit, l.credit],
     );
   }
-  res.status(201).json({ id: String(entryId) });
+  await client.query('UPDATE accounting.journal_entries SET posted=true WHERE id=$1', [entryId]);
+  return { id: String(entryId), version: 1 };
+  });
+  res.status(201).json(result);
 }
 
 // GET /api/v1/pg/finance/transactions
@@ -260,7 +262,7 @@ export async function financeTransactions(req, res) {
     `SELECT e.id AS __id, e.entry_date AS 일자, e.memo AS 내용,
             COALESCE(SUM(l.debit), 0) AS 차변,
             COALESCE(SUM(l.credit), 0) AS 대변,
-            CASE WHEN e.posted THEN 'confirmed' ELSE 'pending' END AS status
+            CASE WHEN e.posted THEN 'confirmed' ELSE 'pending' END AS status, e.version AS __version
        FROM accounting.journal_entries e
        LEFT JOIN accounting.journal_lines l ON l.entry_id = e.id
       WHERE e.company_id = $1
@@ -273,19 +275,21 @@ export async function financeTransactions(req, res) {
 
 // GET /api/v1/pg/approvals — 결재(승인요청)
 export async function approvals(req, res) {
-  const companyId = await resolveCompanyId(req);
-  if (!companyId) return res.json({ items: [] });
+  const principal = await resolvePgCompanyPrincipal(req);
+  const { companyId, userId } = principal;
+  if (!principal.has('approval.decide')) principal.require('approval.request');
+  const canDecide = principal.has('approval.decide');
   const { rows } = await pgQuery(
     `SELECT ar.id AS __id, ar.request_type AS 유형, r.name AS 신청자, t.name AS 대상,
-            ar.status AS status, ar.created_at AS 신청일
+            ar.status AS status, ar.created_at AS 신청일, ar.payload, ar.decision_note, ar.decided_at
        FROM org.approval_requests ar
        LEFT JOIN auth.users r ON r.id = ar.requester_id
        LEFT JOIN auth.users t ON t.id = ar.target_user_id
-      WHERE ar.company_id = $1
-      ORDER BY ar.created_at DESC`,
-    [companyId],
+      WHERE ar.company_id = $1 AND ($2::boolean OR ar.requester_id = $3)
+      ORDER BY ar.created_at DESC, ar.id DESC`,
+    [companyId, canDecide, userId],
   );
-  res.json({ items: rows });
+  res.json({ items: rows, can_decide: canDecide, can_request: principal.has('approval.request') });
 }
 
 // GET /api/v1/pg/tasks — 업무 (project.tasks)
@@ -608,6 +612,18 @@ export async function deleteRecord(req, res) {
   const sql = Object.hasOwn(DELETABLE, resource) ? DELETABLE[resource] : null;
   if (!sql) throw new ApiError("VALIDATION_ERROR", "삭제할 수 없는 항목입니다");
   if (!/^\d+$/.test(String(id))) throw new ApiError("VALIDATION_ERROR", "잘못된 id");
+  if (Object.hasOwn(MONEY_TABLES, resource)) {
+    return res.json(await mutateFinancialRecord(req, resource, id, [], [id, companyId], true));
+  }
+  if (resource === 'approvals') {
+    await pgTransaction(async client => {
+      const { rows } = await client.query('SELECT status FROM org.approval_requests WHERE id=$1 AND company_id=$2 FOR UPDATE', [id, companyId]);
+      if (!rows[0]) throw new ApiError('NOT_FOUND', '대상을 찾을 수 없습니다');
+      if (rows[0].status !== 'pending') throw new ApiError('CONFLICT', '처리된 결재 기록은 보존해야 합니다');
+      await client.query(sql, [id, companyId]);
+    });
+    return res.json({ ok: true });
+  }
   const result = await pgQuery(sql, [id, companyId]);
   if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
   if (resource === "documents") documentSemantic.invalidate(pgDocumentSemanticScope(identity), String(id));
@@ -656,7 +672,7 @@ export async function getRecord(req, res) {
     : `t.${col} AS ${col}`,
   ).join(", ");
   const { rows } = await pgQuery(
-    `SELECT ${selects} FROM ${def.table} t WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")}`,
+    `SELECT ${selects}${Object.hasOwn(MONEY_TABLES, resource) ? ', t.version' : ''} FROM ${def.table} t WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")}`,
     [id, companyId],
   );
   if (!rows[0]) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
@@ -681,8 +697,7 @@ export async function updateRecord(req, res) {
     if (type === "taskStatus") {
       value = z.enum(["todo", "in_progress", "done", "blocked", "cancelled"]).parse(value);
     } else if (type === "num") {
-      value = value === "" || value === null ? null : Number(value);
-      if (value !== null && !Number.isFinite(value)) throw new ApiError("VALIDATION_ERROR", `${col} 숫자 오류`);
+      value = money(value);
     } else {
       value = value === "" ? null : value;
     }
@@ -690,6 +705,7 @@ export async function updateRecord(req, res) {
     sets.push(`${col} = $${params.length}`);
   }
   if (sets.length === 0) throw new ApiError("VALIDATION_ERROR", "변경할 내용이 없습니다");
+  if (Object.hasOwn(MONEY_TABLES, resource)) return res.json(await mutateFinancialRecord(req, resource, id, sets, params));
   if (resource === "documents") sets.push("version = t.version + 1");
   const result = await pgQuery(
     `UPDATE ${def.table} t SET ${sets.join(", ")} WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")}`,
@@ -1065,15 +1081,18 @@ export async function createAsset(req, res) {
   if (!name) throw new ApiError("VALIDATION_ERROR", "이름은 필수입니다");
   const category = String(body.category ?? "").trim() || null;
   const location = String(body.location ?? "").trim() || null;
-  const { rows } = await pgQuery(
-    `INSERT INTO asset.assets (company_id, name, category, location) VALUES ($1, $2, $3, $4) RETURNING id`,
-    [companyId, name, category, location],
-  );
-  await pgQuery(
-    `INSERT INTO asset.history (asset_id, event_type, actor_id, note) VALUES ($1, 'created', $2, '생성')`,
-    [rows[0].id, userId],
-  );
-  res.status(201).json({ id: String(rows[0].id) });
+  const result = await idempotentMutation(req, 'asset.create', { name, category, location }, async client => {
+    const { rows } = await client.query(
+      `INSERT INTO asset.assets (company_id, name, category, location) VALUES ($1, $2, $3, $4) RETURNING id`,
+      [companyId, name, category, location],
+    );
+    await client.query(
+      `INSERT INTO asset.history (asset_id, event_type, actor_id, note) VALUES ($1, 'created', $2, '생성')`,
+      [rows[0].id, userId],
+    );
+    return { id: String(rows[0].id) };
+  });
+  res.status(201).json(result);
 }
 
 // GET /api/v1/pg/assets/reservations
@@ -1098,7 +1117,7 @@ export async function budgets(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT b.id AS __id, b.name AS 이름, b.amount AS 편성액, b.spent AS 집행액, b.status AS status
+    `SELECT b.id AS __id, b.name AS 이름, b.amount AS 편성액, b.spent AS 집행액, b.status AS status, b.version AS __version
        FROM accounting.budgets b WHERE b.company_id = $1 ORDER BY b.id DESC`,
     [companyId],
   );
@@ -1111,14 +1130,16 @@ export async function createBudget(req, res) {
   if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 예산을 만들 수 있습니다");
   const body = req.body ?? {};
   const name = String(body.name ?? "").trim();
-  const amount = Number(body.amount);
+  const amount = money(body.amount);
   if (!name) throw new ApiError("VALIDATION_ERROR", "이름은 필수입니다");
-  if (!Number.isFinite(amount) || amount < 0) throw new ApiError("VALIDATION_ERROR", "편성액은 0 이상 숫자여야 합니다");
-  const { rows } = await pgQuery(
-    `INSERT INTO accounting.budgets (company_id, name, amount, status) VALUES ($1, $2, $3, 'active') RETURNING id`,
-    [companyId, name, amount],
-  );
-  res.status(201).json({ id: String(rows[0].id) });
+  const result = await idempotentMutation(req, 'budget.create', { name, amount }, async client => {
+    const { rows } = await client.query(
+      `INSERT INTO accounting.budgets (company_id, name, amount, status) VALUES ($1, $2, $3, 'active') RETURNING id`,
+      [companyId, name, amount],
+    );
+    return { id: String(rows[0].id), version: 1 };
+  });
+  res.status(201).json(result);
 }
 
 // ── 회비 ─────────────────────────────────────────────────────────
@@ -1127,9 +1148,12 @@ export async function dues(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT c.id AS __id, u.name AS 대상, c.amount AS 금액, c.due_date AS 기한, c.status AS status
+    `SELECT c.id AS __id, u.name AS 대상, c.amount AS 금액, c.due_date AS 기한, c.status AS status,
+            c.version, COALESCE(p.paid,0)::numeric(18,2)::text AS paid,
+            (c.amount-COALESCE(p.paid,0))::numeric(18,2)::text AS outstanding
        FROM accounting.dues_charges c
        LEFT JOIN auth.users u ON u.id = c.target_user_id
+       LEFT JOIN LATERAL (SELECT SUM(amount) AS paid FROM accounting.dues_payments WHERE charge_id=c.id) p ON true
       WHERE c.company_id = $1 ORDER BY c.id DESC`,
     [companyId],
   );
@@ -1142,16 +1166,21 @@ export async function createDuesCharge(req, res) {
   if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 회비를 청구할 수 있습니다");
   const body = req.body ?? {};
   const target = body.target_user_id;
-  const amount = Number(body.amount);
+  const amount = money(body.amount);
   const dueDate = body.due_date || null;
+  if (dueDate) z.string().date().parse(dueDate);
   if (!target) throw new ApiError("VALIDATION_ERROR", "대상자를 선택하세요");
-  if (!Number.isFinite(amount) || amount <= 0) throw new ApiError("VALIDATION_ERROR", "금액은 0보다 큰 숫자여야 합니다");
-  if (!await isCompanyMember(target, companyId)) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 대상자입니다");
-  const { rows } = await pgQuery(
-    `INSERT INTO accounting.dues_charges (company_id, target_user_id, amount, due_date) VALUES ($1, $2, $3, $4) RETURNING id`,
-    [companyId, target, amount, dueDate],
-  );
-  res.status(201).json({ id: String(rows[0].id) });
+  const result = await idempotentMutation(req, 'dues.create', { target_user_id: String(target), amount, due_date: dueDate }, async client => {
+    const member = await client.query(`SELECT m.user_id FROM org.company_memberships m JOIN auth.users u ON u.id=m.user_id
+      WHERE m.user_id=$1 AND m.company_id=$2 AND m.status='active' AND u.account_status='active' AND u.approval_status='approved' FOR SHARE OF m,u`, [target,companyId]);
+    if (!member.rows[0]) throw new ApiError('VALIDATION_ERROR', '유효하지 않은 대상자입니다');
+    const { rows } = await client.query(
+      `INSERT INTO accounting.dues_charges (company_id, target_user_id, amount, due_date) VALUES ($1, $2, $3, $4) RETURNING id`,
+      [companyId, target, amount, dueDate],
+    );
+    return { id: String(rows[0].id), version: 1 };
+  });
+  res.status(201).json(result);
 }
 
 // ── 정산 ─────────────────────────────────────────────────────────
@@ -1160,7 +1189,7 @@ export async function settlements(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT s.id AS __id, s.title AS 제목, u.name AS 신청자, s.amount AS 금액, s.status AS status, s.created_at AS 신청일
+    `SELECT s.id AS __id, s.title AS 제목, u.name AS 신청자, s.amount AS 금액, s.status AS status, s.created_at AS 신청일, s.version AS __version
        FROM accounting.settlements s
        LEFT JOIN auth.users u ON u.id = s.requester_id
       WHERE s.company_id = $1 ORDER BY s.id DESC`,
@@ -1175,14 +1204,16 @@ export async function createSettlement(req, res) {
   if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 정산을 신청할 수 있습니다");
   const body = req.body ?? {};
   const title = String(body.title ?? "").trim();
-  const amount = Number(body.amount);
+  const amount = money(body.amount);
   if (!title) throw new ApiError("VALIDATION_ERROR", "제목은 필수입니다");
-  if (!Number.isFinite(amount) || amount <= 0) throw new ApiError("VALIDATION_ERROR", "금액은 0보다 큰 숫자여야 합니다");
-  const { rows } = await pgQuery(
-    `INSERT INTO accounting.settlements (company_id, requester_id, title, amount) VALUES ($1, $2, $3, $4) RETURNING id`,
-    [companyId, userId, title, amount],
-  );
-  res.status(201).json({ id: String(rows[0].id) });
+  const result = await idempotentMutation(req, 'settlement.create', { title, amount }, async client => {
+    const { rows } = await client.query(
+      `INSERT INTO accounting.settlements (company_id, requester_id, title, amount) VALUES ($1, $2, $3, $4) RETURNING id`,
+      [companyId, userId, title, amount],
+    );
+    return { id: String(rows[0].id), version: 1 };
+  });
+  res.status(201).json(result);
 }
 
 // ── 알림 ─────────────────────────────────────────────────────────
