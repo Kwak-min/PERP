@@ -5,17 +5,19 @@ import { useSession } from '../store/session';
 import { isPgWorkspace } from '../services/workspace';
 import { ApiError, apiRequest, userMessageOf, type ApiSession } from '../services/api';
 import { ScreenPage } from '../pages/ScreenPage';
+import { downloadCsv, type TableData } from '../pages/screenTable';
 import { Button } from '../components/ui/Button';
 import { CreateFormModal } from '../components/common/CreateFormModal';
 import './daily-finance.css';
 
 const approvalSchema = z.object({
   items: z.array(z.object({ __id: z.coerce.string(), 유형: z.string(), 신청자: z.string().nullable(), 대상: z.string().nullable(),
-    status: z.string(), payload: z.object({ note: z.string().optional() }).passthrough(), decision_note: z.string().nullable() })),
+    status: z.string(), 신청일: z.string(), payload: z.object({ note: z.string().optional() }).passthrough(),
+    decision_note: z.string().nullable(), decided_at: z.string().nullable() }).passthrough()),
   can_decide: z.boolean(), can_request: z.boolean(),
 });
 const duesSchema = z.object({ items: z.array(z.object({ __id: z.coerce.string(), 대상: z.string().nullable(), 금액: z.string(),
-  기한: z.string().nullable(), status: z.string(), version: z.number(), paid: z.string(), outstanding: z.string() })) });
+  기한: z.string().nullable(), status: z.string(), version: z.number(), paid: z.string(), outstanding: z.string() }).passthrough()) });
 const historySchema = z.object({ id: z.string(), status: z.string(), version: z.number(), outstanding: z.string(),
   items: z.array(z.object({ id: z.string(), amount: z.string(), paid_on: z.string(), method: z.string().nullable() })) });
 const accessSchema = z.object({ permissions: z.array(z.string()) });
@@ -54,6 +56,16 @@ function FinanceWorkspace({ session, screen }: Readonly<{ session: ApiSession; s
   const duesRows = state?.dues?.items.filter(row => (!status || row.status === status) && (row.대상 ?? '').toLocaleLowerCase().includes(query.toLocaleLowerCase())) ?? [];
   const canWrite = state?.permissions.includes('dues.write') ?? false;
   const canCreate = approvals ? state?.approvals?.can_request : canWrite;
+  // 화면과 동일한 필터 결과 전체를 사용한다. 금액 문자열과 원본 행 메타데이터를 유지한다.
+  const exportTable: TableData = approvals ? {
+    columns: ['ID','유형','신청자','대상','상태','신청일','신청 내용','처리 의견','처리일'],
+    rows: approvalRows.map(row => ({ id: row.__id, values: row,
+      cells: [row.__id, row.유형, row.신청자 ?? '', row.대상 ?? '', row.status, row.신청일, JSON.stringify(row.payload), row.decision_note ?? '', row.decided_at ?? ''] })),
+  } : {
+    columns: ['ID','대상','청구액','납부액','잔액','기한','상태'],
+    rows: duesRows.map(row => ({ id: row.__id, values: row,
+      cells: [row.__id, row.대상 ?? '', row.금액, row.paid, row.outstanding, row.기한 ?? '', row.status] })),
+  };
   async function editCharge(id: string) {
     setMutating(true); setError(null);
     try {
@@ -72,7 +84,7 @@ function FinanceWorkspace({ session, screen }: Readonly<{ session: ApiSession; s
   }
   return <div className="screen daily-finance" data-screen-id={screen.id}>
     <header className="screen-header"><div><h1>{screen.label}</h1><p>{approvals ? '내 신청과 처리 권한이 있는 결재를 확인합니다.' : '납부 기록을 등록합니다. 실제 송금은 실행하지 않습니다.'}</p></div>
-      <div className="daily-finance__actions"><Button tone="neutral" onClick={refresh}>새로고침</Button>{canCreate && screen.create && <Button onClick={() => setCreate(true)}>{screen.label} 만들기</Button>}</div></header>
+      <div className="daily-finance__actions"><Button tone="neutral" disabled={!state} onClick={() => downloadCsv(screen.label, exportTable)}>필터 결과 전체 내보내기</Button><Button tone="neutral" onClick={refresh}>새로고침</Button>{canCreate && screen.create && <Button onClick={() => setCreate(true)}>{screen.label} 만들기</Button>}</div></header>
     <div className="daily-finance__filters"><label>검색<input type="search" value={query} onChange={e => setQuery(e.target.value)} /></label>
       <label>상태<select value={status} onChange={e => setStatus(e.target.value)}><option value="">전체</option>{(approvals ? ['pending','approved','rejected'] : ['unpaid','partial','paid','waived','overdue']).map(key => <option key={key} value={key}>{statusLabel[key]}</option>)}</select></label></div>
     {error && <p role="alert">{error}</p>}

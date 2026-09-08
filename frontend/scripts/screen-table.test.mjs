@@ -52,3 +52,9 @@ test('legacy IDs stay attached and CSV escapes commas, quotes and line breaks', 
   assert.equal(table.rows[0].id, 'legacy-a');
   assert.equal(toCsv(table), 'id,name,status\nlegacy-a,"a,""b""\nc",active');
 });
+
+test('CSV neutralizes spreadsheet formulas before quoting without rounding decimal strings', () => {
+  const values = ['=1+1', '+SUM(A1)', '-1+2', '@SUM(A1)', ' \t=1', '\tplain', '\rplain', '\nplain', '9999999999999999.99'];
+  const csv = toCsv({ columns: ['=header'], rows: values.map(value => ({ id: null, values: {}, cells: [value] })) });
+  assert.equal(csv, "'=header\n'=1+1\n'+SUM(A1)\n'-1+2\n'@SUM(A1)\n' \t=1\n'\tplain\n\"'\rplain\"\n\"'\nplain\"\n9999999999999999.99");
+});

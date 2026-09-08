@@ -69,6 +69,20 @@ export function paginateTable(table: TableData, requestedPage: number) {
 }
 
 export function toCsv(table: TableData): string {
-  const escape = (cell: string) => (/[",\r\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell);
+  const escape = (cell: string) => {
+    // 인용만으로는 수식 실행을 막지 못하므로 스프레드시트 제어 접두사를 먼저 중립화한다.
+    const safe = /^(?:\s*[=+@-]|[\t\r\n])/.test(cell) ? `'${cell}` : cell;
+    return /[",\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
+  };
   return [table.columns.map(escape).join(","), ...table.rows.map((row) => row.cells.map(escape).join(","))].join("\n");
+}
+
+export function downloadCsv(name: string, table: TableData): void {
+  const blob = new Blob(["\uFEFF" + toCsv(table)], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${name}.csv`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }

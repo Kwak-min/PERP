@@ -13,7 +13,7 @@ import { StatCard, type Stat } from "../components/ui/StatCard";
 import { StatTrendModal, metricKeyOf, type MetricKey } from "../components/data/StatTrendModal";
 import { MemberListModal, membersSchema, type Member } from "../components/data/MemberListModal";
 import { allFilter, screenFilters } from "./screenFilters";
-import { filterTable, liveTable, paginateTable, toCsv, type TableData, type TableRow } from "./screenTable";
+import { downloadCsv, filterTable, liveTable, paginateTable, type TableData, type TableRow } from "./screenTable";
 import { apiRequest, userMessageOf } from "../services/api";
 import { isPgWorkspace, workspaceEndpoint } from "../services/workspace";
 import { useDepartments } from "../hooks/useDepartments";
@@ -305,16 +305,6 @@ function DetailAction({
       자세히
     </Button>
   );
-}
-
-function downloadCsv(name: string, table: TableData): void {
-  const blob = new Blob(["\uFEFF" + toCsv(table)], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `${name}.csv`;
-  anchor.click();
-  URL.revokeObjectURL(url);
 }
 
 export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
