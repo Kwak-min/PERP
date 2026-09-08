@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { chromium, expect } from '@playwright/test';
 import { preview } from 'vite';
 import { api, startTestServer } from '../../backend/tests/http.js';
@@ -13,6 +13,7 @@ const root=fileURLToPath(new URL('../',import.meta.url));
 const artifacts=fileURLToPath(new URL('../.artifacts/daily-finance/',import.meta.url));
 await mkdir(artifacts,{recursive:true});
 const server=await startTestServer(); let fixture, vite, browser;
+const contexts=[];
 try {
   fixture=await installFinanceFixture();
   const request=(route,method='GET',body,actor=fixture.actor())=>api(server.baseUrl,'/pg'+route,{...actor,method,body,headers:{'Idempotency-Key':randomUUID()}});
@@ -22,10 +23,11 @@ try {
   vite=await preview({configFile:false,root,preview:{host:'127.0.0.1',port:0,proxy:{'/api':new URL(server.baseUrl).origin}}});
   const origin='http://127.0.0.1:'+vite.httpServer.address().port;
   browser=await chromium.launch({channel:'chrome'}); console.log('CHROME '+browser.version()+'; production registry; PGlite, not native PG');
-  const contexts=[]; const errors=[];
+  const errors=[];
   async function pageFor(actor) {
     const context=await browser.newContext({viewport:{width:1280,height:900}}); contexts.push(context);
-    await context.route('**/*',route=>new URL(route.request().url()).hostname==='127.0.0.1'?route.continue():route.abort());
+    // 로컬 요청은 가로채지 않는다. 응답 유실 경로는 페이지 핸들러만 소유한다.
+    await context.route(url=>url.hostname!=='127.0.0.1',route=>route.abort());
     await context.addInitScript(stored=>localStorage.setItem('orbitflow.session.v1',JSON.stringify(stored)),{...actor,name:'Finance QA',email:'qa@example.invalid',mustChangePassword:false,organizations:[{org_id:actor.orgId,org_name:'Finance fixture',org_type:'perp_db',roles:[]}]});
     const page=await context.newPage(); page.setDefaultTimeout(10000); page.on('pageerror',e=>errors.push(e.message)); return page;
   }
@@ -95,7 +97,7 @@ try {
   await modal.getByLabel('일자').fill('2026-09-08'); await modal.getByLabel('내용').fill('Lost response browser');
   const attempts=[]; let committed, loseResponse=true;
   await admin.route('**/api/v1/pg/finance/transactions',async route=>{
-    if(route.request().method()!=='POST') return route.continue();
+    if(route.request().method()!=='POST') return route.fallback();
     attempts.push({key:route.request().headers()['idempotency-key'],body:route.request().postDataJSON()});
     if(!loseResponse) return route.continue();
     loseResponse=false; const result=await route.fetch(); assert.equal(result.status(),201); committed=await result.json(); await route.abort('failed');
@@ -105,8 +107,10 @@ try {
   saved=admin.waitForResponse(r=>r.url().endsWith('/pg/finance/transactions')&&r.request().method()==='POST');
   await modal.locator('button[type="submit"]').click(); response=await saved;
   assert.equal(response.status(),201); assert.equal((await response.json()).id,committed.id); assert.equal(attempts.length,2); assert.ok(attempts[0].key); assert.deepEqual(attempts[0],attempts[1]);
-  await admin.unroute('**/api/v1/pg/finance/transactions');
-  assert.equal((await fixture.db.query("SELECT count(*) AS n FROM accounting.journal_entries WHERE memo='Lost response browser'")).rows[0].n,1);
+  await admin.unrouteAll({behavior:'wait'});
+  const storedJournals=(await fixture.db.query("SELECT count(*) AS n FROM accounting.journal_entries WHERE memo='Lost response browser'")).rows[0].n;
+  assert.equal(storedJournals,1);
+  await writeFile(artifacts+'lost-response.json',JSON.stringify({attempts,committed,replayedStatus:response.status(),storedJournals},null,2));
   const journal=admin.locator('tbody tr').filter({hasText:'Lost response browser'}); await expect(journal).toHaveCount(1);
   saved=admin.waitForResponse(r=>r.url().endsWith(`/records/transactions/${committed.id}`)&&r.request().method()==='DELETE');
   admin.once('dialog',dialog=>dialog.accept()); await journal.getByRole('button',{name:'삭제',exact:true}).click(); response=await saved;
@@ -142,5 +146,14 @@ try {
   await admin.goto(origin+'/finance'); await expect(admin.getByText(summary.body.수입,{exact:true}).first()).toBeVisible();
   await admin.screenshot({path:artifacts+'precise-summary.png',fullPage:true});
   assert.deepEqual(errors,[]); console.log('PASS requester ownership; approval once/reload; partial/remainder/replay/history/reload; dues create/edit/delete; lost-response stable creation key; posted delete409; generic stale edit/delete409 and refresh; audit retention; exact summary; mobile; no JS errors');
-  for(const context of contexts) await context.close();
-} finally { await browser?.close(); await vite?.close(); await fixture?.close(); await server.close(); }
+} finally {
+  for(const context of contexts) {
+    for(const page of context.pages()) await page.unrouteAll({behavior:'wait'});
+    await context.unrouteAll({behavior:'wait'});
+    await context.close();
+  }
+  await browser?.close();
+  if(vite) await new Promise((resolve,reject)=>vite.httpServer.close(error=>error?reject(error):resolve()));
+  await fixture?.close(); await server.close();
+  console.log('DAILY_FINANCE_OWNED_SERVICES_AND_DATA_CLEANED');
+}
