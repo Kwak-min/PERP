@@ -10,7 +10,9 @@ import { pgRoute, pgRecordRoute } from "../middleware/pgAccess.js";
 import { asyncRoute } from "../middleware/error.js";
 import { withPgFeature } from "../middleware/features.js";
 import { pgAgentKeyRouter } from "./pg-agent-key.routes.js";
-import { decidePgApproval } from '../controllers/pgApprovalDecision.controller.js';
+import { decidePgApproval as decideLegacyPgApproval } from '../controllers/pgApprovalDecision.controller.js';
+import { createPgDraft, patchPgDraft, submitPgDraft, getPgApproval, pgApprovalHistory, decidePgApproval,
+  withdrawPgApproval, resubmitPgApproval, listPgForms, savePgForm } from '../controllers/pgApprovals.controller.js';
 import { duesPaymentHistory, recordDuesPayment } from '../controllers/pgDuesPayments.controller.js';
 
 // perp_db (PostgreSQL) 슬라이스 라우터. strangler-fig: 기존 SQLite 라우트와 분리.
@@ -74,9 +76,19 @@ pgRouter.get("/tasks", asyncRoute(pgRoute(mod.tasks, "task.read", "tasks")));
 pgRouter.post("/tasks", asyncRoute(pgRoute(projectMembers.createPgProjectTask, "task.write", "tasks")));
 pgRouter.get('/projects/:id/members', asyncRoute(pgRoute(projectMembers.listPgProjectMembers, 'project.read', 'projects')));
 pgRouter.post('/projects/:id/members', asyncRoute(pgRoute(projectMembers.addPgProjectMember, 'project.write', 'projects')));
-pgRouter.get("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.approvals))));
-pgRouter.post("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.createApproval), "approval.request", null)));
-pgRouter.post('/approvals/:id/decide', asyncRoute(pgRoute(withPgFeature('approvals', decidePgApproval), 'approval.decide', null)));
+pgRouter.get('/approvals/forms', asyncRoute(pgRoute(withPgFeature('approvals', listPgForms))));
+pgRouter.post('/approvals/forms', asyncRoute(pgRoute(withPgFeature('approvals', savePgForm))));
+pgRouter.post('/approvals/drafts', asyncRoute(pgRoute(withPgFeature('approvals', createPgDraft))));
+pgRouter.get('/approvals', asyncRoute(pgRoute(withPgFeature('approvals', mod.approvals))));
+pgRouter.post('/approvals', asyncRoute(pgRoute(withPgFeature('approvals', mod.createApproval), 'approval.request', null)));
+pgRouter.patch('/approvals/:id/draft', asyncRoute(pgRoute(withPgFeature('approvals', patchPgDraft))));
+pgRouter.post('/approvals/:id/submit', asyncRoute(pgRoute(withPgFeature('approvals', submitPgDraft))));
+pgRouter.get('/approvals/:id/history', asyncRoute(pgRoute(withPgFeature('approvals', pgApprovalHistory))));
+pgRouter.post('/approvals/:id/resubmit', asyncRoute(pgRoute(withPgFeature('approvals', resubmitPgApproval))));
+pgRouter.post('/approvals/:id/withdraw', asyncRoute(pgRoute(withPgFeature('approvals', withdrawPgApproval))));
+pgRouter.post('/approvals/:id/actions', asyncRoute(pgRoute(withPgFeature('approvals', decidePgApproval))));
+pgRouter.post('/approvals/:id/decide', asyncRoute(pgRoute(withPgFeature('approvals', decideLegacyPgApproval), 'approval.decide', null)));
+pgRouter.get('/approvals/:id', asyncRoute(pgRoute(withPgFeature('approvals', getPgApproval))));
 pgRouter.get("/documents/graph", asyncRoute(pgRoute(mod.pgDocumentsGraph, "document.read", "documents")));
 pgRouter.post("/documents/upload", asyncRoute(pgRoute(mod.pgUploadDocument, "document.write", "documents")));
 pgRouter.get("/documents/:id/analysis", asyncRoute(pgRoute(mod.pgDocumentAnalysis, "document.read", "documents")));
