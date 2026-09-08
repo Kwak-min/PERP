@@ -50,7 +50,7 @@ async function rsvFetch<T>(
   const res = await fetch(`${RESERVATION_API_BASE}${path}`, {
     ...options,
     headers,
-    signal: options.signal ?? AbortSignal.timeout(10_000),
+    signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
   });
 
   if (res.status === 204 || res.status === 205) return null as T;
@@ -79,14 +79,14 @@ export interface SpaceFilter {
   endTime?: string;
 }
 
-export function getSpaces(filter: SpaceFilter = {}) {
+export function getSpaces(filter: SpaceFilter = {}, signal?: AbortSignal) {
   const params = new URLSearchParams();
   if (filter.minCapacity != null)
     params.set("minCapacity", String(filter.minCapacity));
   if (filter.startTime) params.set("startTime", filter.startTime);
   if (filter.endTime) params.set("endTime", filter.endTime);
   const qs = params.toString();
-  return rsvFetch<unknown[]>(`/api/v1/spaces${qs ? `?${qs}` : ""}`);
+  return rsvFetch<unknown[]>(`/api/v1/spaces${qs ? `?${qs}` : ""}`, { signal: signal ?? null });
 }
 
 export function getSpaceById(id: number) {
@@ -125,15 +125,17 @@ export interface ReservationFilter {
   spaceId?: number;
   from?: string;
   to?: string;
+  status?: "CONFIRMED" | "CANCELLED" | "ALL";
 }
 
-export function getReservations(filter: ReservationFilter = {}) {
+export function getReservations(filter: ReservationFilter = {}, signal?: AbortSignal) {
   const params = new URLSearchParams();
   if (filter.spaceId != null) params.set("spaceId", String(filter.spaceId));
   if (filter.from) params.set("from", filter.from);
   if (filter.to) params.set("to", filter.to);
+  if (filter.status) params.set("status", filter.status);
   const qs = params.toString();
-  return rsvFetch<unknown[]>(`/api/v1/reservations${qs ? `?${qs}` : ""}`);
+  return rsvFetch<unknown[]>(`/api/v1/reservations${qs ? `?${qs}` : ""}`, { signal: signal ?? null });
 }
 
 export function getMyReservations() {
@@ -144,13 +146,13 @@ export function getReservationById(id: number) {
   return rsvFetch<unknown>(`/api/v1/reservations/${id}`);
 }
 
-export function getTimetable(spaceId: number, date: string, slotMinutes = 60) {
+export function getTimetable(spaceId: number, date: string, slotMinutes = 60, signal?: AbortSignal) {
   const params = new URLSearchParams({
     spaceId: String(spaceId),
     date,
     slotMinutes: String(slotMinutes),
   });
-  return rsvFetch<unknown>(`/api/v1/reservations/timetable?${params}`);
+  return rsvFetch<unknown>(`/api/v1/reservations/timetable?${params}`, { signal: signal ?? null });
 }
 
 export function createReservation(dto: CreateReservationInput) {

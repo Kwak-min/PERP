@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
@@ -16,15 +16,15 @@ import {
   deleteSpace,
   getMyReservations,
   getMyWaitlist,
-  getSpaceById,
   getSpaces,
-  getTimetable,
   updateReservation,
   updateSpace,
   type SpaceFilter,
 } from "../services/reservationApi";
 import { AttendeePanel } from "./reservation/AttendeePanel";
 import { CancelScopeModal } from "./reservation/CancelScopeModal";
+import { SpaceMonthCalendar } from "./reservation/SpaceMonthCalendar";
+import { seoulDay, type FreeInterval } from "./reservation/occupancy";
 
 import {
   formatDate,
@@ -34,14 +34,12 @@ import {
   reservationSchema,
   spaceSchema,
   STATUS_LABEL,
-  timetableSlotSchema,
   waitlistSchema,
   type CancelScope,
   type CreateReservationInput,
   type Reservation,
   type ReservationStatus,
   type Space,
-  type TimetableSlot,
   type UpdateReservationInput,
   type Waitlist,
 } from "./reservation/model";
@@ -53,7 +51,7 @@ import "./reservation.css";
 type MainTab = "spaces" | "my" | "waitlist" | "admin";
 
 type TimetableModalState =
-  | { type: "create"; slot: TimetableSlot }
+  | { type: "create"; slot: FreeInterval }
   | { type: "detail"; reservation: Reservation }
   | { type: "edit"; reservation: Reservation }
   | { type: "cancel"; reservation: Reservation };
@@ -80,26 +78,23 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = searchParams.get("tab");
   const activeTab: MainTab = tab === "admin" || tab === "my" || tab === "waitlist" ? tab : "spaces";
-  const setActiveTab = (next: MainTab) => setSearchParams({ tab: next });
+  const setActiveTab = (next: MainTab) => { setTimetableModal(null); setSearchParams({ tab: next }); };
 
   // ── Tab 1: 공간 검색 & 예약 상태 ──────────────────────────────────────
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [spacesLoading, setSpacesLoading] = useState(true);
   const [spacesError, setSpacesError] = useState<string | null>(null);
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = seoulDay();
   const [filterDate, setFilterDate] = useState(todayStr);
-  const [startHour, setStartHour] = useState("09");
-  const [endHour, setEndHour] = useState("10");
   const [minCapacity, setMinCapacity] = useState("");
 
   // 선택된 공간 타임테이블 뷰
   const [selectedSpaceId, setSelectedSpaceId] = useState<number | null>(null);
   const [selectedSpace, setSelectedSpace] = useState<Space | null>(null);
-  const [timetableDate, setTimetableDate] = useState(todayStr);
-  const [slotMinutes, setSlotMinutes] = useState<number>(60);
-  const [slots, setSlots] = useState<TimetableSlot[]>([]);
-  const [timetableLoading, setTimetableLoading] = useState(false);
+  const [timetableDate, setTimetableDate] = useState("");
+  const [calendarRevision, setCalendarRevision] = useState(0);
+  const spacesRequest = useRef<AbortController | null>(null);
   const [timetableModal, setTimetableModal] = useState<TimetableModalState | null>(null);
   const [timetableBusy, setTimetableBusy] = useState(false);
 
@@ -128,44 +123,25 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
 
   // ── 공간 목록 불러오기 ─────────────────────────────────────────────────
   const loadSpaces = useCallback(async () => {
+    spacesRequest.current?.abort();
+    const controller = new AbortController();
+    spacesRequest.current = controller;
     try {
       setSpacesLoading(true);
       setSpacesError(null);
       const filter: SpaceFilter = {};
       if (minCapacity) filter.minCapacity = Number(minCapacity);
-      if (filterDate && startHour && endHour) {
-        filter.startTime = `${filterDate}T${startHour}:00:00`;
-        filter.endTime = `${filterDate}T${endHour}:00:00`;
-      }
-      const raw = await getSpaces(filter);
-      const parsed = (Array.isArray(raw) ? raw : []).map((item) => spaceSchema.parse(item));
-      setSpaces(parsed.filter((s) => s.isActive));
+      const raw = await getSpaces(filter, controller.signal);
+      const parsed = raw.map((item) => spaceSchema.parse(item));
+      if (!controller.signal.aborted) setSpaces(parsed.filter((s) => s.isActive));
     } catch (e: unknown) {
-      setSpacesError(e instanceof Error ? e.message : "공간 목록을 불러오지 못했습니다.");
+      if (!controller.signal.aborted) setSpacesError(e instanceof Error ? e.message : "공간 목록을 불러오지 못했습니다.");
     } finally {
-      setSpacesLoading(false);
+      if (!controller.signal.aborted) setSpacesLoading(false);
     }
-  }, [filterDate, startHour, endHour, minCapacity]);
+  }, [minCapacity]);
 
-  // ── 선택된 공간 타임테이블 불러오기 ────────────────────────────────────
-  const loadTimetable = useCallback(async (spaceId: number, date: string, minutes: number = 60) => {
-    try {
-      setTimetableLoading(true);
-      setSpacesError(null);
-      const [spaceRaw, timetableRaw] = await Promise.all([
-        getSpaceById(spaceId),
-        getTimetable(spaceId, date, minutes),
-      ]);
-      setSelectedSpace(spaceSchema.parse(spaceRaw));
-      const timetable = timetableRaw as { slots?: unknown[] };
-      const parsed = (timetable?.slots ?? []).map((s) => timetableSlotSchema.parse(s));
-      setSlots(parsed);
-    } catch (e: unknown) {
-      setSpacesError(e instanceof Error ? e.message : "타임테이블을 불러오지 못했습니다.");
-    } finally {
-      setTimetableLoading(false);
-    }
-  }, []);
+  useEffect(() => () => spacesRequest.current?.abort(), []);
 
   // ── 내 예약 목록 불러오기 ──────────────────────────────────────────────
   const loadMyReservations = useCallback(async () => {
@@ -225,34 +201,25 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
     }
   }, [activeTab, selectedSpaceId, loadSpaces, loadMyReservations, loadWaitlist, loadAdminSpaces, isAdmin]);
 
-  // 타임테이블 날짜/슬롯단위 변경 시 로드
-  useEffect(() => {
-    if (selectedSpaceId !== null) {
-      void loadTimetable(selectedSpaceId, timetableDate, slotMinutes);
-    }
-  }, [selectedSpaceId, timetableDate, slotMinutes, loadTimetable]);
-
-  const hours = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0"));
-
-  const shiftTimetableDate = (days: number) => {
-    const d = new Date(timetableDate);
-    d.setDate(d.getDate() + days);
-    setTimetableDate(d.toISOString().slice(0, 10));
+  const selectSpace = (space: Space | null) => {
+    spacesRequest.current?.abort();
+    setSelectedSpace(space);
+    setSelectedSpaceId(space?.id ?? null);
+    setTimetableDate("");
+    setTimetableModal(null);
+    setSpacesError(null);
   };
+  const selectDay = (day: string) => { setTimetableDate(day); setTimetableModal(null); };
 
   // ── 예약 핸들러들 ─────────────────────────────────────────────────────
   const handleCreateReservation = async (dto: CreateReservationInput | UpdateReservationInput) => {
     await createReservation(dto as CreateReservationInput);
-    if (selectedSpaceId !== null) {
-      await loadTimetable(selectedSpaceId, timetableDate, slotMinutes);
-    }
+    setCalendarRevision(value => value + 1);
   };
 
   const handleUpdateReservation = async (id: number, dto: CreateReservationInput | UpdateReservationInput) => {
     await updateReservation(id, dto as UpdateReservationInput);
-    if (selectedSpaceId !== null) {
-      await loadTimetable(selectedSpaceId, timetableDate, slotMinutes);
-    }
+    setCalendarRevision(value => value + 1);
   };
 
   const handleCancelReservation = async (r: Reservation, scope: CancelScope) => {
@@ -260,9 +227,7 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
       setTimetableBusy(true);
       await cancelReservation(r.id, scope);
       setTimetableModal(null);
-      if (selectedSpaceId !== null) {
-        await loadTimetable(selectedSpaceId, timetableDate, slotMinutes);
-      }
+      setCalendarRevision(value => value + 1);
     } catch (e: unknown) {
       setSpacesError(e instanceof Error ? e.message : "취소에 실패했습니다.");
     } finally {
@@ -296,7 +261,7 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
     }
   };
 
-  const handleAddWaitlistFromSlot = async (slot: TimetableSlot) => {
+  const handleAddWaitlistFromSlot = async (slot: FreeInterval) => {
     if (!selectedSpaceId) return;
     if (!confirm(`${formatTime(slot.startTime)} ~ ${formatTime(slot.endTime)} 대기 예약을 신청하시겠습니까?`)) return;
     try {
@@ -368,7 +333,7 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
     myDetailId != null ? myReservations.find((r) => r.id === myDetailId) : null;
 
   return (
-    <div style={{ padding: "1.5rem" }}>
+    <div className="rsv-screen">
       {/* ── 메인 헤더 ──────────────────────────────────────────────────────── */}
       <div style={{ marginBottom: "1.25rem" }}>
         <h1 style={{ fontSize: "1.5rem", fontWeight: 700, marginBottom: "0.25rem", color: "var(--of-text, #0f172a)" }}>
@@ -385,7 +350,7 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
           className={`rsv-tab ${activeTab === "spaces" ? "active" : ""}`}
           onClick={() => {
             setActiveTab("spaces");
-            setSelectedSpaceId(null);
+            selectSpace(null);
           }}
         >
           공간 예약
@@ -423,19 +388,7 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
               <div className="rsv-filter-bar">
                 <label>
                   날짜
-                  <input type="date" value={filterDate} onChange={(e) => setFilterDate(e.target.value)} />
-                </label>
-                <label>
-                  시작 시간
-                  <select value={startHour} onChange={(e) => setStartHour(e.target.value)}>
-                    {hours.map((h) => <option key={h} value={h}>{h}:00</option>)}
-                  </select>
-                </label>
-                <label>
-                  종료 시간
-                  <select value={endHour} onChange={(e) => setEndHour(e.target.value)}>
-                    {hours.map((h) => <option key={h} value={h}>{h}:00</option>)}
-                  </select>
+                  <input type="date" value={filterDate} onChange={(e) => { if (e.target.value) setFilterDate(e.target.value); }} />
                 </label>
                 <label>
                   최소 수용인원
@@ -455,13 +408,14 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
 
               {spacesError && <div className="rsv-error-banner">{spacesError}</div>}
 
-              <SectionCard title={`이용 가능한 공간 (${spaces.length}개)`}>
+              <SectionCard title={`공간 목록 (${spaces.length}개)`}>
                 {spacesLoading ? (
                   <div className="rsv-empty"><div className="rsv-empty-text">불러오는 중...</div></div>
                 ) : spaces.length === 0 ? (
                   <div className="rsv-empty">
                     <div className="rsv-empty-icon">🏢</div>
-                    <div className="rsv-empty-text">조건에 맞는 공간이 없습니다.</div>
+                    <div className="rsv-empty-text">조건에 맞는 공간이 없습니다. 공간 관리자에게 등록을 요청하세요.</div>
+                    {isAdmin && <Link to="/reserve?tab=admin">공간 관리에서 등록</Link>}
                   </div>
                 ) : (
                   <div className="rsv-space-grid">
@@ -469,16 +423,13 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
                       <div
                         key={space.id}
                         className="rsv-space-card"
-                        onClick={() => {
-                          setSelectedSpaceId(space.id);
-                          setTimetableDate(filterDate);
-                        }}
+                        onClick={() => selectSpace(space)}
                         role="button"
                         tabIndex={0}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            setSelectedSpaceId(space.id);
-                            setTimetableDate(filterDate);
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            selectSpace(space);
                           }
                         }}
                       >
@@ -505,10 +456,10 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
           ) : (
             /* 선택한 공간의 상세 타임테이블 뷰 */
             <>
-              <div style={{ marginBottom: "1rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>
+              <div className="rsv-selected-space-header">
                 <button
                   className="btn btn-ghost"
-                  onClick={() => setSelectedSpaceId(null)}
+                  onClick={() => selectSpace(null)}
                   style={{ fontSize: "0.85rem", fontWeight: 600 }}
                 >
                   ← 공간 목록으로 돌아가기
@@ -525,100 +476,18 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
                 </div>
               </div>
 
-              <div className="rsv-timetable-header">
-                <div className="rsv-date-nav">
-                  <button onClick={() => shiftTimetableDate(-1)}>‹</button>
-                  <span className="rsv-date-display">{formatDate(timetableDate + "T00:00:00")}</span>
-                  <button onClick={() => shiftTimetableDate(1)}>›</button>
-                </div>
-                <input
-                  type="date"
-                  value={timetableDate}
-                  onChange={(e) => setTimetableDate(e.target.value)}
-                  style={{
-                    padding: "0.35rem 0.65rem",
-                    border: "1px solid var(--of-border-strong, #cbd5e1)",
-                    borderRadius: "6px",
-                    background: "var(--of-bg, #ffffff)",
-                    color: "var(--of-text, #0f172a)",
-                    fontSize: "0.875rem",
-                  }}
-                />
-
-                {/* 슬롯 단위 (15분 / 30분 / 60분) 선택기 */}
-                <div style={{ display: "flex", alignItems: "center", gap: "0.25rem", marginLeft: "0.5rem" }}>
-                  <span style={{ fontSize: "0.75rem", color: "var(--of-text-muted, #475569)", fontWeight: 600, marginRight: "0.15rem" }}>
-                    단위:
-                  </span>
-                  {[15, 30, 60].map((mins) => (
-                    <button
-                      key={mins}
-                      type="button"
-                      className={`btn ${slotMinutes === mins ? "btn-primary" : "btn-ghost"}`}
-                      style={{ fontSize: "0.75rem", padding: "0.2rem 0.55rem", minHeight: "26px" }}
-                      onClick={() => setSlotMinutes(mins)}
-                    >
-                      {mins}분
-                    </button>
-                  ))}
-                </div>
-
-                <div style={{ display: "flex", gap: "0.5rem", fontSize: "0.75rem", marginLeft: "auto" }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
-                    <span style={{ width: 12, height: 12, borderRadius: 3, background: "var(--of-primary-soft, #eef2ff)", border: "1px solid #c7d2fe", display: "inline-block" }} /> 예약 가능
-                  </span>
-                  <span style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
-                    <span style={{ width: 12, height: 12, borderRadius: 3, background: "#cbd5e1", border: "1px solid var(--of-primary, #4f46e5)", display: "inline-block" }} /> 내 예약
-                  </span>
-                  <span style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}>
-                    <span style={{ width: 12, height: 12, borderRadius: 3, background: "var(--of-surface-muted, #f1f5f9)", border: "1px solid var(--of-border, #e2e8f0)", display: "inline-block" }} /> 예약됨 (대기신청 가능)
-                  </span>
-                </div>
-              </div>
-
-              {spacesError && <div className="rsv-error-banner">{spacesError}</div>}
-
-              <SectionCard title="시간대별 예약 현황">
-                {timetableLoading ? (
-                  <div className="rsv-empty"><div className="rsv-empty-text">불러오는 중...</div></div>
-                ) : slots.length === 0 ? (
-                  <div className="rsv-empty">
-                    <div className="rsv-empty-icon">📅</div>
-                    <div className="rsv-empty-text">타임테이블 정보가 없습니다.</div>
-                  </div>
-                ) : (
-                  <div className="rsv-timetable">
-                    {slots.map((slot) => {
-                      const isMine = slot.isMine;
-                      const taken = !slot.available && !isMine;
-                      return (
-                        <div key={slot.startTime} className="rsv-slot">
-                          <span className="rsv-slot-time">{formatTime(slot.startTime)}</span>
-                          <div
-                            className={`rsv-slot-block ${slot.available ? "available" : isMine ? "mine" : "taken"}`}
-                            onClick={() => {
-                              if (slot.available) {
-                                setTimetableModal({ type: "create", slot });
-                              } else if (isMine && slot.reservation) {
-                                setTimetableModal({ type: "detail", reservation: reservationSchema.parse(slot.reservation) });
-                              } else if (taken) {
-                                void handleAddWaitlistFromSlot(slot);
-                              }
-                            }}
-                            title={taken ? `${slot.reservation?.title ?? "예약됨"} (클릭하여 대기 신청)` : undefined}
-                          >
-                            {slot.available
-                              ? "+ 예약하기"
-                              : isMine
-                                ? `📌 ${slot.reservation?.title}`
-                                : `🔒 ${slot.reservation?.title ?? "예약됨"} (대기 신청)`}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </SectionCard>
+              {spacesError && <div className="rsv-error-banner" role="alert">{spacesError}</div>}
+              {selectedSpace && <SpaceMonthCalendar
+                key={selectedSpace.id}
+                space={selectedSpace}
+                initialMonth={filterDate.slice(0, 7)}
+                day={timetableDate}
+                revision={calendarRevision}
+                onSelectDay={selectDay}
+                onSelectFree={slot => setTimetableModal({ type: "create", slot })}
+                onSelectReservation={reservation => setTimetableModal({ type: "detail", reservation })}
+                onSelectBusy={slot => void handleAddWaitlistFromSlot(slot)}
+              />}
             </>
           )}
         </>
@@ -742,7 +611,7 @@ function ReservationWorkspace({ screen }: Readonly<{ screen: ScreenDefinition }>
                   style={{ marginTop: "1rem" }}
                   onClick={() => {
                     setActiveTab("spaces");
-                    setSelectedSpaceId(null);
+                    selectSpace(null);
                   }}
                 >
                   공간 둘러보기
