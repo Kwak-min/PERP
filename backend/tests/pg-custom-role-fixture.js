@@ -16,6 +16,8 @@ export async function installRoleFixture() {
     approvals: [{ id: '501', company_id: '77', status: 'pending' }, { id: '502', company_id: '88', status: 'pending' }],
     sessions: ['101', '102', '103'].map(user_id => ({ user_id, token: randomUUID(), id: randomUUID(), login_at: new Date().toISOString() })), events: [],
   };
+  for (const role of state.roles) role.version = 1;
+  for (const membership of state.memberships) membership.roles_version = 1;
   const queries = []; let failAudit = false;
   function execute(data, sql, values = []) {
     const text = sql.replace(/\s+/g, ' ').trim(); queries.push({ text, values });
@@ -34,11 +36,11 @@ export async function installRoleFixture() {
     if (text.includes('FROM org.departments') || text.includes('FROM org.positions')) return rows([]);
     if (text.includes('FROM org.companies') && text.endsWith('FOR UPDATE')) return rows(data.companies.filter(c => c.id === values[0] && c.is_active));
     if (text.startsWith('SELECT r.id, r.name')) return rows(data.roles.filter(role => role.company_id === values[0] && !role.deleted_at));
-    if (text.startsWith('SELECT m.user_id, u.name')) return rows(data.memberships.filter(m => m.company_id === values[0] && m.status === 'active').map(m => ({ ...data.users.find(u => u.id === m.user_id), user_id: m.user_id,
+    if (text.startsWith('SELECT m.user_id, m.roles_version, u.name')) return rows(data.memberships.filter(m => m.company_id === values[0] && m.status === 'active').map(m => ({ ...data.users.find(u => u.id === m.user_id), user_id: m.user_id, roles_version: m.roles_version,
       roles: data.grants.filter(g => g.user_id === m.user_id && g.workspace_id === null && data.roles.some(r => r.id === g.role_id && r.company_id === m.company_id && !r.deleted_at)).map(g => g.role_id) })));
     if (text.startsWith('INSERT INTO org.roles')) {
       if (data.roles.some(r => r.company_id === values[0] && r.name === values[1])) throw Object.assign(new Error('duplicate role name'), { code: '23505' });
-      const role = { id: String(data.roles.length + 10), company_id: values[0], name: values[1], is_system: text.includes('true'), scope: values[2], permissions: [] };
+      const role = { id: String(data.roles.length + 10), company_id: values[0], name: values[1], is_system: text.includes('true'), scope: values[2], permissions: [], version: 1 };
       data.roles.push(role); return rows([role]);
     }
     if (text.startsWith('INSERT INTO org.permissions')) return rows([]);
@@ -48,7 +50,13 @@ export async function installRoleFixture() {
       const role = data.roles.find(r => r.id === values[0] && r.company_id === values[1]);
       if (text.includes('deleted_at = now()')) { role.deleted_at = new Date().toISOString(); if (text.includes("name = '_perp_deleted_role_'")) role.name = `_perp_deleted_role_${role.id}`; }
       else { role.name = values[2]; role.scope = values[3]; }
+      role.version += 1;
       return rows([role]);
+    }
+    if (text.startsWith('UPDATE org.company_memberships')) {
+      for (const m of data.memberships) if (m.company_id === values[0] && (text.includes('EXISTS')
+        ? data.grants.some(g => g.user_id === m.user_id && g.role_id === values[1] && g.workspace_id === null) : m.user_id === values[1])) m.roles_version += 1;
+      return rows([]);
     }
     if (text.startsWith('DELETE FROM org.user_roles ur USING')) {
       data.grants = data.grants.filter(g => !(g.user_id === values[1] && g.workspace_id === null && data.roles.some(r => r.id === g.role_id && r.company_id === values[0]))); return rows([]);

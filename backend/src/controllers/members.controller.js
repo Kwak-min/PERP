@@ -1,9 +1,9 @@
 import { z } from "zod";
 
-import { db } from "../config/db.js";
+import { db, transaction } from "../config/db.js";
 import { MASKED_FIELDS } from "../config/rbac.js";
 import { resolvePrincipal } from "../middleware/auth.js";
-import { assignLegacyRoles, assertLegacyLastAdmin, assertDelegation, legacyRoleDefinitions, legacyRoleGrants, resolveRoleKeys } from '../services/company-roles.service.js';
+import { assignLegacyRoles, assertDelegation, legacyRoleDefinitions, legacyRoleGrants, resolveRoleKeys, freshLegacyAuthority, setLegacyMemberStatus } from '../services/company-roles.service.js';
 import { bumpVersion, getScoped, hardDelete, insert, listScoped, newId, nowIso, softDelete, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
 import { notify } from "../services/notification.service.js";
@@ -32,8 +32,9 @@ const provisionSchema = z.object({
   emergency_contact: z.string().max(240).nullable().optional(),
 });
 
-const rolesSchema = z.object({ roles: z.array(z.string()) });
-const statusSchema = z.object({ status: z.enum(["active", "inactive", "left"]) });
+const roleVersion = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+const rolesSchema = z.object({ roles: z.array(z.string().min(1).max(100)).max(50), expected_roles_version: roleVersion }).strict();
+const statusSchema = z.object({ status: z.enum(["active", "inactive", "left"]), expected_roles_version: roleVersion }).strict();
 const simulationSchema = z.object({
   roles: z.array(z.string()).min(1),
   permissions: z.array(z.string()).default([]),
@@ -81,9 +82,9 @@ function assertKnownRoles(roles, principal) {
   resolveRoleKeys(legacyRoleDefinitions(principal), roles);
 }
 
-function assertCanDelegateRoles(principal, roles) {
+function assertCanDelegateRoles(principal, roles, existing = false) {
   principal.require('role.assign');
-  assertDelegation(principal, resolveRoleKeys(legacyRoleDefinitions(principal), roles));
+  assertDelegation(principal, resolveRoleKeys(legacyRoleDefinitions(principal), roles, existing));
 }
 
 function maskRecord(principal, data, ownerId) {
@@ -104,6 +105,7 @@ function memberView(principal, membership, user) {
       email: user.email,
       name: user.name,
       roles: (membership.roles ?? "").split(",").filter(Boolean),
+      roles_version: membership.roles_version,
       status: membership.status,
       department_id: membership.department_id,
       title: membership.title,
@@ -338,8 +340,8 @@ export function simulatePermissions(req, res) {
   });
 }
 
-export function createInvite(req, res) {
-  const principal = resolvePrincipal(req);
+export const createInvite = transaction((req, res) => {
+  const principal = freshLegacyAuthority(resolvePrincipal(req), 'menu.members');
   principal.require("member.write");
   const payload = inviteSchema.parse(req.body);
   assertCanDelegateRoles(principal, payload.roles);
@@ -392,21 +394,26 @@ export function createInvite(req, res) {
     token: invitation.token,
     expires_at: invitation.expires_at,
   });
-}
+});
 
-export function revokeInvite(req, res) {
-  const principal = resolvePrincipal(req);
+export const revokeInvite = transaction((req, res) => {
+  const principal = freshLegacyAuthority(resolvePrincipal(req), 'menu.members');
   principal.require("member.write");
   const invitation = db()
     .prepare("SELECT * FROM invitation WHERE id = ? AND tenant_id = ? AND org_id = ?")
     .get(req.params.invitationId, principal.tenantId, principal.orgId);
   if (!invitation) throw notFound("invitation");
-  update("invitation", invitation.id, { status: "revoked" }, principal.userId);
+  assertCanDelegateRoles(principal, invitation.roles.split(',').filter(Boolean), true);
+  if (invitation.status !== 'revoked') {
+    update("invitation", invitation.id, { status: "revoked" }, principal.userId);
+    audit.record({ tenantId: principal.tenantId, actorId: principal.userId, action: 'member.invitation.revoked', resourceType: 'invitation', resourceId: invitation.id,
+      before: { status: invitation.status }, after: { status: 'revoked' }, requestId: req.requestId });
+  }
   res.json({ id: invitation.id, status: "revoked" });
-}
+});
 
-export function provision(req, res) {
-  const principal = resolvePrincipal(req);
+export const provision = transaction((req, res) => {
+  const principal = freshLegacyAuthority(resolvePrincipal(req), 'menu.members');
   principal.require("member.write");
   const payload = provisionSchema.parse(req.body);
   assertCanDelegateRoles(principal, payload.roles);
@@ -461,7 +468,7 @@ export function provision(req, res) {
     must_change_password: true,
     note: "이 임시 비밀번호는 지금 한 번만 표시됩니다. 사용자에게 직접 전달하세요.",
   });
-}
+});
 
 export function resetPassword(req, res) {
   const principal = resolvePrincipal(req);
@@ -474,7 +481,7 @@ export function resetPassword(req, res) {
     )
     .get(req.params.membershipId, principal.tenantId, principal.orgId);
   if (!membership) throw notFound("membership");
-  assertCanDelegateRoles(principal, (membership.roles ?? "").split(",").filter(Boolean));
+  assertCanDelegateRoles(principal, (membership.roles ?? "").split(",").filter(Boolean), true);
   const user = db().prepare("SELECT * FROM app_user WHERE id = ?").get(membership.user_id);
   if (!user) throw notFound("user");
 
@@ -517,45 +524,21 @@ export function resetPassword(req, res) {
 
 export function setRoles(req, res) {
   const principal = resolvePrincipal(req);
+  principal.require('role.assign');
   const payload = rolesSchema.parse(req.body);
-  res.json(assignLegacyRoles(principal, req.params.membershipId, payload.roles, req.requestId));
+  res.json(assignLegacyRoles(principal, req.params.membershipId, payload.roles, req.requestId, payload.expected_roles_version, 'menu.members'));
 }
 
 export function setStatus(req, res) {
   const principal = resolvePrincipal(req);
-  principal.require("member.write");
   const payload = statusSchema.parse(req.body);
-
-  const membership = db()
-    .prepare("SELECT * FROM membership WHERE id = ? AND tenant_id = ? AND org_id = ?")
-    .get(req.params.membershipId, principal.tenantId, principal.orgId);
-  if (!membership) throw notFound("membership");
-
-  const currentRoles = (membership.roles ?? '').split(',').filter(Boolean);
-  assertDelegation(principal, resolveRoleKeys(legacyRoleDefinitions(principal), currentRoles));
-  assertLegacyLastAdmin(principal, membership.id, currentRoles, payload.status === 'active');
-  const before = membership.status;
-  const patch = { status: payload.status };
-  if (payload.status === "left") {
-    patch.left_at = nowIso();
-    db()
-      .prepare("UPDATE session_token SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")
-      .run(nowIso(), membership.user_id);
-  }
-  const updated = bumpVersion("membership", membership, patch, principal.userId);
-
-  audit.record({
-    tenantId: principal.tenantId,
-    action: "member.status.changed",
-    resourceType: "membership",
-    resourceId: membership.id,
-    actorId: principal.userId,
-    before: { status: before },
-    after: { status: updated.status },
-    requestId: req.requestId,
-  });
-
-  res.json({ membership_id: updated.id, status: updated.status });
+  res.json(setLegacyMemberStatus(
+    principal,
+    req.params.membershipId,
+    payload.status,
+    req.requestId,
+    payload.expected_roles_version,
+  ));
 }
 
 /** 브랜치에 들어갈 수 있게 지정된 그룹(역할). 비어 있으면 조직 전체 공개다. */

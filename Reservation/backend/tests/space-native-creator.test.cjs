@@ -94,7 +94,10 @@ test('native creator delegates only owned reservation grants via actual role cre
   assert.equal(created.status, 201);
   const member = await api(erp.baseUrl, '/pg/members', { ...creator, method: 'POST', body: { email: 'creator-delegate@example.invalid', name: '예약 담당자', password: 'password-1234' } });
   assert.equal(member.status, 201);
-  const assigned = await api(erp.baseUrl, `/settings/members/${member.body.id}/roles`, { ...creator, method: 'PUT', body: { roles: [created.body.key] } });
+  const members = await api(erp.baseUrl, '/settings/members', creator);
+  assert.equal(members.status, 200);
+  const current = members.body.items.find(row => row.membership_id === member.body.id);
+  const assigned = await api(erp.baseUrl, `/settings/members/${member.body.id}/roles`, { ...creator, method: 'PUT', body: { roles: [created.body.key], expected_roles_version: current.roles_version } });
   assert.equal(assigned.status, 200);
   const login = await api(erp.baseUrl, '/pg/auth/login', { method: 'POST', body: { email: 'creator-delegate@example.invalid', password: 'password-1234' } });
   assert.equal(login.status, 200);

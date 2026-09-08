@@ -13,7 +13,11 @@ before(async () => {
   fixture.state.roles[0].name = 'company_creator';
 });
 after(async () => { await fixture?.close(); await server?.close(); });
-const request = (actor, route, method = 'GET', body) => api(server.baseUrl, route, { ...actor, method, body });
+const request = (actor, route, method = 'GET', body) => {
+  const memberId = /^\/settings\/members\/([^/]+)\/roles$/.exec(route)?.[1];
+  if (memberId && method === 'PUT' && body.expected_roles_version === undefined) body = { ...body, expected_roles_version: fixture.state.memberships.find(m => m.user_id === memberId)?.roles_version };
+  return api(server.baseUrl, route, { ...actor, method, body });
+};
 async function login(email = fixture.users[0].email) {
   const response = await request({}, '/pg/auth/login', 'POST', { email, password: 'password-1234' });
   assert.equal(response.status, 200); return response.body.token;
@@ -69,7 +73,7 @@ test('new native creator owns every canonical company permission and can assign/
     assert.equal((await request(actor, '/settings/roles')).status, 403);
     assert.equal((await request(actor, '/settings/members/101/roles', 'PUT', { roles: ['company_admin'] })).status, 403);
   }
-  assert.equal((await request(creator, '/settings/members/102/roles', 'PUT', { roles: ['company_admin'] })).status, 404);
+  assert.equal((await request(creator, '/settings/members/102/roles', 'PUT', { roles: ['company_admin'], expected_roles_version: members.body.items[0].roles_version })).status, 404);
   for (const permissions of [['*'], ['platform.tenants']]) {
     assert.equal((await request(creator, '/settings/roles', 'POST', roleBody('Invalid authority', permissions))).status, 400);
   }

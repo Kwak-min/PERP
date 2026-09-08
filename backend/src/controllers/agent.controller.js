@@ -450,7 +450,7 @@ export function executeAction(req, res) {
     throw new ApiError("IDEMPOTENCY_CONFLICT", "this action was already executed with the same key");
   }
 
-  const [result, rollbackRef] = execute(principal, action);
+  const [result, rollbackRef] = execute(principal, action, req.requestId);
   update(
     "agent_action",
     action.id,
@@ -495,7 +495,7 @@ export function rollbackAction(req, res) {
   if (action.status !== "executed") {
     throw new ApiError("CONFLICT", "only executed actions can be rolled back");
   }
-  res.json(rollback(principal, action));
+  res.json(rollback(principal, action, req.requestId));
 }
 
 export function listActions(req, res) {

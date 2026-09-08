@@ -1,43 +1,48 @@
 import { pgQuery, pgTransaction } from '../config/pg.js';
 import { COMPANY_PERMISSIONS } from '../config/rbac.js';
 import { effectivePgPermissions } from '../config/menu-permissions.js';
-import { assertDelegation, isAdministrator, resolveRoleKeys } from './company-roles.service.js';
+import { assertDelegation, isAdministrator, resolveRoleKeys, roleGrants, assertRoleVersion, sameKeys } from './company-roles.service.js';
 import { ApiError } from '../utils/errors.js';
 
-const adminDefinition = { key: 'company_admin', name: '관리자', label: '관리자', scope: 'all', permissions: COMPANY_PERMISSIONS, system: true };
+const adminDefinition = { id: 'company_admin', version: 1, key: 'company_admin', name: '관리자', label: '관리자', scope: 'all', permissions: COMPANY_PERMISSIONS, system: true };
 
 export async function pgRoleDefinitions(companyId, query = pgQuery) {
-  const { rows } = await query(`SELECT r.id, r.name, r.is_system, r.scope,
+  const { rows } = await query(`SELECT r.id, r.name, r.is_system, r.scope, r.version,
     COALESCE(array_agg(p.code) FILTER (WHERE p.code IS NOT NULL), '{}') AS permissions
     FROM org.roles r LEFT JOIN org.role_permissions rp ON rp.role_id = r.id
     LEFT JOIN org.permissions p ON p.id = rp.permission_id
     WHERE r.company_id = $1 AND r.deleted_at IS NULL GROUP BY r.id ORDER BY r.name`, [companyId]);
-  return [...rows.map(row => ({ key: String(row.id), name: row.name, label: row.name,
-    scope: row.scope, permissions: effectivePgPermissions(row.permissions.map(code => ({ code, role: row.name }))), system: row.is_system })), adminDefinition];
+  return [...rows.map(row => ({ id: String(row.id), version: row.version, key: String(row.id), name: row.name, label: row.name,
+    scope: row.scope, delegable: !row.permissions.some(code => code === '*' || code.startsWith('platform.')), permissions: effectivePgPermissions(row.permissions.map(code => ({ code, role: row.name }))), system: row.is_system })), adminDefinition];
 }
 
-export async function pgRoleMembers(companyId, query = pgQuery) {
-  const { rows } = await query(`SELECT m.user_id, u.name, u.email,
+export async function pgRoleMembers(companyId, query = pgQuery, activeOnly = true) {
+  const { rows } = await query(`SELECT m.user_id, m.roles_version, u.name, u.email,
     COALESCE(array_agg(r.id::text) FILTER (WHERE r.id IS NOT NULL), '{}') AS roles
     FROM org.company_memberships m JOIN auth.users u ON u.id = m.user_id
     LEFT JOIN org.user_roles ur ON ur.user_id = m.user_id AND ur.workspace_id IS NULL
     LEFT JOIN org.roles r ON r.id = ur.role_id AND r.company_id = m.company_id AND r.deleted_at IS NULL
-    WHERE m.company_id = $1 AND m.status = 'active' AND u.account_status = 'active' AND u.approval_status = 'approved'
-    GROUP BY m.user_id, u.name, u.email ORDER BY u.name`, [companyId]);
-  return rows.map(row => ({ membership_id: String(row.user_id), user_id: String(row.user_id), name: row.name, email: row.email, roles: row.roles }));
+    WHERE m.company_id = $1 ${activeOnly ? "AND m.status = 'active' AND u.account_status = 'active' AND u.approval_status = 'approved'" : ''}
+    GROUP BY m.user_id, m.roles_version, u.name, u.email ORDER BY u.name`, [companyId]);
+  return rows.map(row => ({ membership_id: String(row.user_id), user_id: String(row.user_id), name: row.name, email: row.email, roles: row.roles, roles_version: row.roles_version }));
 }
 
-function permissionsOf(member, roles) {
-  return new Set(member.roles.flatMap(key => roles.find(role => role.key === key)?.permissions ?? []));
+function fullAdmin(member, roles) {
+  const grants = roleGrants(roles, member.roles);
+  return isAdministrator(grants.permissions, grants.scope);
+}
+export async function pgRecoveryRequired(companyId) {
+  const [members, roles] = await Promise.all([pgRoleMembers(companyId), pgRoleDefinitions(companyId)]);
+  return !members.some(member => fullAdmin(member, roles));
 }
 function assertLastAdmin(beforeMembers, beforeRoles, afterMembers, afterRoles) {
-  if (beforeMembers.some(member => isAdministrator(permissionsOf(member, beforeRoles))) &&
-    !afterMembers.some(member => isAdministrator(permissionsOf(member, afterRoles)))) {
+  if (beforeMembers.some(member => fullAdmin(member, beforeRoles)) &&
+    !afterMembers.some(member => fullAdmin(member, afterRoles))) {
     throw new ApiError('CONFLICT', '마지막 활성 관리자의 권한은 제거할 수 없습니다');
   }
 }
 
-async function mutate(principal, requestId, fn) {
+export async function mutatePgRoles(principal, requestId, fn, surface = 'menu.roles') {
   return pgTransaction(async client => {
     const query = client.query.bind(client);
     // 같은 회사의 모든 역할 변경을 직렬화하고 잠금 이후 권한을 다시 읽는다.
@@ -47,11 +52,12 @@ async function mutate(principal, requestId, fn) {
     const members = await pgRoleMembers(principal.companyId, query);
     const actor = members.find(member => member.user_id === principal.userId);
     if (!actor) throw new ApiError('PERMISSION_DENIED', '활성 회사 소속이 없습니다');
-    const permissions = permissionsOf(actor, roles);
-    const authority = { ...principal, permissions, scope: 'all', has: code => permissions.has(code),
+    const { permissions, scope } = roleGrants(roles, actor.roles);
+    const authority = { ...principal, permissions, scope, has: code => permissions.has(code),
       require(code) { if (!this.has(code)) throw new ApiError('PERMISSION_DENIED', '이 작업의 권한이 없습니다'); } };
-    authority.require('role.assign'); authority.require('menu.roles');
+    authority.require('role.assign'); authority.require(surface);
     const result = await fn({ query, roles, members, authority });
+    if (result.noop) return result.value;
     const nextRoles = await pgRoleDefinitions(principal.companyId, query);
     const nextMembers = await pgRoleMembers(principal.companyId, query);
     assertLastAdmin(members, roles, nextMembers, nextRoles);
@@ -72,13 +78,15 @@ async function writePermissions(query, id, permissions) {
 }
 
 export function savePgRole(principal, key, payload, requestId) {
-  return mutate(principal, requestId, async ({ query, roles, authority }) => {
+  return mutatePgRoles(principal, requestId, async ({ query, roles, authority }) => {
     const before = key ? roles.find(role => role.key === key) : null;
     if (key && !before) throw new ApiError('NOT_FOUND', '역할을 찾을 수 없습니다');
     if (before?.system) throw new ApiError('CONFLICT', '기본 역할은 수정할 수 없습니다');
     // 현재 PG 데이터 레이어는 회사 범위만 지원한다. 좁은 범위를 가장하지 않는다.
     if (payload.scope !== 'all') throw new ApiError('VALIDATION_ERROR', 'PG 회사 역할의 데이터 범위는 회사 전체입니다');
     assertDelegation(authority, [...(before ? [before] : []), payload]);
+    if (key) assertRoleVersion(payload.expected_version, before.version);
+    if (before && before.name === payload.name && before.scope === payload.scope && sameKeys(before.permissions, payload.permissions)) return { noop: true, value: before };
     if (roles.some(role => role.key !== key && role.name === payload.name)) throw new ApiError('CONFLICT', '같은 이름의 역할이 있습니다');
     let id = key;
     if (!key) {
@@ -86,16 +94,21 @@ export function savePgRole(principal, key, payload, requestId) {
       id = String(rows[0].id);
     } else await query('UPDATE org.roles SET name = $3, scope = $4, version = version + 1 WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL', [id, principal.companyId, payload.name, payload.scope]);
     await writePermissions(query, id, payload.permissions);
-    const value = { key: id, ...payload, label: payload.name, system: false };
+    const value = (await pgRoleDefinitions(principal.companyId, query)).find(role => role.key === id);
     return { action: key ? 'role.updated' : 'role.created', resourceId: id, before, after: value, value };
   });
 }
 
-export function assignPgRoles(principal, memberId, keys, requestId) {
-  return mutate(principal, requestId, async ({ query, roles, members, authority }) => {
+export function assignPgRoles(principal, memberId, keys, requestId, expectedVersion) {
+  return mutatePgRoles(principal, requestId, async ({ query, roles, members, authority }) => {
     const member = members.find(row => row.membership_id === memberId);
     if (!member) throw new ApiError('NOT_FOUND', '활성 구성원을 찾을 수 없습니다');
     assertDelegation(authority, [...resolveRoleKeys(roles, member.roles), ...resolveRoleKeys(roles, keys)]);
+    assertRoleVersion(expectedVersion, member.roles_version);
+    const admin = roles.find(role => role.name === '_perp_company_admin_v1' && role.system);
+    if (keys.includes('company_admin') && admin && (!admin.delegable || admin.scope !== 'all' || !sameKeys(admin.permissions, COMPANY_PERMISSIONS))) throw new ApiError('CONFLICT', '기존 관리자 역할이 변경되어 명시적인 검토가 필요합니다');
+    const normalized = [...new Set(keys.map(key => key === 'company_admin' ? admin?.key ?? key : key))];
+    if (sameKeys(member.roles, normalized)) return { noop: true, value: member };
     const ids = [];
     for (const key of [...new Set(keys)]) {
       if (key !== 'company_admin') { ids.push(key); continue; }
@@ -105,24 +118,30 @@ export function assignPgRoles(principal, memberId, keys, requestId) {
       if (!id) {
         const { rows } = await query('INSERT INTO org.roles (company_id, name, is_system, scope) VALUES ($1, $2, true, $3) RETURNING id', [principal.companyId, name, 'all']);
         id = String(rows[0].id);
+        await writePermissions(query, id, COMPANY_PERMISSIONS);
       }
-      await writePermissions(query, id, COMPANY_PERMISSIONS);
       ids.push(id);
     }
     await query(`DELETE FROM org.user_roles ur USING org.roles r
       WHERE ur.role_id = r.id AND r.company_id = $1 AND ur.user_id = $2 AND ur.workspace_id IS NULL`, [principal.companyId, memberId]);
-    for (const id of ids) await query('INSERT INTO org.user_roles (user_id, role_id, granted_by) VALUES ($1, $2, $3)', [memberId, id, principal.userId]);
-    const value = { membership_id: memberId, roles: ids };
+    for (const id of new Set(ids)) await query('INSERT INTO org.user_roles (user_id, role_id, granted_by) VALUES ($1, $2, $3)', [memberId, id, principal.userId]);
+    await query('UPDATE org.company_memberships SET roles_version = roles_version + 1 WHERE company_id = $1 AND user_id = $2', [principal.companyId, memberId]);
+    const value = { membership_id: memberId, roles: [...new Set(ids)], roles_version: member.roles_version + 1 };
     return { action: 'member.roles.changed', resourceId: memberId, before: member, after: value, value };
   });
 }
 
-export function deletePgRole(principal, key, requestId) {
-  return mutate(principal, requestId, async ({ query, roles, authority }) => {
+export function deletePgRole(principal, key, requestId, expectedVersion) {
+  return mutatePgRoles(principal, requestId, async ({ query, roles, authority }) => {
     const role = roles.find(row => row.key === key);
     if (!role) throw new ApiError('NOT_FOUND', '역할을 찾을 수 없습니다');
     if (role.system) throw new ApiError('CONFLICT', '기본 역할은 삭제할 수 없습니다');
     assertDelegation(authority, [role]);
+    assertRoleVersion(expectedVersion, role.version);
+    const affectedMembers = await pgRoleMembers(principal.companyId, query, false);
+    for (const member of affectedMembers.filter(member => member.roles.includes(key))) assertDelegation(authority, resolveRoleKeys(roles, member.roles));
+    await query(`UPDATE org.company_memberships m SET roles_version = roles_version + 1
+      WHERE m.company_id = $1 AND EXISTS (SELECT 1 FROM org.user_roles ur WHERE ur.user_id = m.user_id AND ur.role_id = $2 AND ur.workspace_id IS NULL)`, [principal.companyId, key]);
     await query('DELETE FROM org.user_roles WHERE role_id = $1', [key]);
     await query('DELETE FROM org.role_permissions WHERE role_id = $1', [key]);
     await query("UPDATE org.roles SET name = '_perp_deleted_role_' || id::text, deleted_at = now(), version = version + 1 WHERE id = $1 AND company_id = $2", [key, principal.companyId]);

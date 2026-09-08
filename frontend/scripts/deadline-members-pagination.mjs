@@ -25,7 +25,7 @@ export async function membersPagination({ surface, api, fixture, result, attempt
   const source = (await api.request(fixture.actorAdmin, '/members?limit=-1')).items;
   const assigned = source.filter(member => member.user_id !== fixture.actorAdmin.userId).slice(0, 12);
   for (const member of assigned) await api.request(fixture.actorAdmin, `/members/${member.membership_id}/assignment`, 'PATCH', { department_id: department.id });
-  await api.request(fixture.actorAdmin, `/members/${assigned[0].membership_id}/status`, 'PATCH', { status: 'inactive' });
+  await api.request(fixture.actorAdmin, `/members/${assigned[0].membership_id}/status`, 'PATCH', { status: 'inactive', expected_roles_version: assigned[0].roles_version });
   const invite = await api.request(fixture.B.actor, '/members/invites', 'POST', { email: fixture.actorAdmin.email, roles: ['company_admin'] }, 201);
   await api.request(fixture.actorAdmin, '/auth/invitations/accept', 'POST', { token: invite.token }, 201);
   fixture.actorAdmin.session.organizations = (await api.request(fixture.actorAdmin, '/auth/me')).organizations;

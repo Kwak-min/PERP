@@ -137,14 +137,15 @@ export async function navPrefScenario(probe) {
       }, { session: fixture.actorManager.session, scope: scopes[1] });
     }
     const assignments = await api.request(fixture.actorAdmin, '/settings/members');
-    const originalRoles = assignments.items.find(member => member.membership_id === fixture.actorManager.membershipId).roles;
+    const manager = assignments.items.find(member => member.membership_id === fixture.actorManager.membershipId);
+    const originalRoles = manager.roles;
     result.observations.granted = await projectManagerFavorites();
     assert.deepEqual(result.observations.granted.ids, ['PRJ-001']);
-    await api.request(fixture.actorAdmin, `/settings/members/${fixture.actorManager.membershipId}/roles`, 'PUT', { roles: [] });
+    const revoked = await api.request(fixture.actorAdmin, `/settings/members/${fixture.actorManager.membershipId}/roles`, 'PUT', { roles: [], expected_roles_version: manager.roles_version });
     result.observations.revoked = await projectManagerFavorites();
     assert.deepEqual(result.observations.revoked.ids, []);
     assert.equal(result.observations.revoked.raw, result.observations.granted.raw);
-    await api.request(fixture.actorAdmin, `/settings/members/${fixture.actorManager.membershipId}/roles`, 'PUT', { roles: originalRoles });
+    await api.request(fixture.actorAdmin, `/settings/members/${fixture.actorManager.membershipId}/roles`, 'PUT', { roles: originalRoles, expected_roles_version: revoked.roles_version });
     result.observations.restored = await projectManagerFavorites();
     assert.deepEqual(result.observations.restored.ids, ['PRJ-001']);
     assert.equal(result.observations.restored.raw, result.observations.granted.raw);

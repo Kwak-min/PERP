@@ -117,9 +117,10 @@ export async function membersPaginationEdges({ surface, api, fixture, result, at
   await surface('members-pagination-modal-recovered', fixture.actorAdmin, '/members', '.org-directory tbody tr', '/api/v1/members', async page => {
     // Given: remove member.read through the real role API after the directory was loaded.
     const otherAdmin = fixture.actors[3];
-    await api.request(fixture.actorAdmin, `/settings/members/${otherAdmin.membershipId}/roles`, 'PUT', { roles: ['company_admin'] });
+    const assignments = await api.request(fixture.actorAdmin, '/settings/members');
+    await api.request(fixture.actorAdmin, `/settings/members/${otherAdmin.membershipId}/roles`, 'PUT', { roles: ['company_admin'], expected_roles_version: assignments.items.find(member => member.membership_id === otherAdmin.membershipId).roles_version });
     const limitedRoles = fixture.members.find(member => member.user_id === fixture.actorManager.userId).roles;
-    await api.request(fixture.actorAdmin, `/settings/members/${fixture.actorAdmin.membershipId}/roles`, 'PUT', { roles: limitedRoles });
+    await api.request(fixture.actorAdmin, `/settings/members/${fixture.actorAdmin.membershipId}/roles`, 'PUT', { roles: limitedRoles, expected_roles_version: assignments.items.find(member => member.membership_id === fixture.actorAdmin.membershipId).roles_version });
     try {
       await change(page, () => Boolean(document.querySelector('.member-modal [role="alert"]')), () => page.getByRole('button', { name: '구성원 목록 팝업' }).click());
       assert.equal(await page.locator('.member-modal li').count(), 0);
@@ -135,13 +136,15 @@ export async function membersPaginationEdges({ surface, api, fixture, result, at
       await api.request(fixture.actorAdmin, '/members?limit=-1', 'GET', undefined, 403);
       await change(page, () => !document.querySelector('.member-modal'), () => page.keyboard.press('Escape'));
       assert.equal(await page.evaluate(() => document.body.style.overflow), '');
-      await api.request(otherAdmin, `/settings/members/${fixture.actorAdmin.membershipId}/roles`, 'PUT', { roles: ['company_admin'] });
+      const current = (await api.request(otherAdmin, '/settings/members')).items.find(member => member.membership_id === fixture.actorAdmin.membershipId);
+      await api.request(otherAdmin, `/settings/members/${fixture.actorAdmin.membershipId}/roles`, 'PUT', { roles: ['company_admin'], expected_roles_version: current.roles_version });
       await change(page, () => document.querySelectorAll('.member-modal__list li').length === 10, () => page.getByRole('button', { name: '구성원 목록 팝업' }).click());
       assert.equal(await page.locator('.member-modal [role="alert"]').count(), 0);
       result.memberChecks.push({ deniedStatus: 403, staleRowsOnDenied: 0, reopenAfterPermissionRestored: 10 });
       return { deniedStatus: 403, reopenAfterPermissionRestored: 10 };
     } finally {
-      await api.request(otherAdmin, `/settings/members/${fixture.actorAdmin.membershipId}/roles`, 'PUT', { roles: ['company_admin'] });
+      const current = (await api.request(otherAdmin, '/settings/members')).items.find(member => member.membership_id === fixture.actorAdmin.membershipId);
+      await api.request(otherAdmin, `/settings/members/${fixture.actorAdmin.membershipId}/roles`, 'PUT', { roles: ['company_admin'], expected_roles_version: current.roles_version });
     }
   }, [375, 1280]);
 }

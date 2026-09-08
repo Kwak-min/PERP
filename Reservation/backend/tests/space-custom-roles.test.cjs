@@ -67,7 +67,10 @@ test('Given trusted legacy wildcard owner, when creating a space, then creation 
 });
 test('Given a custom role changed to a misleading admin name without manage, when reusing the same token, then every mutation is denied', async () => {
   const route = `/settings/roles/${customRole}`;
-  const changed = await api(erp.baseUrl, route, { ...owner, method: 'PATCH', body: { name: 'super_admin', scope: 'all', permissions: ['menu.reservations'] } });
+  const roles = await api(erp.baseUrl, '/settings/roles', owner);
+  assert.equal(roles.status, 200);
+  const current = roles.body.items.find(role => role.key === customRole);
+  const changed = await api(erp.baseUrl, route, { ...owner, method: 'PATCH', body: { name: 'super_admin', scope: 'all', permissions: ['menu.reservations'], expected_version: current.version } });
   assert.equal(changed.status, 200);
   try {
     const principal = await api(erp.baseUrl, '/auth/reservation-principal', member);
@@ -78,7 +81,7 @@ test('Given a custom role changed to a misleading admin name without manage, whe
     }
     assert.equal(reservation.calls.length, before);
   } finally {
-    assert.equal((await api(erp.baseUrl, route, { ...owner, method: 'PATCH', body: { name: '시설 담당자', scope: 'all', permissions: grants } })).status, 200);
+    assert.equal((await api(erp.baseUrl, route, { ...owner, method: 'PATCH', body: { name: '시설 담당자', scope: 'all', permissions: grants, expected_version: changed.body.version } })).status, 200);
   }
 });
 test('Given PG role named org_admin without manage or with untrusted wildcard, when reusing the token, then no cached authority survives', async () => {
