@@ -1,4 +1,4 @@
-export const EXPENSE_CSV_PARSER_VERSION = 'expense-csv-v1:csv-parse@6.1.0';
+export const EXPENSE_CSV_PARSER_VERSION = 'expense-csv-v1:csv-parse@7.0.2';
 export const EXPENSE_CSV_DEFAULT_PROVIDER_SOURCE = 'manual_csv';
 export const EXPENSE_CSV_LIMITS = Object.freeze({
   rawBytes: 5 * 1024 * 1024,
