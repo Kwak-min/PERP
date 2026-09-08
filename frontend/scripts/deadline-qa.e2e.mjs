@@ -15,12 +15,17 @@ import { networkAudit, protectedPorts } from '../../scripts/deadline-isolation-g
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const args = process.argv.slice(2);
-if (args[0] !== '--scenario' || !['baseline', 'recruitment-nav', 'nav-pref', 'members-pagination', 'assets-footer'].includes(args[1]) || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer [--probe error|cancel]');
+const sharedScenarioArgs = args[0] === '--scenario'
+  && ['baseline', 'recruitment-nav', 'nav-pref', 'members-pagination', 'assets-footer'].includes(args[1])
+  && (args.length === 2 || (args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])));
+const monthSummaryArgs = args.length === 2 && args[0] === '--scenario' && args[1] === 'month-summary';
+if (!sharedScenarioArgs && !monthSummaryArgs) {
+  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer [--probe error|cancel] | --scenario month-summary');
   process.exitCode = 2;
 } else {
   assertIsolated();
-  if (args[1] === 'nav-pref') await (await import('./deadline-nav-pref.e2e.mjs')).navPrefScenario(args[3]);
+  if (args[1] === 'month-summary') await (await import('./deadline-month-summary.e2e.mjs')).monthSummary();
+  else if (args[1] === 'nav-pref') await (await import('./deadline-nav-pref.e2e.mjs')).navPrefScenario(args[3]);
   else await baseline(args[3], args[1]);
 }
 
