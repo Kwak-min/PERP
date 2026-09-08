@@ -10,6 +10,19 @@ export const permissionCatalog = COMPANY_PERMISSIONS.map(code => ({ code,
   kind: code.startsWith('menu.') ? 'menu' : 'action' }));
 export const isAdministrator = permissions => permissions.has('*') ||
   ['role.assign', 'organization.settings', 'menu.roles'].every(code => permissions.has(code));
+export const isCompanyAdministrator = (permissions, scope, allowLegacyWildcard = false) => scope === 'all' &&
+  ((allowLegacyWildcard && permissions.has('*')) || COMPANY_PERMISSIONS.every(code => permissions.has(code)));
+
+export function roleGrants(definitions, keys) {
+  const selected = definitions.filter(role => keys.includes(role.key));
+  return { permissions: new Set(selected.flatMap(role => role.permissions)), scope: selected.reduce((scope, role) =>
+    SCOPE_ORDER.indexOf(role.scope) > SCOPE_ORDER.indexOf(scope) ? role.scope : scope, 'self') };
+}
+
+export function isCompanyAdministratorForRoles(definitions, keys, allowLegacyWildcard = false) {
+  const grants = roleGrants(definitions.filter(role => role.scope === 'all'), keys);
+  return isCompanyAdministrator(grants.permissions, grants.scope, allowLegacyWildcard);
+}
 
 export function assertDelegation(principal, roles) {
   principal.require('role.assign');
@@ -30,10 +43,7 @@ export function legacyRoleDefinitions(principal) {
 }
 
 export function legacyRoleGrants(principal, roles) {
-  const definitions = legacyRoleDefinitions(principal);
-  const selected = roles.map(key => key === 'platform_admin' ? ROLE_TEMPLATES.platform_admin : definitions.find(role => role.key === key)).filter(Boolean);
-  return { permissions: new Set(selected.flatMap(role => role.permissions)), scope: selected.reduce((scope, role) =>
-    SCOPE_ORDER.indexOf(role.scope) > SCOPE_ORDER.indexOf(scope) ? role.scope : scope, 'self') };
+  return roleGrants([...legacyRoleDefinitions(principal), { key: 'platform_admin', ...ROLE_TEMPLATES.platform_admin }], roles);
 }
 
 export function resolveRoleKeys(definitions, keys) {

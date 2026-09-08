@@ -7,8 +7,8 @@ import { enabledSet } from '../middleware/modules.js';
 import { enabledFeatures } from '../config/features.js';
 import { pgEnabledFeatures } from '../middleware/features.js';
 import { ApiError } from '../utils/errors.js';
-import { legacyRoleDefinitions, permissionCatalog, saveLegacyRole, assignLegacyRoles, deleteLegacyRole } from '../services/company-roles.service.js';
-import { pgRoleDefinitions, pgRoleMembers, savePgRole, assignPgRoles, deletePgRole } from '../services/pg-company-roles.service.js';
+import { isCompanyAdministratorForRoles, legacyRoleDefinitions, permissionCatalog, saveLegacyRole, assignLegacyRoles, deleteLegacyRole } from '../services/company-roles.service.js';
+import { isPgCompanyAdministrator, pgRoleDefinitions, pgRoleMembers, savePgRole, assignPgRoles, deletePgRole } from '../services/pg-company-roles.service.js';
 
 const roleSchema = z.object({ name: z.string().trim().min(1).max(80).refine(name => !name.startsWith('_perp_'), '시스템 예약 이름은 사용할 수 없습니다'),
   scope: z.enum(['self', 'project', 'department', 'all']).default('all'),
@@ -32,7 +32,12 @@ export async function access(req, res) {
   const modules = principal.source === 'perp_db' ? principal.modules : [...enabledSet(req.organization.modules)];
   const features = principal.source === 'perp_db' ? await pgEnabledFeatures(principal.companyId, modules)
     : enabledFeatures(req.organization.enabled_features, req.organization.modules);
+  // Active, nondeleted, scope-all role union, including grants for disabled features (Contract B).
+  const isCompanyAdministrator = principal.source === 'perp_db'
+    ? await isPgCompanyAdministrator(principal.companyId, principal.userId)
+    : isCompanyAdministratorForRoles(legacyRoleDefinitions(principal), principal.roles, true);
   res.json({ org_id: principal.orgId, permissions, modules, features,
+    is_company_administrator: isCompanyAdministrator,
     menus: permissions.filter(code => code.startsWith('menu.')), scope: principal.scope });
 }
 
