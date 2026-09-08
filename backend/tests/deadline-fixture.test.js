@@ -17,12 +17,12 @@ function migrationEffects(conn) {
 }
 
 function assertMigrationEffects(effects) {
-  assert.deepEqual(effects.versions, [1,2,3,4,5,6,7,8,9,10]);
+  assert.deepEqual(effects.versions, [1,2,3,4,5,6,7,8,9,10,13]);
   assert.ok(effects.membershipColumns.includes('roles_version'));
   for (const column of ['counterparty','occurred_at','input_currency','no_receipt_reason']) assert.ok(effects.transactionColumns.includes(column));
   for (const column of ['org_id','receipt_upload_id']) assert.ok(effects.evidenceColumns.includes(column));
-  for (const table of ['receipt_upload','approval_receipt_files','finance_request_replay']) assert.ok(effects.tables.includes(table));
-  for (const trigger of ['receipt_evidence_scope','receipt_file_update','expense_original_update','expense_original_delete']) assert.ok(effects.triggers.includes(trigger));
+  for (const table of ['receipt_upload','approval_receipt_files','finance_request_replay','expense_import_uploads','expense_import_jobs','imported_transaction_identities']) assert.ok(effects.tables.includes(table));
+  for (const trigger of ['receipt_evidence_scope','receipt_file_update','expense_original_update','expense_original_delete','expense_import_job_immutable','expense_import_identity_immutable']) assert.ok(effects.triggers.includes(trigger));
 }
 
 test('API-created companies, role actors and boundary resources remain isolated', { timeout: 60000 }, async () => {

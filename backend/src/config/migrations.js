@@ -1,5 +1,6 @@
 import { migrateReceipts } from './receipt-migration.js';
 import { migrateExpenses } from './expense-migration.js';
+import { migrateExpenseImports } from './expense-import-migration.js';
 
 function columnsOf(conn, table) {
   return new Set(conn.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
@@ -245,6 +246,8 @@ MIGRATIONS.push({
     migrateExpenses(conn);
   },
 });
+
+MIGRATIONS.push({ version: 13, up: migrateExpenseImports });
 
 export function applyMigrations(conn) {
   conn.exec(`

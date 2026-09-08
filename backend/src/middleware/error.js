@@ -31,6 +31,14 @@ export function notFoundHandler(req, res) {
 }
 
 export function errorHandler(error, req, res, _next) {
+  const expenseImport = /^\/api\/v1\/(?:pg\/)?finance\/transactions\/imports(?:\/|$)/i.test(req.path);
+  if (expenseImport) {
+    res.set('Cache-Control', 'private, no-store');
+    if (error?.type === 'entity.parse.failed' || error?.type === 'entity.too.large') {
+      res.status(error.type === 'entity.too.large' ? 413 : 400).json({ error: { code: 'VALIDATION_ERROR', message: '가져오기 요청 형식 또는 크기를 확인하세요.', details: {}, request_id: req.requestId ?? '' } });
+      return;
+    }
+  }
   // JSON 파서 오류는 원본 body를 포함하므로 비밀 입력 경로에서는 기록하지 않는다.
   if (/^\/api\/v1\/(?:pg\/)?agent\/api-key(?:\/|$)/i.test(req.path) && error?.type === "entity.parse.failed") {
     res.set("Cache-Control", "no-store").status(400).json({
@@ -60,7 +68,8 @@ export function errorHandler(error, req, res, _next) {
     });
     return;
   }
-  console.error(`[${req.requestId}] unhandled`, error);
+  // import SQL 오류의 detail에는 불변 snapshot이 들어갈 수 있으므로 코드만 기록한다.
+  console.error(`[${req.requestId}] unhandled`, expenseImport ? { code: error?.code ?? 'INTERNAL' } : error);
   res.status(500).json({
     error: {
       code: "INTERNAL",
