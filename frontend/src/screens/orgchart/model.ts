@@ -43,6 +43,7 @@ const seatSchema: z.ZodType<OrgSeat> = z.lazy(() =>
 );
 
 export const orgChartSchema = z.object({
+  revision: z.string().regex(/^[1-9]\d*$/).optional(),
   roots: z.array(seatSchema),
   unassigned: z.array(orgMemberSchema).catch([]),
 });

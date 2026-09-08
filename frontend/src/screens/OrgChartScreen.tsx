@@ -54,15 +54,17 @@ function OrganizationWorkspace({ screen, session }: Readonly<{ screen: ScreenDef
     setState({ status: "loading", chart: null, members: [], error: null });
     Promise.all([
       apiRequest("/pg/members/org-chart", { session, signal: controller.signal }),
-      apiRequest("/pg/members?limit=1000", { session, signal: controller.signal }),
+      pg ? Promise.resolve(null) : apiRequest("/pg/members?limit=1000", { session, signal: controller.signal }),
     ]).then(([chartData, memberData]) => {
-      const chart = orgChartSchema.parse(chartData), members = membersSchema.parse(memberData).items;
+      const chart = orgChartSchema.parse(chartData);
+      if (pg) z.string().regex(/^[1-9]\d*$/).parse(chart.revision);
+      const members = pg ? [...flattenSeats(chart.roots).flatMap(seat => seat.members), ...chart.unassigned] : membersSchema.parse(memberData).items;
       if (!controller.signal.aborted) setState({ status: "ready", chart, members, error: null });
     }).catch((caught: unknown) => {
       if (!controller.signal.aborted) setState({ status: "error", chart: null, members: [], error: userMessageOf(caught) });
     });
     return () => controller.abort();
-  }, [session, revision]);
+  }, [session, revision, pg]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -78,10 +80,11 @@ function OrganizationWorkspace({ screen, session }: Readonly<{ screen: ScreenDef
 
   useEffect(() => {
     const refresh = () => { setSetupSeat(null); setRevision(value => value + 1); };
+    const focus = () => { if (!setupSeat && !busy) refresh(); };
     window.addEventListener("orbitflow:access-changed", refresh);
-    window.addEventListener("focus", refresh);
-    return () => { window.removeEventListener("orbitflow:access-changed", refresh); window.removeEventListener("focus", refresh); };
-  }, []);
+    window.addEventListener("focus", focus);
+    return () => { window.removeEventListener("orbitflow:access-changed", refresh); window.removeEventListener("focus", focus); };
+  }, [setupSeat, busy]);
 
   const requestedLog = search.get("org-log") === "1";
   useEffect(() => {
@@ -103,15 +106,22 @@ function OrganizationWorkspace({ screen, session }: Readonly<{ screen: ScreenDef
     if (!setupSeat) return;
     setBusy(true); setMutationError(null);
     try {
-      await apiRequest(`/pg/members/departments/${setupSeat.id}`, { method: "PATCH", session, body: { leader_id: input.leaderUserId } });
-      const before = new Set(setupSeat.members.map(member => member.membership_id)), after = new Set(input.assigned);
-      for (const member of state.members.filter(member => after.has(member.membership_id) !== before.has(member.membership_id))) {
-        await apiRequest(`/pg/members/${member.membership_id}/assignment`, { method: "PATCH", session, body: { department_id: after.has(member.membership_id) ? setupSeat.id : null } });
+      if (pg) {
+        await apiRequest(`/pg/members/departments/${setupSeat.id}/seat`, { method: "PATCH", session,
+          body: { expected_revision: state.chart?.revision, leader_id: input.leaderUserId,
+            assigned: input.assigned.filter(id => state.members.some(member => member.membership_id === id && member.status === "active")) } });
+      } else {
+        await apiRequest(`/pg/members/departments/${setupSeat.id}`, { method: "PATCH", session, body: { leader_id: input.leaderUserId } });
+        const before = new Set(setupSeat.members.map(member => member.membership_id)), after = new Set(input.assigned);
+        for (const member of state.members.filter(member => after.has(member.membership_id) !== before.has(member.membership_id))) {
+          await apiRequest(`/pg/members/${member.membership_id}/assignment`, { method: "PATCH", session, body: { department_id: after.has(member.membership_id) ? setupSeat.id : null } });
+        }
       }
-      setNotice(`${setupSeat.name} 자리를 설정했습니다.`);
+      setNotice(`${setupSeat.name} 자리를 설정했습니다.`); reload();
     } catch (caught) {
-      setMutationError(`일부 변경이 적용되었을 수 있습니다. 새 상태를 확인하세요. ${userMessageOf(caught)}`);
-    } finally { setBusy(false); reload(); }
+      setMutationError(pg ? userMessageOf(caught) : `일부 변경이 적용되었을 수 있습니다. 새 상태를 확인하세요. ${userMessageOf(caught)}`);
+      if (!pg) reload();
+    } finally { setBusy(false); }
   }
   async function changeTitle(member: OrgMember, title: string): Promise<void> {
     setBusy(true); setMutationError(null);

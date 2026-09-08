@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { Button } from "../../components/ui/Button";
 import { useModalFocus } from "../../hooks/useModalFocus";
-import { ApiError, apiRequest, userMessageOf, type ApiSession } from "../../services/api";
+import { apiRequest, userMessageOf, type ApiSession } from "../../services/api";
 import "../orglog.css";
 
 const entrySchema = z.object({
@@ -19,7 +19,7 @@ const entrySchema = z.object({
 });
 const listSchema = z.object({ items: z.array(entrySchema) });
 type Entry = z.infer<typeof entrySchema>;
-type LogState = Readonly<{ status: "loading" | "ready" | "empty" | "unsupported" | "error"; entries: readonly Entry[]; error: string | null }>;
+type LogState = Readonly<{ status: "loading" | "ready" | "empty" | "error"; entries: readonly Entry[]; error: string | null }>;
 const FIELD_LABELS: Readonly<Record<string, string>> = {
   department_id: "부서", title: "직책", roles: "역할", name: "이름", parent_id: "상위 부서",
   leader_id: "책임자", access_roles: "접근 그룹", status: "상태",
@@ -54,10 +54,7 @@ export function OrgLogModal({ session, onClose }: Readonly<{ session: ApiSession
       if (!controller.signal.aborted) setState({ status: entries.length ? "ready" : "empty", entries, error: null });
     }).catch((caught: unknown) => {
       if (controller.signal.aborted) return;
-      const unsupported = caught instanceof ApiError && caught.status === 501 && caught.code === "NOT_IMPLEMENTED";
-      setState({ status: unsupported ? "unsupported" : "error", entries: [], error: unsupported
-        ? "이 조직의 PG 감사 기록 저장소는 아직 연결되지 않았습니다. 변경 이력 유무를 확인할 수 없습니다."
-        : userMessageOf(caught) });
+      setState({ status: "error", entries: [], error: userMessageOf(caught) });
     });
     return () => controller.abort();
   }, [session, revision]);
