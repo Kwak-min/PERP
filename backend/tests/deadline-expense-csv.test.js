@@ -44,7 +44,7 @@ function assertCsvError(expectedCode) {
   };
 }
 
-test('loads the exact csv-parse 6.1.0 MIT dependency used by the service', async () => {
+test('loads the exact csv-parse 7.0.2 MIT dependency used by the service', async () => {
   // Given
   const packageUrl = new URL('../package.json', import.meta.resolve('csv-parse/sync'));
 
@@ -52,10 +52,27 @@ test('loads the exact csv-parse 6.1.0 MIT dependency used by the service', async
   const dependency = JSON.parse(await readFile(packageUrl, 'utf8'));
 
   // Then
-  assert.equal(dependency.version, '6.1.0');
+  assert.equal(dependency.version, '7.0.2');
   assert.equal(dependency.license, 'MIT');
-  assert.equal(service().EXPENSE_CSV_PARSER_VERSION, 'expense-csv-v1:csv-parse@6.1.0');
+  assert.equal(service().EXPENSE_CSV_PARSER_VERSION, 'expense-csv-v1:csv-parse@7.0.2');
   assert.equal(service().EXPENSE_CSV_DEFAULT_PROVIDER_SOURCE, 'manual_csv');
+});
+
+test('keeps duplicated prototype columns as own data without replacing the record prototype', async () => {
+  const { parse } = await import('csv-parse/sync');
+  const raw = buffer('__proto__,__proto__,constructor\nfirst,second,plain');
+  const prototypeDescriptors = Object.getOwnPropertyDescriptors(Object.prototype);
+
+  const [record] = parse(raw, { columns: true, group_columns_by_name: true });
+
+  assert.equal(Object.getPrototypeOf(record), Object.prototype);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(record, '__proto__'), {
+    value: ['first', 'second'], writable: true, enumerable: true, configurable: true,
+  });
+  assert.equal(Object.hasOwn(record, 'constructor'), true);
+  assert.equal(record.constructor, 'plain');
+  assert.deepEqual(Object.getOwnPropertyDescriptors(Object.prototype), prototypeDescriptors);
+  assert.throws(() => service().parseExpenseCsv(raw), assertCsvError('CSV_DUPLICATE_HEADER'));
 });
 
 test('parses a representative BOM/RFC4180 file without changing meaningful whitespace or exact money', async () => {
