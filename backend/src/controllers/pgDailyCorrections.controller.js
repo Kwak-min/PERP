@@ -3,6 +3,7 @@ import { pgQuery, pgTransaction } from '../config/pg.js';
 import { pgIdentity } from '../middleware/pgAccess.js';
 import { correctionDate, correctionVersion, assertCorrectionWindow, assertCorrectionVersion } from '../services/daily-corrections.service.js';
 import { ApiError } from '../utils/errors.js';
+import { assertPgProjectAssignee, notifyPgTaskAssignment } from '../services/project-assignment.service.js';
 
 const idSchema = z.string().regex(/^[1-9]\d*$/);
 const projectInput = z.object({ version: correctionVersion, name: z.string().trim().min(1).max(200).optional(),
@@ -39,7 +40,9 @@ async function correct(req, resource, cancel = false) {
     assertCorrectionVersion(before, version);
     if (resource === 'calendar' && before.cancelled_at) throw new ApiError('CONFLICT', '취소한 일정은 변경할 수 없습니다');
     if (resource === 'assets' && before.status === 'disposed') throw new ApiError('CONFLICT', '폐기된 자산은 변경할 수 없습니다');
-    if (changes.assignee_id != null) {
+    if (resource === 'tasks' && changes.assignee_id != null) {
+      await assertPgProjectAssignee(client, { companyId, projectId: before.project_id, userId: changes.assignee_id });
+    } else if (changes.assignee_id != null) {
       const membership = await client.query(`SELECT m.user_id FROM org.company_memberships m JOIN auth.users u ON u.id = m.user_id
         WHERE m.company_id = $1 AND m.user_id = $2 AND m.status = 'active'
           AND u.account_status = 'active' AND u.approval_status = 'approved' FOR SHARE OF m, u`, [companyId, changes.assignee_id]);
@@ -49,12 +52,16 @@ async function correct(req, resource, cancel = false) {
     if (resource === 'projects') assertCorrectionWindow(merged.starts_on, merged.ends_on);
     if (resource === 'calendar' && Date.parse(merged.ends_at) <= Date.parse(merged.starts_at)) throw new ApiError('VALIDATION_ERROR', '종료는 시작보다 늦어야 합니다');
     const entries = Object.entries(changes);
+    if (resource === 'tasks' && entries.length === 1 && Object.hasOwn(changes, 'assignee_id') && String(changes.assignee_id) === String(before.assignee_id)) {
+      return { ...before, id: String(before.id), assignee_id: before.assignee_id == null ? null : String(before.assignee_id) };
+    }
     const after = (await client.query(`UPDATE ${definition.table} t SET ${entries.map(([key], index) => `${key} = $${index + 4}`).join(', ')},
       version = t.version + 1 WHERE t.id = $1 AND ${scope} AND t.version = $3 RETURNING ${fields(definition)}`, [id, companyId, version, ...entries.map(([, value]) => value)])).rows[0];
     if (!after) throw new ApiError('VERSION_CONFLICT', '다른 사용자가 변경했습니다');
     const action = cancel ? 'cancelled' : resource === 'assets' ? 'custody.updated' : 'updated';
     await client.query(`INSERT INTO org.daily_correction_events(company_id, actor_id, resource_type, resource_id, action, before_data, after_data)
       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb)`, [companyId, userId, resource, id, action, JSON.stringify(before), JSON.stringify(after)]);
+    if (resource === 'tasks' && String(after.assignee_id) !== String(before.assignee_id)) await notifyPgTaskAssignment(client, { companyId, userId }, after);
     if (resource === 'assets') await client.query(`INSERT INTO asset.history(asset_id, event_type, actor_id, note) VALUES ($1,'custody.updated',$2,$3)`,
       [id, userId, JSON.stringify({ before: { assignee_id: before.assignee_id, status: before.status }, after: { assignee_id: after.assignee_id, status: after.status } })]);
     return { ...after, id: String(after.id), ...(after.assignee_id != null ? { assignee_id: String(after.assignee_id) } : {}), ...(cancel ? { cancelled: true } : {}) };

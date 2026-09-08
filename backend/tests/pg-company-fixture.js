@@ -19,7 +19,7 @@ export async function installCompanyFixture() {
     permissions: [{ role_id: '1', code: 'task.read' }],
     modules: [{ company_id: '77', module_key: 'tasks' }],
     featureSettings: [],
-    departments: [], projects: [], tasks: [], events: [], orgEvents: [], sessions: [], logs: [], replays: [], duesCharges: [],
+    departments: [], projects: [], tasks: [], notifications: [], events: [], orgEvents: [], sessions: [], logs: [], replays: [], duesCharges: [],
   };
   let failMembership = false, schemaAvailable = true, featureSchemaAvailable = true, failSettingsAudit = false;
   const queries = [];
@@ -149,6 +149,12 @@ export async function installCompanyFixture() {
         .filter(m => data.companies.some(c => c.id === m.company_id && c.is_active)).map(m => ({ ...m, name: data.companies.find(c => c.id === m.company_id).name })) };
     }
     if (text.includes('AS members') && text.includes('org.company_memberships')) return { rows: [{ members: data.memberships.filter(m => m.company_id === values[0] && m.status === 'active').length, projects: 0, tasks: 0, documents: 0 }] };
+    if (text.includes('JOIN project.projects p ON p.company_id = m.company_id')) {
+      const [companyId, projectId, userId] = values;
+      return { rows: data.memberships.filter(m => m.company_id === companyId && m.user_id === userId && m.status === 'active')
+        .filter(m => data.users.some(u => u.id === m.user_id && u.account_status === 'active' && u.approval_status === 'approved'))
+        .filter(m => data.projects.some(p => p.id === projectId && p.company_id === companyId && p.lead_id === m.user_id)) };
+    }
     if (text.includes('FROM org.company_memberships m JOIN auth.users u')) {
       return { rows: data.memberships.filter(m => m.company_id === values[values.length - 1] && (values.length === 1 || m.user_id === values[0]) && m.status === 'active')
         .filter(m => !text.includes("AND u.account_status = 'active'") || data.users.some(u => u.id === m.user_id && u.account_status === 'active' && u.approval_status === 'approved'))
@@ -174,11 +180,12 @@ export async function installCompanyFixture() {
       return { rows: [], rowCount: department ? 1 : 0 };
     }
     if (text.includes('INSERT INTO project.projects')) {
-      const project = { id: String(data.projects.length + 200), company_id: values[0], name: values[1] };
+      const project = { id: String(data.projects.length + 200), company_id: values[0], name: values[1], lead_id: values[5] };
       data.projects.push(project); return { rows: [project], rowCount: 1 };
     }
     if (text.includes('FROM project.projects')) return { rows: data.projects.filter(p => p.company_id === values[values.length - 1] && (values.length === 1 || p.id === values[0])) };
-    if (text.includes('INSERT INTO project.tasks')) { data.tasks.push(values); return { rows: [{ id: '300' }], rowCount: 1 }; }
+    if (text.includes('INSERT INTO project.tasks')) { data.tasks.push(values); return { rows: [{ id: '300', assignee_id: values[1], title: values[2], version: 1 }], rowCount: 1 }; }
+    if (text.includes('INSERT INTO notice.notifications')) { data.notifications.push(values); return { rows: [], rowCount: 1 }; }
     if (text.includes('accounting.request_replays')) {
       const replay = data.replays.find(r => r.scope.every((value, i) => value === values[i]));
       if (text.startsWith('INSERT')) {

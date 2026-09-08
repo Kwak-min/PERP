@@ -1223,9 +1223,9 @@ export async function notifications(req, res) {
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
     `SELECT kind AS 유형, title AS 제목, body AS 내용,
-            CASE WHEN is_read THEN 'done' ELSE 'pending' END AS status, created_at AS 시각
-       FROM notice.notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200`,
-    [userId],
+            CASE WHEN is_read THEN 'done' ELSE 'pending' END AS status, created_at AS 시각, id AS __id, kind, link
+       FROM notice.notifications WHERE user_id = $1 AND company_id = $2 ORDER BY created_at DESC, id DESC LIMIT 200`,
+    [userId, companyId],
   );
   res.json({ items: rows });
 }

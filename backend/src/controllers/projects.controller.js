@@ -32,11 +32,6 @@ const milestoneSchema = z.object({
   due_at: z.string().nullable().optional(),
 });
 
-const memberSchema = z.object({
-  user_id: z.string(),
-  role: z.string().default("member"),
-});
-
 const view = (p) => ({
   id: p.id,
   name: p.name,
@@ -187,17 +182,4 @@ export function addMilestone(req, res) {
   res.status(201).json({ id: milestone.id, name: milestone.name, due_at: milestone.due_at });
 }
 
-export function addMember(req, res) {
-  const principal = resolvePrincipal(req);
-  principal.require("project.write");
-  const payload = memberSchema.parse(req.body);
-  const project = getScoped("project", principal, req.params.projectId, "project");
-  const member = insert("project_member", {
-    tenant_id: principal.tenantId,
-    project_id: project.id,
-    user_id: payload.user_id,
-    role: payload.role,
-    created_by: principal.userId,
-  });
-  res.status(201).json({ project_id: project.id, user_id: member.user_id, role: member.role });
-}
+export { addLegacyProjectMember as addMember } from './projectMembers.controller.js';

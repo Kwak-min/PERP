@@ -23,6 +23,7 @@ test('PG project title and dates persist with mandatory optimistic version', asy
 });
 test('PG reassignment uses actual company membership, not global user company', async () => {
   const project_id = await project(); const id = (await request('/tasks', { project_id, title: 'Task' }, 'POST')).body.id;
+  assert.equal((await request(`/projects/${project_id}/members`, { user_id: '102' }, 'POST')).status, 201);
   const saved = await request(`/tasks/${id}`, { version: 1, assignee_id: '102' }); assert.equal(saved.status, 200); assert.equal(saved.body.assignee_id, '102');
   assert.equal((await request(`/tasks/${id}`, { version: 2, assignee_id: '103' })).status, 403);
   assert.equal((await request(`/tasks/${id}`, { version: 1, assignee_id: null })).status, 409);

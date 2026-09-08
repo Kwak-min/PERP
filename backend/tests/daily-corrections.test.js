@@ -28,6 +28,7 @@ test('task reassignment accepts actual same-org membership and rejects foreign u
   const p = await project(); const task = (await request('/tasks', { title: 'Task', project_id: p.id }, 'POST')).body;
   const tenantId = db().prepare('SELECT tenant_id FROM membership WHERE org_id = ? AND user_id = ?').get(owner.orgId, owner.userId).tenant_id;
   insert('membership', { tenant_id: tenantId, org_id: owner.orgId, user_id: foreign.userId, status: 'active', created_by: owner.userId });
+  assert.equal((await request(`/projects/${p.id}/members`, { user_id: foreign.userId }, 'POST')).status, 201);
   const saved = await request(`/tasks/${task.id}`, { version: task.version, assignee_id: foreign.userId });
   assert.equal(saved.status, 200); assert.equal(saved.body.assignee_id, foreign.userId);
   db().prepare('UPDATE membership SET status = ? WHERE org_id = ? AND user_id = ?').run('inactive', owner.orgId, foreign.userId);

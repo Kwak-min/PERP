@@ -5,6 +5,7 @@ import { createCompany } from "../controllers/pgCompanies.controller.js";
 import * as members from "../controllers/pgMembers.controller.js";
 import * as mod from "../controllers/pgModules.controller.js";
 import * as corrections from '../controllers/pgDailyCorrections.controller.js';
+import * as projectMembers from '../controllers/projectMembers.controller.js';
 import { pgRoute, pgRecordRoute } from "../middleware/pgAccess.js";
 import { asyncRoute } from "../middleware/error.js";
 import { withPgFeature } from "../middleware/features.js";
@@ -64,7 +65,9 @@ pgRouter.post('/calendar/:id/cancel', asyncRoute(pgRoute(corrections.cancelCalen
 pgRouter.get('/assets/:id/custody', asyncRoute(pgRoute(corrections.getAssetCustody, 'asset.read', 'assets')));
 pgRouter.patch('/assets/:id/custody', asyncRoute(pgRoute(corrections.patchAssetCustody, 'asset.write', 'assets')));
 pgRouter.get("/tasks", asyncRoute(pgRoute(mod.tasks, "task.read", "tasks")));
-pgRouter.post("/tasks", asyncRoute(pgRoute(mod.createTask, "task.write", "tasks")));
+pgRouter.post("/tasks", asyncRoute(pgRoute(projectMembers.createPgProjectTask, "task.write", "tasks")));
+pgRouter.get('/projects/:id/members', asyncRoute(pgRoute(projectMembers.listPgProjectMembers, 'project.read', 'projects')));
+pgRouter.post('/projects/:id/members', asyncRoute(pgRoute(projectMembers.addPgProjectMember, 'project.write', 'projects')));
 pgRouter.get("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.approvals))));
 pgRouter.post("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.createApproval), "approval.request", null)));
 pgRouter.post('/approvals/:id/decide', asyncRoute(pgRoute(withPgFeature('approvals', decidePgApproval), 'approval.decide', null)));

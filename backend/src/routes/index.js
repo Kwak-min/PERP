@@ -12,6 +12,7 @@ import { integrationsRouter } from "./integrations.routes.js";
 import { documentsRouter } from "./documents.routes.js";
 import { financeRouter } from "./finance.routes.js";
 import { membersRouter } from "./members.routes.js";
+import { notificationsRouter } from './notifications.routes.js';
 import { pgRouter } from "./pgAuth.routes.js";
 import { projectsRouter } from "./projects.routes.js";
 import { tasksRouter } from "./tasks.routes.js";
@@ -28,6 +29,7 @@ const REGISTRY = [
   { path: "/pg", router: pgRouter, module: null },
   { path: "/tenants", router: tenantsRouter, module: null },
   { path: "/members", router: membersRouter, module: null },
+  { path: '/notifications', router: notificationsRouter, module: null },
   { path: "/projects", router: projectsRouter, module: "projects" },
   { path: "/tasks", router: tasksRouter, module: "tasks" },
   { path: "/calendar", router: calendarRouter, module: "calendar" },
