@@ -15,12 +15,18 @@ import { networkAudit, protectedPorts } from '../../scripts/deadline-isolation-g
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const args = process.argv.slice(2);
-if (args[0] !== '--scenario' || args[1] !== 'baseline' || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline [--probe error|cancel]');
-  process.exitCode = 2;
-} else {
+const baselineArgs = args[0] === '--scenario' && args[1] === 'baseline'
+  && (args.length === 2 || (args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])));
+if (baselineArgs) {
   assertIsolated();
   await baseline(args[3]);
+} else if (args.length === 2 && args[0] === '--scenario' && args[1] === 'month-summary') {
+  assertIsolated();
+  const { monthSummary } = await import('./deadline-month-summary.e2e.mjs');
+  await monthSummary();
+} else {
+  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline [--probe error|cancel] | --scenario month-summary');
+  process.exitCode = 2;
 }
 
 // 브라우저 DOM 변경 신호를 기다린다. sleep/networkidle/polling으로 완성을 추정하지 않는다.
