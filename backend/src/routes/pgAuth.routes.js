@@ -5,6 +5,7 @@ import { createCompany } from "../controllers/pgCompanies.controller.js";
 import * as members from "../controllers/pgMembers.controller.js";
 import * as mod from "../controllers/pgModules.controller.js";
 import * as expenses from '../controllers/pgExpenses.controller.js';
+import * as analytics from '../controllers/pgAnalytics.controller.js';
 import * as corrections from '../controllers/pgDailyCorrections.controller.js';
 import * as projectMembers from '../controllers/projectMembers.controller.js';
 import { pgRoute, pgRecordRoute } from "../middleware/pgAccess.js";
@@ -21,6 +22,11 @@ import { duesPaymentHistory, recordDuesPayment } from '../controllers/pgDuesPaym
 import { receiptRaw, uploadReceipt, downloadReceipt } from '../controllers/receiptFiles.controller.js';
 
 export const pgRouter = Router();
+pgRouter.get('/analytics/kpis', asyncRoute(pgRoute(analytics.kpis, 'analytics.read', 'analytics')));
+pgRouter.get('/analytics/reports/:reportKey', asyncRoute(pgRoute(analytics.report, 'analytics.read', 'analytics')));
+pgRouter.post('/analytics/exports', asyncRoute(pgRoute(analytics.createExport, 'analytics.read', 'analytics')));
+pgRouter.get('/analytics/exports', asyncRoute(pgRoute(analytics.listExports, 'analytics.read', 'analytics')));
+pgRouter.get('/analytics/exports/:exportId/download', asyncRoute(pgRoute(analytics.downloadExport, 'analytics.read', 'analytics')));
 pgRouter.post('/finance/expenses', asyncRoute(pgRoute(expenses.createExpense, 'transaction.write', 'finance')));
 pgRouter.post('/finance/transactions/:id/receipts', asyncRoute(pgRoute(expenses.appendReceipts, 'transaction.write', 'finance')));
 pgRouter.get('/finance/transactions/:id', asyncRoute(pgRoute(expenses.transactionDetail, 'transaction.read', 'finance')));
