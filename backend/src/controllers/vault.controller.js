@@ -4,6 +4,7 @@ import { resolvePrincipal } from "../middleware/auth.js";
 import { getScoped, hardDelete, insert, listScoped, softDelete, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
 import { CANDIDATE_LIMIT, legacyVaultScope, vaultSemantic } from "../services/vault-semantic.service.js";
+import { graphEdge, graphIdentity, graphNode } from "../services/graph-identity.service.js";
 import { ApiError, notFound } from "../utils/errors.js";
 
 const WIKILINK = /\[\[([^\]]+)\]\]/g;
@@ -67,21 +68,13 @@ function reindexLinks(principal, note) {
     .map((m) => m[1].trim())
     .filter(Boolean);
   for (const title of [...new Set(targets)]) {
-    const target = listScoped(
-      "vault_note",
-      principal,
-      [
-        { sql: "owner_id = ?", params: [principal.userId] },
-        { sql: "title = ?", params: [title] },
-      ],
-      { limit: 1 },
-    )[0];
+    // 본문의 [[제목]]은 재계산 가능한 선언이다. 현재 제목 조회 결과를 영구 ID binding으로 저장하지 않는다.
     insert("vault_link", {
       tenant_id: principal.tenantId,
       owner_id: principal.userId,
       source_id: note.id,
       target_title: title,
-      target_id: target ? target.id : null,
+      target_id: null,
       created_by: principal.userId,
     });
   }
@@ -272,13 +265,55 @@ export async function graph(req, res) {
     [{ sql: "owner_id = ?", params: [principal.userId] }],
     { limit: 2000 },
   );
-  const known = new Set(notes.map((n) => n.id));
+  const identities = new Map(notes.map((note) => [note.id, graphIdentity({
+    store: "legacy", company: principal.orgId, owner: principal.userId, kind: "note", opaqueId: note.id,
+  })]));
+  const titleIds = new Map();
+  for (const note of notes) {
+    const key = note.title.trim().toLowerCase();
+    const ids = titleIds.get(key) ?? [];
+    ids.push(note.id);
+    titleIds.set(key, ids);
+  }
+  const edges = [];
+  for (const link of links) {
+    const sourceIdentity = identities.get(link.source_id);
+    if (!sourceIdentity) continue;
+    if (link.target_id != null) {
+      const validId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(link.target_id);
+      const targetIdentity = validId ? identities.get(link.target_id) : null;
+      edges.push(graphEdge(
+        { source: link.source_id, target_id: link.target_id, target_title: link.target_title },
+        sourceIdentity,
+        targetIdentity,
+        targetIdentity
+          ? { binding: "explicit", resolution: "resolved" }
+          : { binding: "explicit", resolution: validId ? "unavailable" : "unresolved", reason: validId ? "target_unavailable" : "malformed_target_id" },
+      ));
+      continue;
+    }
+    const ids = titleIds.get(link.target_title.trim().toLowerCase()) ?? [];
+    const targetIdentity = ids.length === 1 ? identities.get(ids[0]) : null;
+    edges.push(graphEdge(
+      { source: link.source_id, target_id: ids.length === 1 ? ids[0] : null, target_title: link.target_title },
+      sourceIdentity,
+      targetIdentity,
+      targetIdentity
+        ? { binding: "title", resolution: "resolved" }
+        : { binding: "title", resolution: "unresolved", reason: ids.length > 1 ? "duplicate_title" : "title_not_found" },
+    ));
+  }
   const semantic = vaultSemantic.graph(scope, notes);
-  const edges = [...links.filter(l => known.has(l.source_id))
-    .map(l => ({ source: l.source_id, target_id: known.has(l.target_id) ? l.target_id : null, target_title: l.target_title })), ...semantic.edges];
+  for (const edge of semantic.edges) {
+    const sourceIdentity = identities.get(edge.source);
+    const targetIdentity = identities.get(edge.target_id);
+    if (sourceIdentity && targetIdentity) edges.push(graphEdge(edge, sourceIdentity, targetIdentity, { binding: "inference", resolution: "resolved" }));
+  }
+  const connected = new Set(edges.filter((edge) => edge.resolution === "resolved")
+    .flatMap((edge) => [edge.source, edge.target_id]).filter(Boolean));
   res.json({
-    nodes: notes.map((n) => ({ id: n.id, title: n.title, folder: n.folder })),
+    nodes: notes.map((note) => graphNode({ id: note.id, title: note.title, folder: note.folder }, identities.get(note.id))),
     edges, analysis: semantic.analysis,
-    orphans: notes.filter(n => !edges.some(e => e.source === n.id || e.target_id === n.id)).map(n => n.id),
+    orphans: notes.filter((note) => !connected.has(note.id)).map((note) => note.id),
   });
 }

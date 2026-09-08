@@ -1,8 +1,28 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ALPHA_MIN, buildScene, boundingRadius, fitDistance, pickNode, projectScene, projected, screenRadius, stepScene } from "../src/screens/vault/graph3d.ts";
+import { ALPHA_MIN, buildScene, boundingRadius, fitDistance, graphRendererId, pickNode, projectScene, projected, screenRadius, stepScene } from "../src/screens/vault/graph3d.ts";
 
-const graph = (count, edges = []) => ({ nodes: Array.from({ length: count }, (_, i) => ({ id: String(i), title: `Note ${i}`, folder: `/folder-${i % 4}` })), edges, orphans: [] });
+const graph = (count, rawEdges = []) => {
+  const nodes = Array.from({ length: count }, (_, i) => {
+    const identity = { store: "legacy", company: "company", owner: "owner", kind: "note", opaque_id: String(i) };
+    return { id: String(i), renderer_id: graphRendererId(identity), identity, title: `Note ${i}`, folder: `/folder-${i % 4}` };
+  });
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const edges = rawEdges.map((edge) => {
+    const source = byId.get(edge.source);
+    const target = edge.target_id === null ? null : byId.get(edge.target_id);
+    const resolution = target ? "resolved" : edge.target_id === null ? "unresolved" : "unavailable";
+    return {
+      ...edge,
+      target_id: target?.id ?? null,
+      source_renderer_id: source?.renderer_id ?? "missing-source",
+      target_renderer_id: target?.renderer_id ?? null,
+      binding: edge.target_id === null ? "title" : "explicit",
+      resolution,
+    };
+  });
+  return { nodes, edges, orphans: [] };
+};
 const settle = (scene) => { while (scene.alpha > ALPHA_MIN) stepScene(scene); };
 
 test("repulsion magnitude is k squared / distance, with symmetric forces", () => {
@@ -48,7 +68,8 @@ test("stale explicit IDs and ambiguous titles do not invent links", () => {
   data.nodes[1].title = data.nodes[2].title = "duplicate";
   const scene = buildScene(data);
   assert.equal(scene.linkCount, 0);
-  assert.equal(scene.unresolved, 2);
+  assert.equal(scene.unresolved, 1);
+  assert.equal(scene.unavailable, 1);
 });
 
 test("case-folded duplicate PG titles stay unresolved in the renderer", () => {
@@ -85,13 +106,13 @@ test("linked notes remain legible at fit when an isolated note is present", () =
   }
 });
 
-test("company hub links remain deduplicated and picking chooses nearest sphere", () => {
+test("reciprocal links remain directed and picking chooses nearest sphere", () => {
   const scene = buildScene(graph(3, [
     {source:"0",target_id:"1",target_title:"Note 1"},
     {source:"1",target_id:"0",target_title:"Note 0"},
     {source:"0",target_id:"2",target_title:"Note 2"},
   ]));
-  assert.equal(scene.linkCount, 2);
+  assert.equal(scene.linkCount, 3);
   scene.pos.set([0,0,-100, 0,0,100, 100,0,0]);
   projectScene(scene, {yaw:0,pitch:0,distance:500}, 600, 500);
   assert.equal(pickNode(scene,300,250),0);

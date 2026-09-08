@@ -1,9 +1,11 @@
 import { z } from "zod";
 
+import { versionTokenSchema } from "./graph3d.ts";
+
 export const analysisSchema = z.object({
   state: z.enum(["pending", "ready", "unavailable", "error", "not_analyzed"]),
   reason: z.string().optional(),
-  version: z.number().int(),
+  version: versionTokenSchema,
   model: z.string().nullable(),
   local_only: z.literal(true),
   candidates: z.number().int().optional(),
@@ -20,10 +22,16 @@ export const noteSchema = z.object({
   sensitivity: z.string().catch("personal"),
   agent_enabled: z.boolean().catch(true),
   pinned: z.boolean().catch(false),
-  version: z.number().int().nonnegative(),
+  version: versionTokenSchema,
   updated_at: z.string().catch(""),
   analysis: analysisSchema.optional(),
 });
+
+export function parseNoteResult(targetId: string, input: unknown): Note {
+  const note = noteSchema.parse(input);
+  if (note.id !== targetId) throw new Error("DETAIL_ID_MISMATCH");
+  return note;
+}
 
 export const noteListSchema = z.object({
   items: z.array(noteSchema),
@@ -35,6 +43,12 @@ export const noteDetailSchema = noteSchema.extend({
   content: z.string(),
   backlinks: z.array(z.unknown()).catch([]),
 });
+
+export function parseNoteDetail(targetId: string, input: unknown): NoteDetail {
+  const detail = noteDetailSchema.parse(input);
+  if (detail.id !== targetId) throw new Error("DETAIL_ID_MISMATCH");
+  return detail;
+}
 
 export type Note = z.infer<typeof noteSchema>;
 export type NoteDetail = z.infer<typeof noteDetailSchema>;

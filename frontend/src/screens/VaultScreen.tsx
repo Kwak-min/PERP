@@ -11,9 +11,10 @@ import { NoteAnalysisPanel } from "./vault/NoteAnalysisPanel";
 import {
   EMPTY_DRAFT,
   draftOf,
-  noteDetailSchema,
   noteListSchema,
   noteSchema,
+  parseNoteDetail,
+  parseNoteResult,
   tagsOf,
   type Note,
   type NoteDraft,
@@ -27,7 +28,7 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
   const [folders, setFolders] = useState<readonly string[]>([]);
   const [query, setQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editingVersion, setEditingVersion] = useState(0);
+  const [editingVersion, setEditingVersion] = useState<string | number>(0);
   const [draft, setDraft] = useState<NoteDraft>(EMPTY_DRAFT);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -88,7 +89,8 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
     setBusy(true);
     setError(null);
     try {
-      const detail = noteDetailSchema.parse(
+      const detail = parseNoteDetail(
+        noteId,
         await apiRequest(`${vaultBase}/notes/${noteId}`, { session: apiSession, signal: controller.signal }),
       );
       if (controller.signal.aborted) return;
@@ -118,7 +120,7 @@ export function VaultScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) 
     };
     try {
       if (editingId) {
-        const updated = noteSchema.parse(await apiRequest(`${vaultBase}/notes/${editingId}`, {
+        const updated = parseNoteResult(editingId, await apiRequest(`${vaultBase}/notes/${editingId}`, {
           method: "PATCH", session: apiSession, signal: controller.signal, body: { ...body, version: editingVersion },
         }));
         if (controller.signal.aborted) return;

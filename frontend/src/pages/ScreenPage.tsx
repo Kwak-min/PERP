@@ -6,6 +6,7 @@ import { AssetCustodyModal } from '../components/common/AssetCustodyModal';
 import { CalendarSurface } from "../components/data/CalendarSurface";
 import { isOperationalScreen, OperationalSurface } from "../components/data/OperationalSurface";
 import { CreateFormModal } from "../components/common/CreateFormModal";
+import { parseDocumentFormDetail } from "../components/common/createFormContract";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { SectionCard } from "../components/ui/SectionCard";
@@ -401,9 +402,12 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const handleEdit = editResource && editCreateConfig
     ? async (id: string) => {
         try {
-          const data = (await apiRequest(`/pg/records/${editResource}/${id}`, {
+          const response = await apiRequest(`/pg/records/${editResource}/${id}`, {
             ...(apiSession ? { session: apiSession } : {}),
-          })) as Record<string, unknown>;
+          });
+          const data = editResource === "documents"
+            ? parseDocumentFormDetail(id, response)
+            : response as Record<string, unknown>;
           const initialValues: Record<string, string> = {};
           for (const [key, value] of Object.entries(data)) {
             initialValues[key] = value == null ? "" : String(value);
@@ -666,6 +670,11 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
           session={apiSession}
           method="PATCH"
           initialValues={editModal.initialValues}
+          {...(editResource === "documents"
+            ? { versionField: "version" as const }
+            : ["transactions", "budgets", "settlements", "dues"].includes(editResource ?? "")
+              ? { versionField: "expected_version" as const }
+              : {})}
           onClose={() => setEditModal(null)}
           onCreated={() => {
             setReloadKey((key) => key + 1);

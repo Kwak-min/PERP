@@ -34,6 +34,7 @@ export async function startDailyNativePostgres() {
     run('pg_ctl', ['-D', data, '-l', path.join(root, 'postgres.log'), '-o', `-h 127.0.0.1 -p ${port}`, '-w', 'start']); started = true;
     process.env.DATABASE_URL = ''; process.env.PG_HOST = '127.0.0.1'; process.env.PG_PORT = String(port);
     process.env.PG_DATABASE = 'postgres'; process.env.PG_USER = 'daily_test'; process.env.PG_PASSWORD = '';
+    process.env.PG_CONNECTION_TIMEOUT_MS = '5000';
     pool = new pg.Pool({ host: '127.0.0.1', port, database: 'postgres', user: 'daily_test' });
     for (const file of ['perp_schema.sql', ...[2,3,4,5,6,7].map(v => `perp_additions_v${v}.sql`), 'perp_additions_v8_daily_finance.sql', 'perp_additions_v9_daily_corrections.sql', 'perp_additions_v9_daily_corrections.sql', 'perp_additions_v10_org_audit.sql']) {
       await pool.query(await readFile(new URL(`../../db/${file}`, import.meta.url), 'utf8'));

@@ -7,7 +7,7 @@ import { SectionCard } from "../components/ui/SectionCard";
 import type { ScreenDefinition } from "../routes/catalog";
 import { apiRequest, userMessageOf } from "../services/api";
 import { isPgWorkspace } from "../services/workspace";
-import { useSession } from "../store/session";
+import { sessionStore, useSession } from "../store/session";
 import { MarkdownView } from "./vault/MarkdownView";
 import {
   ALPHA_MIN,
@@ -29,8 +29,10 @@ import {
 import {
   SENSITIVITY_LABEL,
   documentAnalysisSchema,
-  documentDetailSchema,
   knowledgeGraphSchema,
+  membersOfKnowledgeHub,
+  parseDocumentDetail,
+  parseDocumentWriteResult,
   uploadedDocumentSchema,
   type KnowledgeEdge,
   type KnowledgeNode,
@@ -63,6 +65,9 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
   const fittedRef = useRef<boolean>(false);
   const pointerRef = useRef<Pointer>({ down: false, x: 0, y: 0, moved: 0 });
   const openRequest = useRef<AbortController | null>(null);
+  const graphRequest = useRef<AbortController | null>(null);
+  const mutationRequest = useRef<AbortController | null>(null);
+  const scopeEpoch = useRef(0);
 
   const [stats, setStats] = useState({ documents: 0, spaces: 0, chunks: 0, restricted: 0 });
   const [graphEdges, setGraphEdges] = useState<readonly KnowledgeEdge[]>([]);
@@ -83,6 +88,10 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
   );
   const pgWorkspace = isPgWorkspace(session?.orgId);
   const documentBase = pgWorkspace ? "/pg/documents" : "/documents";
+  const scopeIsCurrent = useCallback((): boolean => {
+    const active = sessionStore.getSnapshot();
+    return active?.token === apiSession?.token && active?.orgId === apiSession?.orgId;
+  }, [apiSession]);
 
   const draw = useCallback((): void => {
     const canvas = canvasRef.current;
@@ -237,22 +246,26 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
   }, [tick]);
 
   const loadGraph = useCallback(async (): Promise<void> => {
-    if (!apiSession) return;
+    if (!apiSession || !scopeIsCurrent()) return;
+    graphRequest.current?.abort();
+    openRequest.current?.abort();
+    const controller = new AbortController();
+    graphRequest.current = controller;
+    setSelected(null);
+    setDetail(null);
+    setEditing(false);
     try {
       const graph = knowledgeGraphSchema.parse(
-        await apiRequest(`${documentBase}/graph`, { session: apiSession }),
+        await apiRequest(`${documentBase}/graph`, { session: apiSession, signal: controller.signal }),
       );
+      if (controller.signal.aborted || !scopeIsCurrent()) return;
       nodesRef.current = graph.nodes;
       paletteRef.current = folderPalette(graph.nodes);
       sceneRef.current = buildScene({
-        nodes: graph.nodes.map((n) => ({ id: n.id, title: n.title, folder: n.folder })),
-        edges: graph.edges.map(({ source, target_id, target_title, kind, score, provenance }) => ({
-          source,
-          target_id,
-          target_title,
-          kind: kind === "ai_similarity" ? "ai_similarity" : "manual",
-          ...(score === undefined ? {} : { score }),
-          ...(provenance === undefined ? {} : { provenance }),
+        nodes: graph.nodes.map(({ id, renderer_id, identity, title, folder }) => ({ id, renderer_id, identity, title, folder })),
+        edges: graph.edges.map((edge) => ({
+          ...edge,
+          kind: edge.kind === "ai_similarity" ? "ai_similarity" : "manual",
         })),
         orphans: graph.orphans,
       });
@@ -270,36 +283,60 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
       setError(null);
       kick();
     } catch (caught) {
-      setError(userMessageOf(caught));
+      if (!controller.signal.aborted && scopeIsCurrent()) setError(userMessageOf(caught));
+    } finally {
+      if (graphRequest.current === controller) graphRequest.current = null;
     }
-  }, [apiSession, documentBase, kick, pgWorkspace]);
+  }, [apiSession, documentBase, kick, pgWorkspace, scopeIsCurrent]);
 
   useEffect(() => {
+    setBusy(false);
+    setNotice(null);
     void loadGraph();
+    return () => {
+      scopeEpoch.current += 1;
+      mutationRequest.current?.abort();
+      graphRequest.current?.abort();
+      openRequest.current?.abort();
+      mutationRequest.current = null;
+      graphRequest.current = null;
+      openRequest.current = null;
+    };
   }, [loadGraph]);
 
   async function upload(file: File): Promise<void> {
-    if (!apiSession || (pgWorkspace && !uploadProjectId)) return;
+    if (!apiSession || !scopeIsCurrent() || mutationRequest.current || (pgWorkspace && !uploadProjectId)) return;
+    const controller = new AbortController();
+    mutationRequest.current = controller;
+    const epoch = scopeEpoch.current;
+    const current = (): boolean => epoch === scopeEpoch.current && !controller.signal.aborted && scopeIsCurrent();
+    const snapshot = { session: apiSession, base: documentBase, projectId: uploadProjectId };
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
       const lower = file.name.toLowerCase();
       const mime = lower.endsWith(".md") ? "text/markdown" : lower.endsWith(".txt") ? "text/plain" : file.type;
-      const created = uploadedDocumentSchema.parse(await apiRequest(`${documentBase}/upload`, {
+      const content = base64Of(await file.arrayBuffer());
+      if (!current()) return;
+      const created = uploadedDocumentSchema.parse(await apiRequest(`${snapshot.base}/upload`, {
         method: "POST",
-        session: apiSession,
+        session: snapshot.session,
+        signal: controller.signal,
         body: {
           filename: file.name,
           mime,
-          content_base64: base64Of(await file.arrayBuffer()),
-          ...(pgWorkspace ? { project_id: uploadProjectId } : {}),
+          content_base64: content,
+          ...(pgWorkspace ? { project_id: snapshot.projectId } : {}),
         },
       }));
+      if (!current()) return;
       const analysis = created.analysis?.state === "pending"
-        ? documentAnalysisSchema.parse(await apiRequest(`${documentBase}/${created.id}/analysis?wait=1`, { session: apiSession }))
+        ? documentAnalysisSchema.parse(await apiRequest(`${snapshot.base}/${created.id}/analysis?wait=1`, { session: snapshot.session, signal: controller.signal }))
         : created.analysis;
+      if (!current()) return;
       await loadGraph();
+      if (!current()) return;
       const stored = pgWorkspace ? "회사 문서 저장" : "업로드·RAG 색인";
       if (analysis?.state === "ready") {
         setNotice(`${created.filename} ${stored}과 로컬 AI 유사 관계 분석을 완료했습니다.`);
@@ -309,67 +346,84 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
         setNotice(`${created.filename} ${stored}은 완료했지만 로컬 AI 유사 관계 분석은 완료되지 않았습니다.`);
       }
     } catch (caught) {
-      setError(userMessageOf(caught));
+      if (current()) setError(userMessageOf(caught));
     } finally {
-      setBusy(false);
+      if (mutationRequest.current === controller) {
+        mutationRequest.current = null;
+        if (current()) setBusy(false);
+      }
     }
   }
 
   const openNode = useCallback(
     async (index: number): Promise<void> => {
       const node = nodesRef.current[index];
-      if (!node) return;
+      if (!node || !scopeIsCurrent()) return;
+      openRequest.current?.abort();
       setSelected(node);
       setEditing(false);
       setDetail(null);
       if (!apiSession || node.kind !== "document") return;
-      openRequest.current?.abort();
       const controller = new AbortController();
       openRequest.current = controller;
       setBusy(true);
       try {
-        const parsed = documentDetailSchema.parse(
+        const parsed = parseDocumentDetail(
+          node.id,
           await apiRequest(`${documentBase}/${node.id}`, { session: apiSession, signal: controller.signal }),
         );
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || !scopeIsCurrent()) return;
         setDetail({
           content: parsed.content,
           version: parsed.version,
           revisions: parsed.versions.length,
         });
       } catch (caught) {
-        if (!controller.signal.aborted) setError(userMessageOf(caught));
+        if (!controller.signal.aborted && scopeIsCurrent()) setError(userMessageOf(caught));
       } finally {
         if (openRequest.current === controller) {
           openRequest.current = null;
-          setBusy(false);
+          if (scopeIsCurrent()) setBusy(false);
         }
       }
     },
-    [apiSession, documentBase],
+    [apiSession, documentBase, scopeIsCurrent],
   );
 
   async function save(): Promise<void> {
-    if (!apiSession || !selected || !detail) return;
+    if (!apiSession || !scopeIsCurrent() || !selected || !detail || mutationRequest.current) return;
+    const controller = new AbortController();
+    mutationRequest.current = controller;
+    const epoch = scopeEpoch.current;
+    const current = (): boolean => epoch === scopeEpoch.current && !controller.signal.aborted && scopeIsCurrent();
+    // Cancellation does not undo a committed write. Never retarget its captured body/version.
+    const snapshot = { session: apiSession, base: documentBase, target: selected, detail: { ...detail } };
     setBusy(true);
     setError(null);
     try {
-      await apiRequest(`${documentBase}/${selected.id}`, {
+      const updated = parseDocumentWriteResult(snapshot.target.id, await apiRequest(`${snapshot.base}/${snapshot.target.id}`, {
         method: "PATCH",
-        session: apiSession,
-        body: { content: detail.content, version: detail.version },
-      });
+        session: snapshot.session,
+        signal: controller.signal,
+        body: { content: snapshot.detail.content, version: snapshot.detail.version },
+      }));
+      if (!current()) return;
+      setDetail({ ...snapshot.detail, version: updated.version });
       setNotice(pgWorkspace
         ? `${selected.title} 회사 문서를 새 버전으로 저장하고 유사 관계 분석을 갱신했습니다.`
         : `${selected.title} 문서를 저장했습니다. 새 판으로 기록되고 RAG 색인도 갱신됩니다.`);
       setEditing(false);
       await loadGraph();
-      const index = nodesRef.current.findIndex((n) => n.id === selected.id);
+      if (!current()) return;
+      const index = nodesRef.current.findIndex((n) => n.renderer_id === snapshot.target.renderer_id);
       if (index >= 0) await openNode(index);
     } catch (caught) {
-      setError(userMessageOf(caught));
+      if (current()) setError(userMessageOf(caught));
     } finally {
-      setBusy(false);
+      if (mutationRequest.current === controller) {
+        mutationRequest.current = null;
+        if (current()) setBusy(false);
+      }
     }
   }
 
@@ -408,7 +462,7 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
 
   const membersOfSpace =
     selected?.kind === "space"
-      ? nodesRef.current.filter((n) => n.kind === "document" && n.folder === selected.folder)
+      ? membersOfKnowledgeHub(nodesRef.current, graphEdges, selected.renderer_id)
       : [];
 
   return (
@@ -616,12 +670,14 @@ export function KnowledgeGraphScreen({ screen }: Readonly<{ screen: ScreenDefini
               </ul>
 
               <ul aria-label="선택 문서 연결">
-                {graphEdges.filter((edge) => edge.source === selected.id || edge.target_id === selected.id).map((edge, index) => {
-                  const relatedId = edge.source === selected.id ? edge.target_id : edge.source;
-                  const title = nodesRef.current.find((node) => node.id === relatedId)?.title ?? edge.target_title;
+                {graphEdges.filter((edge) => edge.source_renderer_id === selected.renderer_id || edge.target_renderer_id === selected.renderer_id).map((edge, index) => {
+                  const relatedRendererId = edge.source_renderer_id === selected.renderer_id ? edge.target_renderer_id : edge.source_renderer_id;
+                  const related = nodesRef.current.find((node) => node.renderer_id === relatedRendererId);
+                  const title = related?.title ?? edge.target_title;
+                  const resolution = edge.resolution === "resolved" ? "" : edge.resolution === "unavailable" ? " · 대상 접근 불가" : " · 대상 미해결";
                   return (
-                    <li key={`${edge.source}:${edge.target_id}:${edge.kind}:${index}`} data-edge-kind={edge.kind} data-related-document-id={relatedId ?? ""}>
-                      {edge.kind === "ai_similarity" ? `AI 추론 · ${((edge.score ?? 0) * 100).toFixed(1)}% 코사인 유사도` : edge.kind === "space" ? "소속 공간" : "직접 위키 링크"}: {title}
+                    <li key={`${edge.source_renderer_id}:${edge.target_renderer_id}:${edge.kind}:${index}`} data-edge-kind={edge.kind} data-edge-resolution={edge.resolution} data-related-document-id={related?.id ?? ""}>
+                      {edge.kind === "ai_similarity" ? `AI 추론 · ${((edge.score ?? 0) * 100).toFixed(1)}% 코사인 유사도` : edge.kind === "space" ? "소속 공간" : "직접 위키 링크"}: {title}{resolution}
                       {edge.provenance && <small> · {edge.provenance.model} · v{edge.provenance.source_version}/v{edge.provenance.target_version}</small>}
                     </li>
                   );

@@ -114,9 +114,10 @@ test("configured localhost embeddings relate only selected-company PG documents 
   const generic = await api(fixture.baseUrl, `/pg/records/documents/${uploaded.body.id}`, {
     ...fixture.actors.writer,
     method: "PATCH",
-    body: { content_md: "SYNTH_RELATED generic editor change" },
+    body: { content_md: "SYNTH_RELATED generic editor change", version: changed.body.version },
   });
   assert.equal(generic.status, 200);
+  assert.equal(generic.body.version, changed.body.version + 1);
   const genericDetail = await request(fixture.actors.writer, `/${uploaded.body.id}`);
   assert.equal(genericDetail.body.version, changed.body.version + 1);
   assert.equal(genericDetail.body.analysis.state, "not_analyzed");

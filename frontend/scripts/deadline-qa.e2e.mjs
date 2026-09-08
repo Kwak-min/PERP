@@ -16,11 +16,11 @@ import { networkAudit, protectedPorts } from '../../scripts/deadline-isolation-g
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const args = process.argv.slice(2);
 const sharedScenarioArgs = args[0] === '--scenario'
-  && ['baseline', 'recruitment-nav', 'nav-pref', 'members-pagination', 'assets-footer', 'sidebar'].includes(args[1])
+  && ['baseline', 'recruitment-nav', 'nav-pref', 'members-pagination', 'assets-footer', 'sidebar', 'knowledge-graphs'].includes(args[1])
   && (args.length === 2 || (args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])));
 const dedicatedScenarioArgs = args.length === 2 && args[0] === '--scenario' && ['month-summary', 'roles'].includes(args[1]);
 if (!sharedScenarioArgs && !dedicatedScenarioArgs) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar [--probe error|cancel] | --scenario month-summary|roles');
+  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar|knowledge-graphs [--probe error|cancel] | --scenario month-summary|roles');
   process.exitCode = 2;
 } else {
   assertIsolated();
@@ -46,14 +46,15 @@ async function rendered(page, selector) {
 }
 
 async function baseline(probe, scenario) {
-  const evidence = path.join(root, `.omo/evidence/task-${scenario === 'recruitment-nav' ? 3 : scenario === 'members-pagination' ? 6 : scenario === 'assets-footer' ? 7 : scenario === 'sidebar' ? 5 : 1}-deadline-erp-redesign`, ...(probe ? [`probe-${probe}`] : []));
+  const taskNumber = scenario === 'recruitment-nav' ? 3 : scenario === 'members-pagination' ? 6 : scenario === 'assets-footer' ? 7 : scenario === 'sidebar' ? 5 : scenario === 'knowledge-graphs' ? 26 : 1;
+  const evidence = path.join(root, `.omo/evidence/task-${taskNumber}-deadline-erp-redesign`, ...(probe ? [`probe-${probe}`] : []));
   const runId = randomUUID(), attempt = path.join(evidence, 'runs', runId);
   await mkdir(attempt, { recursive: true });
   // 이전 성공 스크린샷을 현재 실패의 증거로 오인하지 않도록 current pointer를 먼저 무효화한다.
   await rm(path.join(evidence, 'screen.png'), { force: true });
   const result = { runId, status: 'running', scenario, probe: probe ?? null, source: 'legacy SQLite / actual HTTP APIs', surfaces: [], http: [], blockedBrowserRequests: [], browserResponses: [], errors: [], resources: [], nativePostgres: 'not exercised', liveServicesUsed: false };
   result.provenance = { head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', timeout: 5000 }).trim(), files: {} };
-  for (const file of ['scripts/run_deadline_isolated.mjs', 'scripts/deadline-isolation-guard.mjs', 'scripts/deadline-runner.test.mjs', 'backend/tests/deadline-fixture.js', 'backend/tests/deadline-fixture.test.js', 'frontend/scripts/deadline-qa.e2e.mjs', 'frontend/scripts/deadline-harness.test.mjs', ...(scenario === 'recruitment-nav' ? ['frontend/scripts/deadline-recruitment-nav.scenario.mjs', 'frontend/src/routes/catalog.ts'] : []), ...(scenario === 'sidebar' ? ['frontend/scripts/deadline-sidebar.scenario.mjs', 'frontend/src/components/layout/AppShell.tsx', 'frontend/src/styles.css', 'frontend/src/services/auth.ts', 'frontend/src/store/navPref.ts'] : [])]) result.provenance.files[file] = createHash('sha256').update(await readFile(path.join(root, file))).digest('hex');
+  for (const file of ['scripts/run_deadline_isolated.mjs', 'scripts/deadline-isolation-guard.mjs', 'scripts/deadline-runner.test.mjs', 'backend/tests/deadline-fixture.js', 'backend/tests/deadline-fixture.test.js', 'frontend/scripts/deadline-qa.e2e.mjs', 'frontend/scripts/deadline-harness.test.mjs', ...(scenario === 'recruitment-nav' ? ['frontend/scripts/deadline-recruitment-nav.scenario.mjs', 'frontend/src/routes/catalog.ts'] : []), ...(scenario === 'sidebar' ? ['frontend/scripts/deadline-sidebar.scenario.mjs', 'frontend/src/components/layout/AppShell.tsx', 'frontend/src/styles.css', 'frontend/src/services/auth.ts', 'frontend/src/store/navPref.ts'] : []), ...(scenario === 'knowledge-graphs' ? ['frontend/src/screens/VaultGraphScreen.tsx', 'frontend/src/screens/KnowledgeGraphScreen.tsx', 'frontend/src/screens/vault/graph3d.ts', 'backend/src/controllers/vault.controller.js', 'backend/src/controllers/documents.controller.js'] : [])]) result.provenance.files[file] = createHash('sha256').update(await readFile(path.join(root, file))).digest('hex');
   if (scenario === 'members-pagination') for (const file of ['frontend/scripts/deadline-members-pagination.mjs', 'frontend/scripts/deadline-members-pagination-edges.mjs', 'frontend/src/screens/orgchart/MemberDirectory.tsx', 'frontend/src/screens/OrgChartScreen.tsx', 'frontend/src/components/data/MemberListModal.tsx', 'frontend/src/components/data/member-pagination.css']) result.provenance.files[file] = createHash('sha256').update(await readFile(path.join(root, file))).digest('hex');
   await writeFile(path.join(evidence, 'scenario.json'), JSON.stringify(result, null, 2));
   await writeFile(path.join(evidence, 'cleanup.json'), JSON.stringify({ runId, status: 'pending' }, null, 2));
@@ -174,6 +175,56 @@ async function baseline(probe, scenario) {
     } else if (scenario === 'sidebar') {
       const { sidebar } = await import('./deadline-sidebar.scenario.mjs');
       await sidebar({ surface, api, fixture, result, attempt, evidence });
+    } else if (scenario === 'knowledge-graphs') {
+      const source = await api.request(fixture.actorAdmin, '/vault/notes', 'POST', { title: '그래프 원본', content: '[[그래프 대상]]', folder: '/' }, 201);
+      const target = await api.request(fixture.actorAdmin, '/vault/notes', 'POST', { title: '그래프 대상', content: '본문', folder: '/' }, 201);
+      const resolvedGraph = await api.request(fixture.actorAdmin, '/vault/graph');
+      const resolvedEdge = resolvedGraph.edges.find(edge => edge.source === source.id);
+      assert.equal(resolvedEdge.resolution, 'resolved');
+      assert.equal(resolvedEdge.binding, 'title');
+      const { db } = await import('../../backend/src/config/db.js');
+      db().prepare('UPDATE vault_link SET target_id = ? WHERE source_id = ?').run(randomUUID(), source.id);
+      const unavailableGraph = await api.request(fixture.actorAdmin, '/vault/graph');
+      const unavailableEdge = unavailableGraph.edges.find(edge => edge.source === source.id);
+      assert.equal(unavailableEdge.resolution, 'unavailable');
+      assert.equal(unavailableEdge.target_id, null);
+      assert.equal(unavailableEdge.target_renderer_id, null);
+
+      const firstSpace = await api.request(fixture.actorAdmin, '/documents/spaces', 'POST', { name: '동일 공간명' }, 201);
+      const secondSpace = await api.request(fixture.actorAdmin, '/documents/spaces', 'POST', { name: '동일 공간명' }, 201);
+      const firstDocument = await api.request(fixture.actorAdmin, '/documents', 'POST', { title: '회사 문서 A', content: '[[중복 문서]]', space_id: firstSpace.id }, 201);
+      await api.request(fixture.actorAdmin, '/documents', 'POST', { title: '중복 문서', content: '', space_id: firstSpace.id }, 201);
+      await api.request(fixture.actorAdmin, '/documents', 'POST', { title: '중복 문서', content: '', space_id: secondSpace.id }, 201);
+      const companyGraph = await api.request(fixture.actorAdmin, '/documents/graph');
+      assert.equal(new Set(companyGraph.nodes.map(node => node.renderer_id)).size, companyGraph.nodes.length);
+      const firstHub = companyGraph.nodes.find(node => node.kind === 'space' && node.id === firstSpace.id);
+      const secondHub = companyGraph.nodes.find(node => node.kind === 'space' && node.id === secondSpace.id);
+      assert.notEqual(firstHub.renderer_id, secondHub.renderer_id);
+      const membership = companyGraph.edges.find(edge => edge.kind === 'space' && edge.source === firstDocument.id);
+      assert.equal(membership.target_renderer_id, firstHub.renderer_id);
+      const duplicateLink = companyGraph.edges.find(edge => edge.kind === 'link' && edge.source === firstDocument.id);
+      assert.equal(duplicateLink.resolution, 'unresolved');
+
+      await surface('personal-graph-contract', fixture.actorAdmin, '/vault/graph', '.graph-stage__canvas', '/api/v1/vault/graph', async page => {
+        const detailResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/vault/notes/${source.id}` && response.request().method() === 'GET');
+        await page.getByLabel('그래프 노트 선택').selectOption(source.id);
+        assert.equal((await detailResponse).status(), 200);
+        const editor = page.getByLabel('본문 마크다운');
+        await editor.fill('브라우저에 남아야 하는 초안');
+        await api.request(fixture.actorAdmin, `/vault/notes/${source.id}`, 'PATCH', { version: source.version, content: '서버 동시 수정 [[그래프 대상]]' });
+        const staleResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1/vault/notes/${source.id}` && response.request().method() === 'PATCH');
+        await page.getByRole('button', { name: '변경 저장', exact: true }).click();
+        assert.equal((await staleResponse).status(), 409);
+        await page.getByRole('alert').waitFor();
+        assert.equal(await editor.inputValue(), '브라우저에 남아야 하는 초안');
+        return { nodes: unavailableGraph.nodes.length, unavailable: unavailableGraph.edges.filter(edge => edge.resolution === 'unavailable').length, staleDraftPreserved: true, targetId: target.id };
+      });
+      await surface('company-graph-contract', fixture.actorAdmin, '/documents/graph', '.graph-stage__canvas', '/api/v1/documents/graph', async page => {
+        assert.equal(await page.getByRole('application', { name: '조직 지식 3D 그래프' }).count(), 1);
+        assert.equal(await page.locator('canvas[data-ai-links]').count(), 1);
+        return { nodes: companyGraph.nodes.length, duplicateTitleResolution: duplicateLink.resolution, membershipTarget: membership.target_renderer_id };
+      });
+      result.realQA = { actualHTTP: true, chrome: result.chrome, renderer: 'existing canvas 3D renderer', pgNative: 'not claimed or exercised', versionConflictDraftPreserved: true };
     } else {
     await surface('members-25-sidebar', fixture.actorAdmin, '/members', '.org-directory__table tbody tr', '/api/v1/members', async page => {
       const names = await page.locator('.org-directory__table tbody tr td:first-child').allTextContents();
