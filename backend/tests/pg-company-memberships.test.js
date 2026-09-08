@@ -48,7 +48,7 @@ test('selected company creator can be assigned without rewriting primary departm
   assert.equal((await api(server.baseUrl, '/pg/tasks', { token, orgId, method: 'POST', body: { project_id: project.body.id, title: 'Own task', assignee_id: '101' } })).status, 201);
   assert.equal((await api(server.baseUrl, '/pg/tasks', { token, orgId, method: 'POST', body: { project_id: project.body.id, title: 'Foreign task', assignee_id: '102' } })).status, 400);
   assert.equal((await api(server.baseUrl, '/pg/approvals', { token, orgId, method: 'POST', body: { request_type: 'review', target_user_id: '101' } })).status, 201);
-  assert.equal((await api(server.baseUrl, '/pg/finance/dues', { token, orgId, method: 'POST', body: { target_user_id: '101', amount: 100 } })).status, 201);
+  assert.equal((await api(server.baseUrl, '/pg/finance/dues', { token, orgId, method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() }, body: { target_user_id: '101', amount: 100 } })).status, 201);
 });
 
 test('roles alone, suspended membership and inactive companies never establish company entry', async () => {

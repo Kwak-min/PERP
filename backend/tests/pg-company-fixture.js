@@ -19,7 +19,7 @@ export async function installCompanyFixture() {
     permissions: [{ role_id: '1', code: 'task.read' }],
     modules: [{ company_id: '77', module_key: 'tasks' }],
     featureSettings: [],
-    departments: [], projects: [], tasks: [], events: [], orgEvents: [], sessions: [], logs: [],
+    departments: [], projects: [], tasks: [], events: [], orgEvents: [], sessions: [], logs: [], replays: [], duesCharges: [],
   };
   let failMembership = false, schemaAvailable = true, featureSchemaAvailable = true, failSettingsAudit = false;
   const queries = [];
@@ -179,7 +179,20 @@ export async function installCompanyFixture() {
     }
     if (text.includes('FROM project.projects')) return { rows: data.projects.filter(p => p.company_id === values[values.length - 1] && (values.length === 1 || p.id === values[0])) };
     if (text.includes('INSERT INTO project.tasks')) { data.tasks.push(values); return { rows: [{ id: '300' }], rowCount: 1 }; }
-    if (text.includes('INSERT INTO org.approval_requests') || text.includes('INSERT INTO accounting.dues_charges')) return { rows: [{ id: '301' }], rowCount: 1 };
+    if (text.includes('accounting.request_replays')) {
+      const replay = data.replays.find(r => r.scope.every((value, i) => value === values[i]));
+      if (text.startsWith('INSERT')) {
+        if (!replay) data.replays.push({ scope: values.slice(0,4), payload: JSON.parse(values[4]), response: null });
+        return { rows: [], rowCount: replay ? 0 : 1 };
+      }
+      if (text.startsWith('SELECT')) return { rows: replay ? [{ response: replay.response, matches: JSON.stringify(replay.payload) === JSON.stringify(JSON.parse(values[4])) }] : [] };
+      if (text.startsWith('UPDATE')) { replay.response = JSON.parse(values[4]); return { rows: [], rowCount: 1 }; }
+    }
+    if (text.includes('INSERT INTO accounting.dues_charges')) {
+      const charge = { id: String(301 + data.duesCharges.length), company_id: values[0], target_user_id: values[1], amount: values[2] };
+      data.duesCharges.push(charge); return { rows: [charge], rowCount: 1 };
+    }
+    if (text.includes('INSERT INTO org.approval_requests')) return { rows: [{ id: '301' }], rowCount: 1 };
     if (text.includes('FROM org.approval_requests ar')) return { rows: [] };
     // 이 fixture가 주장하지 않는 대시보드/옵션 읽기만 빈 결과로 둔다. 쓰기와 auth는 절대 폴백하지 않는다.
     if (text.startsWith('SELECT') && !text.includes('auth.') && !text.includes('company_memberships')) return { rows: [] };

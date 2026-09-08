@@ -153,20 +153,20 @@ export async function calendar(req, res) {
 // GET /api/v1/pg/finance/summary — 재무 홈 지표
 export async function financeSummary(req, res) {
   const companyId = await resolveCompanyId(req);
-  if (!companyId) return res.json({ 수입: 0, 지출: 0, 잔액: 0 });
+  if (!companyId) return res.json({ 수입: '0.00', 지출: '0.00', 잔액: '0.00' });
   const { rows } = await pgQuery(
     `SELECT
-       COALESCE(SUM(CASE WHEN a.account_type = 'revenue' THEN l.credit - l.debit END), 0) AS revenue,
-       COALESCE(SUM(CASE WHEN a.account_type = 'expense' THEN l.debit - l.credit END), 0) AS expense
+       COALESCE(SUM(CASE WHEN a.account_type = 'revenue' THEN l.credit - l.debit END), 0.00)::text AS revenue,
+       COALESCE(SUM(CASE WHEN a.account_type = 'expense' THEN l.debit - l.credit END), 0.00)::text AS expense,
+       COALESCE(SUM(CASE WHEN a.account_type IN ('revenue','expense') THEN l.credit - l.debit END), 0.00)::text AS balance
        FROM accounting.journal_lines l
        JOIN accounting.journal_entries e ON e.id = l.entry_id
        JOIN accounting.accounts a ON a.id = l.account_id
       WHERE e.company_id = $1`,
     [companyId],
   );
-  const revenue = Number(rows[0].revenue);
-  const expense = Number(rows[0].expense);
-  res.json({ 수입: revenue, 지출: expense, 잔액: revenue - expense });
+  // Keep aggregate NUMERIC precision, including totals larger than a single entry.
+  res.json({ 수입: rows[0].revenue, 지출: rows[0].expense, 잔액: rows[0].balance });
 }
 
 // GET /api/v1/pg/finance/accounts — 거래 입력용 계정 선택지(수입·지출 계정)

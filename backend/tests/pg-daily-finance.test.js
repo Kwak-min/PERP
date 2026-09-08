@@ -45,6 +45,20 @@ describe('daily finance: real HTTP + isolated PGlite SQL/constraints/transaction
     assert.equal((await request('/finance/transactions','POST',{account_id:'3',amount:'1'},randomUUID())).status,400);
   });
 
+  it('keeps NUMERIC(18,2) exact through creation and summary, with actor/company/operation scoped keys', async () => {
+    const key=randomUUID(), payload={account_id:'2',amount:'9999999999999999.99'};
+    assert.equal((await request('/finance/transactions','POST',payload,key)).status,201);
+    await fixture.db.exec(`INSERT INTO org.role_permissions(role_id,permission_id) SELECT 2,id FROM org.permissions WHERE code IN('transaction.write','transaction.read','menu.finance');
+      INSERT INTO accounting.accounts(company_id,code,name,account_type) VALUES(2,'100','Other cash','asset');`);
+    assert.equal((await request('/finance/transactions','POST',payload,key,fixture.actor(1))).status,201);
+    assert.equal((await request('/finance/transactions','POST',{account_id:'3',amount:'1'},key,fixture.actor(2))).status,201);
+    assert.equal((await request('/finance/budgets','POST',{name:'Separate operation',amount:'1'},key)).status,201);
+    const replays=(await fixture.db.query('SELECT company_id,actor_id,operation FROM accounting.request_replays WHERE request_key=$1',[key])).rows;
+    assert.equal(replays.length,4);
+    const total=(await fixture.db.query(`SELECT SUM(l.credit-l.debit)::text AS amount FROM accounting.journal_lines l JOIN accounting.journal_entries e ON e.id=l.entry_id JOIN accounting.accounts a ON a.id=l.account_id WHERE e.company_id=1 AND a.account_type='revenue'`)).rows[0].amount;
+    const summary=await request('/finance/summary'); assert.equal(summary.body.수입,total); assert.equal(summary.body.잔액,total);
+  });
+
   it('monetary edits require expected version, reject negative, retain audit and protected records', async () => {
     const id=await charge(); const original=await request(`/records/dues/${id}`);
     assert.equal(original.body.version,1);
