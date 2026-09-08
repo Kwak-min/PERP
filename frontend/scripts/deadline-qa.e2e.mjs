@@ -18,12 +18,13 @@ const args = process.argv.slice(2);
 if (args.length === 2 && args[0] === '--scenario' && args[1] === 'roles') {
   assertIsolated();
   await (await import('./deadline-roles-qa.mjs')).rolesScenario();
-} else if (args[0] !== '--scenario' || args[1] !== 'baseline' || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline [--probe error|cancel]');
+} else if (args[0] !== '--scenario' || !['baseline', 'recruitment-nav', 'nav-pref', 'sidebar'].includes(args[1]) || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {
+  console.error('Usage: deadline-qa.e2e.mjs --scenario roles | --scenario baseline|recruitment-nav|nav-pref|sidebar [--probe error|cancel]');
   process.exitCode = 2;
 } else {
   assertIsolated();
-  await baseline(args[3]);
+  if (args[1] === 'nav-pref') await (await import('./deadline-nav-pref.e2e.mjs')).navPrefScenario(args[3]);
+  else await baseline(args[3], args[1]);
 }
 
 // 브라우저 DOM 변경 신호를 기다린다. sleep/networkidle/polling으로 완성을 추정하지 않는다.
@@ -41,15 +42,16 @@ async function rendered(page, selector) {
   }), selector);
 }
 
-async function baseline(probe) {
-  const evidence = path.join(root, '.omo/evidence/task-1-deadline-erp-redesign', ...(probe ? [`probe-${probe}`] : []));
+async function baseline(probe, scenario) {
+  const taskId = scenario === 'recruitment-nav' ? 3 : scenario === 'sidebar' ? 5 : 1;
+  const evidence = path.join(root, `.omo/evidence/task-${taskId}-deadline-erp-redesign`, ...(probe ? [`probe-${probe}`] : []));
   const runId = randomUUID(), attempt = path.join(evidence, 'runs', runId);
   await mkdir(attempt, { recursive: true });
   // 이전 성공 스크린샷을 현재 실패의 증거로 오인하지 않도록 current pointer를 먼저 무효화한다.
   await rm(path.join(evidence, 'screen.png'), { force: true });
-  const result = { runId, status: 'running', scenario: 'baseline', probe: probe ?? null, source: 'legacy SQLite / actual HTTP APIs', surfaces: [], http: [], blockedBrowserRequests: [], browserResponses: [], errors: [], resources: [], nativePostgres: 'not exercised', liveServicesUsed: false };
+  const result = { runId, status: 'running', scenario, probe: probe ?? null, source: 'legacy SQLite / actual HTTP APIs', surfaces: [], http: [], blockedBrowserRequests: [], browserResponses: [], errors: [], resources: [], nativePostgres: 'not exercised', liveServicesUsed: false };
   result.provenance = { head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', timeout: 5000 }).trim(), files: {} };
-  for (const file of ['scripts/run_deadline_isolated.mjs', 'scripts/deadline-isolation-guard.mjs', 'scripts/deadline-runner.test.mjs', 'backend/tests/deadline-fixture.js', 'backend/tests/deadline-fixture.test.js', 'frontend/scripts/deadline-qa.e2e.mjs', 'frontend/scripts/deadline-harness.test.mjs']) result.provenance.files[file] = createHash('sha256').update(await readFile(path.join(root, file))).digest('hex');
+  for (const file of ['scripts/run_deadline_isolated.mjs', 'scripts/deadline-isolation-guard.mjs', 'scripts/deadline-runner.test.mjs', 'backend/tests/deadline-fixture.js', 'backend/tests/deadline-fixture.test.js', 'frontend/scripts/deadline-qa.e2e.mjs', 'frontend/scripts/deadline-harness.test.mjs', ...(scenario === 'recruitment-nav' ? ['frontend/scripts/deadline-recruitment-nav.scenario.mjs', 'frontend/src/routes/catalog.ts'] : []), ...(scenario === 'sidebar' ? ['frontend/scripts/deadline-sidebar.scenario.mjs', 'frontend/src/components/layout/AppShell.tsx', 'frontend/src/styles.css', 'frontend/src/services/auth.ts', 'frontend/src/store/navPref.ts'] : [])]) result.provenance.files[file] = createHash('sha256').update(await readFile(path.join(root, file))).digest('hex');
   await writeFile(path.join(evidence, 'scenario.json'), JSON.stringify(result, null, 2));
   await writeFile(path.join(evidence, 'cleanup.json'), JSON.stringify({ runId, status: 'pending' }, null, 2));
   const controller = new AbortController();
@@ -157,6 +159,13 @@ async function baseline(probe) {
         assert.deepEqual(errors, [], `${name}: browser crash`);
       } finally { await context.unrouteAll({ behavior: 'wait' }); await context.close(); }
     }
+    if (scenario === 'recruitment-nav') {
+      const { recruitmentNav } = await import('./deadline-recruitment-nav.scenario.mjs');
+      await recruitmentNav({ surface, api, fixture, rendered, result });
+    } else if (scenario === 'sidebar') {
+      const { sidebar } = await import('./deadline-sidebar.scenario.mjs');
+      await sidebar({ surface, api, fixture, result, attempt, evidence });
+    } else {
     await surface('members-25-sidebar', fixture.actorAdmin, '/members', '.org-directory__table tbody tr', '/api/v1/members', async page => {
       const names = await page.locator('.org-directory__table tbody tr td:first-child').allTextContents();
       assert.ok(names.length > 0);
@@ -195,6 +204,7 @@ async function baseline(probe) {
       ['personal-graph', '/vault/graph', '/api/v1/vault/graph', 'main .graph-stage__empty:not([role])'],
       ['reservation-unavailable', '/reserve', '/api/v1/spaces', 'main .rsv-error-banner'],
     ]) await surface(name, fixture.actorAdmin, route, selector, apiPath, null, [375, 1280]);
+    }
     assert.ok(result.browserAllowedRequests.every(request => allowed.has(new URL(request.url).origin) && !protectedPorts.has(Number(new URL(request.url).port))));
     assert.equal(networkAudit.blocked.length, 0);
     result.status = 'passed';
