@@ -91,6 +91,8 @@ Task33 must retain its original `{write:true}` contract for manual edit, review,
 - expected heads: `{page_id,version,published_head_id}[]`; 새 page의 version/head는 null.
 - lineage는 인용 subset이 아닌 완전한 `{inputs,hash}`. 모든 source/raw closure와 직접 page dependency를 `dependent_change_set_id`로 보존한다.
 - `manifest_hash = sha256(canonical({wiki_id,actor_id,job_id,proposed_revisions,expected_heads,lineage,schema_revision_id,input_manifest_hash}))`.
+- Frozen nonblank title bytes are preserved through publication decoding. Acceptance enforces the aggregate 200-edge budget as page citations plus links, not links alone.
+- With integrated SQLite14/PGv18, source invalidation proactively sets `unavailable` / `SOURCE_REVOKED` and clears leases; an in-flight completion then fails `LEASE_LOST`. Current lineage checks still deny result/retry. Authority changes wake reauthorization rather than blindly invalidating reader jobs; actual denial uses the restricted metadata retirement contract above.
 - compiler link: `{id,type:"ai_derived",target_page_id,predicate,direction,origin:"compiler",citations}`. bundle page 또는 context에 공급된 인가된 기존 page만 target이다. parallel edge/방향을 합치지 않는다.
 - Task33는 자신의 scoped transaction에서 read/review/publish/reject 및 모든 현재 권한/digest/expected-head 검사와 immutable publication receipt를 소유한다. 작업 결과가 `unreviewed`이고 anchor가 유효하다는 것은 게시 승인이 아니다.
 

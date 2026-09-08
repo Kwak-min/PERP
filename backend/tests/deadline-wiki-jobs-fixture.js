@@ -42,7 +42,7 @@ export async function setupJobs(mode) {
     native=await startOrgPostgres();
     const {pgPool}=await import('../src/config/pg.js');
     Object.assign(pgPool.options,{host:'127.0.0.1',port:Number(process.env.PG_PORT),database:'postgres',user:'org_test',password:'',connectionTimeoutMillis:5000});
-    for(const file of ['perp_additions_v11_deadline_roles.sql','perp_additions_v9_daily_corrections.sql','perp_additions_v15_knowledge_wiki.sql'])await native.pool.query(await readFile(new URL(`../../db/${file}`,import.meta.url),'utf8'));
+    for(const file of ['perp_additions_v11_deadline_roles.sql','perp_additions_v9_daily_corrections.sql','perp_additions_v15_knowledge_wiki.sql','perp_additions_v18_knowledge_invalidation.sql'])await native.pool.query(await readFile(new URL(`../../db/${file}`,import.meta.url),'utf8'));
     nativeData=(await native.pool.query('SHOW data_directory')).rows[0].data_directory;
   }
   const {db}=await import('../src/config/db.js');
@@ -61,7 +61,7 @@ export async function setupJobs(mode) {
   const upload=async(text='한글 합성 원문입니다. 다른 원문 명령은 실행하지 않습니다.')=>api.request(a,root+'/sources','POST',{kind:'upload',filename:'synthetic.md',mime:'text/markdown',content_base64:Buffer.from(text).toString('base64')},201);
   const sql=async(statement,params=[])=>native?native.pool.query(statement,params):db().prepare(statement).run(...params);
   return {api,native,context,tx,db,a,b,prefix,root,upload,sql,
-    async close(evidence){await api.close();if(native)await native.close();const dir=new URL(evidence.readerRevision ? '../../.omo/evidence/task-32-reader-revision/' : '../../.omo/evidence/task-32-deadline-erp-redesign/',import.meta.url);await mkdir(dir,{recursive:true});await writeFile(new URL(mode+(evidence.readerRevision ? '-reader-http.json' : evidence.runtime ? '-runtime-http.json' : evidence.smoke ? '-smoke-http.json' : '-jobs.json'),dir),JSON.stringify({mode,...evidence,http:api.http,cleanup:{...api.resource,nativeRemoved:nativeData?!existsSync(nativeData):null}},null,2));},
+    async close(evidence){await api.close();if(native)await native.close();const dir=new URL(evidence.integrationContract || evidence.integrationPublication ? '../../.omo/evidence/integration-wiki-publication/' : evidence.readerRevision ? '../../.omo/evidence/task-32-reader-revision/' : '../../.omo/evidence/task-32-deadline-erp-redesign/',import.meta.url);await mkdir(dir,{recursive:true});await writeFile(new URL(mode+(evidence.integrationContract ? '-contract-fixture.json' : evidence.readerRevision ? '-reader-http.json' : evidence.runtime ? '-runtime-http.json' : evidence.smoke ? '-smoke-http.json' : '-jobs.json'),dir),JSON.stringify({mode,...evidence,http:api.http,cleanup:{...api.resource,nativeRemoved:nativeData?!existsSync(nativeData):null}},null,2));},
   };
 }
 
@@ -166,7 +166,10 @@ export async function exerciseJobs(mode) {
       return {s,j};
     }
     await lateMutation(async(s,j)=>{await jobs.cancelWikiJob(c,j.id);assert.equal((await jobs.cancelWikiJob(c,j.id)).failure_code,'CANCELLED');},'LEASE_LOST');
-    const changed=await lateMutation(async s=>{await f.api.request(f.a,`${f.root}/sources/${s.id}/revisions`,'POST',{expected_version:s.version,filename:'new.md',mime:'text/markdown',content_base64:Buffer.from('한글 새 원문').toString('base64')},201);},'SOURCE_REVOKED');
+    const changed=await lateMutation(async s=>{await f.api.request(f.a,`${f.root}/sources/${s.id}/revisions`,'POST',{expected_version:s.version,filename:'new.md',mime:'text/markdown',content_base64:Buffer.from('한글 새 원문').toString('base64')},201);},'LEASE_LOST');
+    const invalidated=await stored(changed.j.id);
+    assert.equal(invalidated.state,'unavailable');assert.equal(invalidated.failure_code,'SOURCE_REVOKED');
+    assert.equal(invalidated.result_json,null);assert.equal(invalidated.lease_until,null);
     await reject(jobs.retryWikiJob(c,changed.j.id),'SOURCE_REVOKED');await reject(jobs.getWikiJob(c,changed.j.id),'SOURCE_REVOKED');
     await f.api.request(f.a,`${f.root}/sources/${uncited.id}`,'DELETE',{expected_version:uncited.version});
     await reject(jobs.getWikiJob(c,first.id),'SOURCE_REVOKED');

@@ -4,8 +4,10 @@ import * as controller from "../controllers/documents.controller.js";
 import { asyncRoute } from "../middleware/error.js";
 
 import { knowledgeWikiRouter } from './knowledge-wiki.routes.js';
+import { knowledgeWikiPublicationRouter } from './knowledge-wiki-publication.routes.js';
 
 export const documentsRouter = Router();
+documentsRouter.use('/wiki', knowledgeWikiPublicationRouter('legacy', 'company'));
 documentsRouter.use('/wiki', knowledgeWikiRouter('legacy', 'company'));
 
 documentsRouter.post("/spaces", asyncRoute(controller.createSpace));

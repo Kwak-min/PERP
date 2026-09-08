@@ -183,10 +183,10 @@ function* validateOutput(tx,job,manifest,envelope) {
   // A supplied published query/page input may also be an authorized link destination.
   for (const input of manifest.inputs.filter(i=>i.kind==='page_revision')) { const revision=yield* tx.pageRevision(input.revision_id); existing.set(revision.page_id,revision); }
   for (const p of output.pages) {
-    if (ids.has(p.key) || (p.target_page_id && !targets.some(t=>t.page_id===p.target_page_id))) fail('MODEL_OUTPUT_INVALID',502);
+    if (!p.title.trim() || ids.has(p.key) || (p.target_page_id && !targets.some(t=>t.page_id===p.target_page_id))) fail('MODEL_OUTPUT_INVALID',502);
     ids.set(p.key,p.target_page_id ?? randomUUID());
   }
-  if (new Set(ids.values()).size!==ids.size || output.pages.reduce((n,p)=>n+p.links.length,0)>200) fail('MODEL_OUTPUT_LIMIT',502);
+  if (new Set(ids.values()).size!==ids.size || output.pages.reduce((n,p)=>n+p.links.length+p.citations.length,0)>WIKI_CONTRACT.limits.edges) fail('MODEL_OUTPUT_LIMIT',502);
   const proposed=[],heads=[];
   for (const p of output.pages) {
     const pageId=ids.get(p.key), base=p.target_page_id ? targets.find(t=>t.page_id===pageId) : null;

@@ -180,8 +180,8 @@ export async function exerciseReaderJobs(mode,t) {
       p.gate.hold=Promise.withResolvers();const entered=p.dispatched();const pending=jobs.runWikiJob(c,job.id).then(value=>({value}),error=>({error}));
       try {await entered;await request(f.a,`${f.root}/sources/${s.id}`,'DELETE',{expected_version:s.version});}
       finally {p.gate.hold.resolve();p.gate.hold=null;}
-      assert.equal((await pending).error.code,'SOURCE_REVOKED');
-      const row=await stored(job.id);assert.equal(row.state,'failed');assert.equal(row.result_json,null);assert.equal(row.lease_until,null);
+      assert.equal((await pending).error.code,'LEASE_LOST');
+      const row=await stored(job.id);assert.equal(row.state,'unavailable');assert.equal(row.failure_code,'SOURCE_REVOKED');assert.equal(row.result_json,null);assert.equal(row.lease_until,null);
       await request(member,f.root+'/jobs/'+job.id,'GET',undefined,409);
       await request(member,f.root+'/jobs/'+job.id+'/retry','POST',{},409);
       assert.equal((await related('change_set',job.id)).length,0);

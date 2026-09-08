@@ -4,8 +4,10 @@ import * as controller from "../controllers/vault.controller.js";
 import { asyncRoute } from "../middleware/error.js";
 
 import { knowledgeWikiRouter } from './knowledge-wiki.routes.js';
+import { knowledgeWikiPublicationRouter } from './knowledge-wiki-publication.routes.js';
 
 export const vaultRouter = Router();
+vaultRouter.use('/wiki', knowledgeWikiPublicationRouter('legacy', 'personal'));
 vaultRouter.use('/wiki', knowledgeWikiRouter('legacy', 'personal'));
 
 vaultRouter.post("/notes", asyncRoute(controller.createNote));

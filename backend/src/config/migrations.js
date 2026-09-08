@@ -1,4 +1,5 @@
 import { knowledgeDDL } from './knowledge-schema.js';
+import { knowledgeInvalidationDDL } from './knowledge-invalidation-schema.js';
 
 function columnsOf(conn, table) {
   return new Set(conn.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
@@ -236,6 +237,7 @@ const MIGRATIONS = [
     },
   },
   { version: 12, up(conn) { conn.exec(knowledgeDDL('sqlite')); } },
+  { version: 14, up(conn) { conn.exec(knowledgeInvalidationDDL('sqlite')); } },
 ];
 
 export function applyMigrations(conn) {

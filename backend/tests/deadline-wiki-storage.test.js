@@ -15,7 +15,7 @@ test('SQLite source HTTP: scope, immutable capture, exact history, CAS, uniquene
     await exerciseRetrieval(api, fixture);
     await exerciseAuthorization(api, fixture);
     const { db } = await import('../src/config/db.js');
-    assert.deepEqual(db().prepare('SELECT version FROM schema_migration ORDER BY version').all().map(x => x.version), [1,2,3,4,5,6,7,8,9,12]);
+    assert.deepEqual(db().prepare('SELECT version FROM schema_migration ORDER BY version').all().map(x => x.version), [1,2,3,4,5,6,7,8,9,12,14]);
     assert.throws(() => db().exec("UPDATE knowledge_source_revision SET title='tampered'"), /immutable/);
     assert.throws(() => db().exec('DELETE FROM knowledge_source_revision'), /immutable/);
     assert.throws(() => db().exec("INSERT INTO knowledge_wiki(id,store,scope,tenant_id,company_id,owner_id,created_at) SELECT id||'-duplicate',store,scope,tenant_id,company_id,owner_id,created_at FROM knowledge_wiki LIMIT 1"),/UNIQUE/);
