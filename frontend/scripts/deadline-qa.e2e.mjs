@@ -18,13 +18,14 @@ const args = process.argv.slice(2);
 const sharedScenarioArgs = args[0] === '--scenario'
   && ['baseline', 'recruitment-nav', 'nav-pref', 'members-pagination', 'assets-footer'].includes(args[1])
   && (args.length === 2 || (args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])));
-const dedicatedScenarioArgs = args.length === 2 && args[0] === '--scenario' && ['month-summary', 'roles'].includes(args[1]);
+const dedicatedScenarioArgs = args.length === 2 && args[0] === '--scenario' && ['month-summary', 'roles', 'analytics', 'analytics-pg'].includes(args[1]);
 if (!sharedScenarioArgs && !dedicatedScenarioArgs) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer [--probe error|cancel] | --scenario month-summary|roles');
+  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer [--probe error|cancel] | --scenario month-summary|roles|analytics|analytics-pg');
   process.exitCode = 2;
 } else {
   assertIsolated();
-  if (args[1] === 'roles') await (await import('./deadline-roles-qa.mjs')).rolesScenario();
+  if (args[1] === 'analytics' || args[1] === 'analytics-pg') await (await import('./deadline-analytics.e2e.mjs')).analyticsScenario(args[1] === 'analytics-pg');
+  else if (args[1] === 'roles') await (await import('./deadline-roles-qa.mjs')).rolesScenario();
   else if (args[1] === 'month-summary') await (await import('./deadline-month-summary.e2e.mjs')).monthSummary();
   else if (args[1] === 'nav-pref') await (await import('./deadline-nav-pref.e2e.mjs')).navPrefScenario(args[3]);
   else await baseline(args[3], args[1]);

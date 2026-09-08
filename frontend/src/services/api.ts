@@ -115,11 +115,15 @@ export async function apiRequest(
 export async function apiBlob(
   path: string,
   options: Readonly<{ session: ApiSession; signal?: AbortSignal }>,
-): Promise<Readonly<{ blob: Blob; filename: string }>> {
-  if (!/^\/(?:pg\/)?(?:finance\/transactions|approvals(?:\/requests)?)\/[^/?#]+\/receipts\/[^/?#]+$/.test(path)) {
-    throw new ApiError("원증빙 다운로드 경로가 올바르지 않습니다.", { code: "VALIDATION_ERROR", status: 400, requestId: "", details: {} });
+): Promise<Readonly<{ blob: Blob; filename: string; rowCount: number | null }>> {
+  const analytics = /^\/(?:pg\/)?analytics\/exports\/[a-zA-Z0-9-]+\/download$/.test(path);
+  if (!analytics && !/^\/(?:pg\/)?(?:finance\/transactions|approvals(?:\/requests)?)\/[^/?#]+\/receipts\/[^/?#]+$/.test(path)) {
+    throw new ApiError("다운로드 경로가 올바르지 않습니다.", { code: "VALIDATION_ERROR", status: 400, requestId: "", details: {} });
   }
-  const headers = new Headers({ Accept: "image/jpeg, image/png, application/pdf", Authorization: `Bearer ${options.session.token}` });
+  if (analytics && (!options.session.orgId || options.session.orgId.startsWith('pg:') !== path.startsWith('/pg/'))) {
+    throw new ApiError('내보내기 원천과 선택 회사가 다릅니다.', { code: 'VALIDATION_ERROR', status: 400, requestId: '', details: {} });
+  }
+  const headers = new Headers({ Accept: analytics ? 'text/csv' : "image/jpeg, image/png, application/pdf", Authorization: `Bearer ${options.session.token}` });
   if (options.session.orgId) headers.set("X-Org-Id", options.session.orgId);
   const response = await fetch(`${API_BASE_URL}${workspaceEndpoint(path, options.session.orgId)}`, {
     headers, cache: "no-store", redirect: "error",
@@ -137,8 +141,13 @@ export async function apiBlob(
   }
   const disposition = response.headers.get("content-disposition") ?? "";
   const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
-  const filename = encoded ? decodeURIComponent(encoded) : "receipt";
-  return { blob: await response.blob(), filename };
+  const quoted = /filename="([^"\r\n]+)"/i.exec(disposition)?.[1];
+  const filename = encoded ? decodeURIComponent(encoded) : quoted ?? (analytics ? 'analytics.csv' : 'receipt');
+  const count = response.headers.get('x-row-count');
+  if (analytics && (!response.headers.get('content-type')?.startsWith('text/csv') || count === null || !/^(0|[1-9]\d{0,5})$/.test(count) || Number(count) > 100000)) {
+    throw new ApiError('CSV 응답 형식 또는 X-Row-Count가 올바르지 않습니다.', { code: 'INVALID_RESPONSE', status: response.status, requestId: '', details: {} });
+  }
+  return { blob: await response.blob(), filename, rowCount: analytics ? Number(count) : null };
 }
 
 export function userMessageOf(error: unknown): string {

@@ -8,11 +8,11 @@ import { startDailyNativePostgres } from './daily-native-fixture.js';
 import { networkAudit } from '../../scripts/deadline-isolation-guard.mjs';
 
 const modules = ['analytics', 'tasks', 'projects', 'finance', 'agent', 'approvals'];
-export async function analyticsFixture(pgMode) {
+export async function analyticsFixture(pgMode, evidenceDirectory) {
   assert.equal(process.env.DEADLINE_ISOLATED, '1');
   let native, server, pg, database, insert, nativeInfo;
   const http = [], cleanup = {};
-  const evidence = new URL('../../.omo/evidence/task-24-deadline-erp-redesign/', import.meta.url);
+  const evidence = evidenceDirectory ?? new URL('../../.omo/evidence/task-24-deadline-erp-redesign/', import.meta.url);
   async function close() {
     if (server) { await server.close(); cleanup.serverClosed = true; }
     if (pg) await pg.closePgPool();
@@ -142,6 +142,6 @@ export async function analyticsFixture(pgMode) {
       try { const value = await work(); return { value, queries }; }
       finally { target[method] = original; }
     }
-    return { pgMode, api, owner, foreign, cid, tenant, record, database, native, limited, grants, task, budget, entry, approval, feature, moduleEnabled, bulkTasks, trace, close };
+    return { pgMode, baseUrl: server.baseUrl, resource: server.resource, api, owner, foreign, cid, tenant, record, database, native, limited, grants, task, budget, entry, approval, feature, moduleEnabled, bulkTasks, trace, close };
   } catch (error) { await close(); throw error; }
 }
