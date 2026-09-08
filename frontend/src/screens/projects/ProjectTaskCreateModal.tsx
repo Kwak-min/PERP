@@ -3,6 +3,7 @@ import { useModalFocus } from "../../hooks/useModalFocus";
 import { apiRequest, userMessageOf, type ApiSession } from "../../services/api";
 import { isPgWorkspace } from "../../services/workspace";
 import { Button } from "../../components/ui/Button";
+import { AssigneeSelect } from '../../components/common/AssigneeSelect';
 import type { Project } from "./model";
 
 export function ProjectTaskCreateModal({ kind, projects, projectId, departmentId, session, onClose, onSaved, initialProject }: Readonly<{
@@ -12,6 +13,7 @@ export function ProjectTaskCreateModal({ kind, projects, projectId, departmentId
   const first = useRef<HTMLInputElement>(null);
   const [name, setName] = useState(initialProject?.name ?? "");
   const [project, setProject] = useState(projectId ?? "");
+  const [assignee, setAssignee] = useState('');
   const [start, setStart] = useState(initialProject?.start_date?.slice(0, 10) ?? "");
   const [end, setEnd] = useState(initialProject?.end_date?.slice(0, 10) ?? "");
   const [description, setDescription] = useState(initialProject?.description ?? "");
@@ -27,7 +29,7 @@ export function ProjectTaskCreateModal({ kind, projects, projectId, departmentId
     try {
       await apiRequest(`${pg ? "/pg" : ""}/${kind === "project" ? "projects" : "tasks"}${initialProject ? `/${encodeURIComponent(initialProject.id)}` : ""}`, { session, method: initialProject ? "PATCH" : "POST", body: kind === "project"
         ? { ...(initialProject ? { version: initialProject.version } : {}), name: name.trim(), description, ...(pg ? { starts_on: start || null, ends_on: end || null } : { start_date: start || null, end_date: end || null, department_id: departmentId }) }
-        : { title: name.trim(), project_id: project, ...(pg ? { due_on: end || null } : { due_at: end || null }) } });
+        : { title: name.trim(), project_id: project, assignee_id: assignee || null, ...(pg ? { due_on: end || null } : { due_at: end || null }) } });
       onSaved();
     } catch (caught: unknown) { setError(userMessageOf(caught)); setSaving(false); }
   }
@@ -36,7 +38,8 @@ export function ProjectTaskCreateModal({ kind, projects, projectId, departmentId
       <header className="modal__head"><h2 id="project-task-create-title">{initialProject ? "프로젝트 수정" : kind === "project" ? "프로젝트 만들기" : "업무 만들기"}</h2><Button tone="neutral" disabled={saving} onClick={close}>닫기</Button></header>
       <div className="form-stack">
         <label>{kind === "project" ? "이름" : "제목"}<input ref={first} required maxLength={kind === "project" ? 200 : 300} value={name} onChange={event => setName(event.target.value)} /></label>
-        {kind === "task" && <label>프로젝트<select required disabled={Boolean(projectId)} value={project} onChange={event => setProject(event.target.value)}><option value="">프로젝트 선택</option>{projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
+        {kind === "task" && <label>프로젝트<select required disabled={Boolean(projectId)} value={project} onChange={event => { setProject(event.target.value); setAssignee(''); }}><option value="">프로젝트 선택</option>{projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
+        {kind === 'task' && <AssigneeSelect session={session} projectId={project} value={assignee} onChange={setAssignee} disabled={saving || !project} />}
         {kind === "project" && <><label>시작<input type="date" value={start} onChange={event => setStart(event.target.value)} /></label><label>설명<textarea value={description} onChange={event => setDescription(event.target.value)} /></label></>}
         <label>{kind === "project" ? "종료" : "기한"}<input type="date" value={end} onChange={event => setEnd(event.target.value)} /></label>
       </div>

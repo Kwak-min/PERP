@@ -44,11 +44,14 @@ export async function startDailyNativePostgres() {
       VALUES ($1,$2,$3,$4,'approved') RETURNING id,email,name`, [i === 0 ? companyId : otherCompanyId, `daily-${i}@example.invalid`, `일상 검증 ${i}`, hashPassword('password-1234')])).rows[0]);
     // 담당자의 global company는 B여도 실제 활성 membership A가 있으면 이관 가능해야 한다.
     for (const [cid, uid] of [[companyId,users[0].id],[companyId,users[1].id],[otherCompanyId,users[1].id],[otherCompanyId,users[2].id]]) await pool.query('INSERT INTO org.company_memberships(company_id,user_id) VALUES ($1,$2)', [cid,uid]);
-    const codes = ['member.read','project.read','project.write','task.read','task.write','event.read','event.write','asset.read','asset.write','menu.home','menu.projects','menu.tasks','menu.calendar','menu.assets','menu.members','menu.configured'];
+    const codes = ['member.read','project.read','project.write','task.read','task.write','event.read','event.write','asset.read','asset.write','notification.read','menu.notifications','menu.home','menu.projects','menu.tasks','menu.calendar','menu.assets','menu.members','menu.configured'];
     await pool.query("INSERT INTO org.permissions(code,module,description) SELECT code,'daily',code FROM unnest($1::text[]) code ON CONFLICT (code) DO NOTHING", [codes]);
     const role = (await pool.query("INSERT INTO org.roles(company_id,name) VALUES ($1,'DAILY_TEST_ROLE') RETURNING id", [companyId])).rows[0];
     await pool.query('INSERT INTO org.role_permissions(role_id,permission_id) SELECT $1,id FROM org.permissions WHERE code=ANY($2::text[])', [role.id,codes]);
     await pool.query('INSERT INTO org.user_roles(user_id,role_id) VALUES ($1,$2)', [users[0].id,role.id]);
+    const recipientRole = (await pool.query("INSERT INTO org.roles(company_id,name) VALUES ($1,'DAILY_RECIPIENT_ROLE') RETURNING id", [companyId])).rows[0];
+    await pool.query('INSERT INTO org.role_permissions(role_id,permission_id) SELECT $1,id FROM org.permissions WHERE code=ANY($2::text[])', [recipientRole.id,['notification.read','task.read','project.read','member.read','menu.notifications','menu.tasks','menu.projects','menu.members','menu.home','menu.configured']]);
+    await pool.query('INSERT INTO org.user_roles(user_id,role_id) VALUES ($1,$2)', [users[1].id,recipientRole.id]);
     await pool.query("INSERT INTO org.company_modules(company_id,module_key) SELECT $1,k FROM unnest($2::text[]) k ON CONFLICT DO NOTHING", [companyId,['projects','tasks','calendar','assets']]);
     console.log(JSON.stringify({ engine: (await pool.query('SELECT version()')).rows[0].version, host: '127.0.0.1', fixture: 'isolated native PostgreSQL, real auth/memberships/SQL', migrationAppliedTwice: true }));
     return { pool, companyId, otherCompanyId, assigneeId: users[1].id, foreignId: users[2].id, identity: { users }, close };

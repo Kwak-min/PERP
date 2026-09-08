@@ -10,6 +10,7 @@ import { StateBoundary } from "../components/common/StateBoundary";
 import { Button } from "../components/ui/Button";
 import { AssigneeSelect } from '../components/common/AssigneeSelect';
 import { ProjectTaskCreateModal } from "./projects/ProjectTaskCreateModal";
+import { ProjectAssignmentModal, type ProjectAssignmentTarget } from './projects/ProjectAssignmentModal';
 import { parseProjects, parseTasks, projectProgress, statusLabel, tasksForProject, taskStatuses, type Project, type Task } from "./projects/model";
 import "./projects/project-tasks.css";
 
@@ -52,6 +53,7 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
   const [modal, setModal] = useState<{ kind: "project" | "task"; projectId?: string } | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [assignmentTarget, setAssignmentTarget] = useState<ProjectAssignmentTarget | null>(null);
   const parseProjectRows = useMemo(() => (payload: unknown) => parseProjects(payload, pg), [pg]);
   const parseTaskRows = useMemo(() => (payload: unknown) => parseTasks(taskId && !pg ? { items: [payload] } : payload, pg), [pg, taskId]);
   const projects = useRows(`${pg ? "/pg" : ""}/projects?limit=-1${projectView && branch && !pg ? `&department_id=${encodeURIComponent(branch)}` : ""}`, session, revision, parseProjectRows);
@@ -89,7 +91,7 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
         <select aria-label={`${task.title} 상태`} disabled={!can("task.write") || saving !== null} value={task.status} onChange={event => void updateTask(task, { status: event.target.value })}>
           {!taskStatuses.some(item => item.value === task.status) && <option value={task.status}>{statusLabel(task.status)}</option>}
           {taskStatuses.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
-        </select></div>
+        </select><Button size="small" tone="neutral" disabled={!can('task.write') || saving !== null || task.version === undefined} onClick={() => setAssignmentTarget({ mode: 'assignment', task })}>담당자 배정</Button></div>
     </li>)}</ul> : <p className="project-tasks__empty" role="status">등록된 업무가 없습니다.</p>;
   }
   return <div className="screen project-tasks" data-screen-id={screen.id}>
@@ -109,7 +111,7 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
               : <span role="status">{tasks.status === "loading" ? "진행률 불러오는 중" : tasks.status === "forbidden" ? "업무 조회 권한 없음" : "진행률 조회 실패"}</span>}
           </div>
           <div id={`project-tasks-${project.id}`} hidden={!open} className="project-tasks__expanded">
-            <div className="project-tasks__project-meta"><span>{project.start_date?.slice(0, 10) ?? "시작 미정"} ~ {project.end_date?.slice(0, 10) ?? "종료 미정"}</span><Button size="small" disabled={!can('project.write') || project.version === undefined} onClick={() => setEditingProject(project)}>프로젝트 수정</Button><Button size="small" disabled={!can("task.write")} onClick={() => setModal({ kind: "task", projectId: project.id })}>업무 만들기</Button></div>
+            <div className="project-tasks__project-meta"><span>{project.start_date?.slice(0, 10) ?? "시작 미정"} ~ {project.end_date?.slice(0, 10) ?? "종료 미정"}</span><Button size="small" tone="neutral" disabled={!can('project.write')} onClick={() => setAssignmentTarget({ mode: 'member', project })}>구성원 추가</Button><Button size="small" disabled={!can('project.write') || project.version === undefined} onClick={() => setEditingProject(project)}>프로젝트 수정</Button><Button size="small" disabled={!can("task.write")} onClick={() => setModal({ kind: "task", projectId: project.id })}>업무 만들기</Button></div>
             <StateBoundary status={tasks.status} error={tasks.error}>{taskList(related)}</StateBoundary>
           </div>
         </section>;
@@ -117,6 +119,7 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
     </StateBoundary> : <StateBoundary status={tasks.status} error={tasks.error}>{taskId ? detail
       ? <TaskDetail key={`${detail.id}:${revision}`} task={detail} session={session} project={projects.items.find(project => project.id === detail.project_id)} disabled={!can("task.write") || saving !== null} onSave={patch => void updateTask(detail, patch)} />
       : <p role="status">업무를 찾을 수 없습니다.</p> : taskList(filteredTasks)}</StateBoundary>}
+    {assignmentTarget && <ProjectAssignmentModal target={assignmentTarget} session={session} onClose={() => setAssignmentTarget(null)} onSaved={() => { refresh(); setNotice(assignmentTarget.mode === 'member' ? '프로젝트 구성원을 추가했습니다.' : '업무 배정을 저장했습니다.'); }} />}
     {editingProject && <ProjectTaskCreateModal kind="project" projects={projects.items} initialProject={editingProject} departmentId={null} session={session} onClose={() => setEditingProject(null)} onSaved={() => { setEditingProject(null); refresh(); setNotice('프로젝트를 저장했습니다.'); }} />}
     {modal && <ProjectTaskCreateModal {...modal} projects={projects.items} departmentId={pg ? null : branch} session={session} onClose={() => setModal(null)} onSaved={() => { const id = modal.projectId; if (id) setExpanded(current => new Set([...current, id])); setModal(null); refresh(); setNotice("서버에 저장했습니다."); }} />}
   </div>;
@@ -130,7 +133,7 @@ function TaskDetail({ task, project, session, disabled, onSave }: Readonly<{ tas
     {task.description && <p>{task.description}</p>}
     <label>제목<input required maxLength={300} disabled={disabled} value={title} onChange={event => setTitle(event.target.value)} /></label>
     <label>상태<select value={status} disabled={disabled} onChange={event => setStatus(event.target.value)}>{!taskStatuses.some(item => item.value === status) && <option value={status}>{statusLabel(status)}</option>}{taskStatuses.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-    <AssigneeSelect session={session} value={assignee} onChange={setAssignee} disabled={disabled} />
+    <AssigneeSelect session={session} projectId={task.project_id} value={assignee} onChange={setAssignee} disabled={disabled} />
     <label>기한<input type="date" value={due} disabled={disabled} onChange={event => setDue(event.target.value)} /></label>
     <progress aria-label={`${task.title} 진행률`} max={100} value={task.status === "done" ? 100 : 0} />
     <Button type="submit" disabled={disabled}>변경 저장</Button>
