@@ -8,7 +8,7 @@ export async function installCalendarFixture() {
   const { pgPool } = await import('../../backend/src/config/pg.js');
   const identityQuery = pgPool.query;
   const sql = new DatabaseSync(':memory:');
-  sql.exec("ATTACH DATABASE ':memory:' AS calendar; CREATE TABLE calendar.events (id INTEGER PRIMARY KEY, company_id TEXT, owner_id TEXT, title TEXT, location TEXT, starts_at TEXT, ends_at TEXT, scope TEXT)");
+  sql.exec("ATTACH DATABASE ':memory:' AS calendar; CREATE TABLE calendar.events (id INTEGER PRIMARY KEY, company_id TEXT, owner_id TEXT, title TEXT, location TEXT, starts_at TEXT, ends_at TEXT, scope TEXT, version INTEGER NOT NULL DEFAULT 1, cancelled_at TEXT)");
   identity.state.permissions.push(...['event.read', 'event.write', 'member.read'].map(code => ({ role_id: '1', code })));
   identity.state.modules.push({ company_id: '77', module_key: 'calendar' });
   const queries = [];

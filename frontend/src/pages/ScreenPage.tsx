@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 
 import { StateBoundary } from "../components/common/StateBoundary";
+import { AssetCustodyModal } from '../components/common/AssetCustodyModal';
 import { CalendarSurface } from "../components/data/CalendarSurface";
 import { isOperationalScreen, OperationalSurface } from "../components/data/OperationalSurface";
 import { CreateFormModal } from "../components/common/CreateFormModal";
@@ -207,15 +208,17 @@ function DataTable({
   onRowClick,
   onDelete,
   onEdit,
+  onCustody,
 }: Readonly<{
   table: TableData;
   onRowClick?: (row: readonly string[], index: number) => void;
   onDelete?: (row: TableRow) => void;
   onEdit?: (id: string) => void;
+  onCustody?: (row: TableRow) => void;
 }>) {
   const canDelete = Boolean(onDelete);
   const canEdit = Boolean(onEdit);
-  const canAct = canDelete || canEdit;
+  const canAct = canDelete || canEdit || Boolean(onCustody);
   return (
     <div className="table-wrap" role="region" aria-label="데이터 표" tabIndex={0}>
       <p className="table-scroll-hint">표를 좌우로 스크롤해 모든 열을 확인할 수 있습니다.</p>
@@ -249,6 +252,7 @@ function DataTable({
               {canAct && (
                 <td>
                   <span className="row-actions">
+                    {onCustody && row.id && <Button tone="ghost" size="small" onClick={event => { event.stopPropagation(); onCustody(row); }}>담당·상태</Button>}
                     {canEdit && row.id ? (
                       <Button
                         tone="ghost"
@@ -346,6 +350,7 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const trendable = (screen.endpoint ?? "").startsWith("/members");
   const [trend, setTrend] = useState<{ stat: Stat; metric: MetricKey } | null>(null);
   const [showMembers, setShowMembers] = useState(false);
+  const [custodyId, setCustodyId] = useState<string | null>(null);
   const [quickModal, setQuickModal] = useState<"create" | "edit" | null>(null);
   const [editModal, setEditModal] = useState<{ config: CreateConfig; initialValues: Record<string, string> } | null>(null);
   const departments = useDepartments(apiSession);
@@ -376,7 +381,7 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const serverEmpty = resource.status === "empty" && !hasServerContent;
 
   const pgWorkspace = isPgWorkspace(session?.orgId);
-  const deleteResource = pgWorkspace ? screen.deleteResource : undefined;
+  const deleteResource = pgWorkspace && screen.id !== 'AST-001' ? screen.deleteResource : undefined;
   const handleDelete = deleteResource
     ? async (row: TableRow) => {
         try {
@@ -394,7 +399,7 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
       }
     : undefined;
 
-  const editResource = pgWorkspace ? screen.editResource : undefined;
+  const editResource = pgWorkspace && screen.id !== 'AST-001' ? screen.editResource : undefined;
   const editCreateConfig = screen.create;
   const handleEdit = editResource && editCreateConfig
     ? async (id: string) => {
@@ -600,6 +605,9 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             {pagination ? (
               <DataTable
                 table={pagination.table}
+                {...(screen.id === 'AST-001' ? { onCustody: (row: TableRow) => {
+                  if (row.id) setCustodyId(row.id);
+                } } : {})}
                 {...(handleDelete ? { onDelete: handleDelete } : {})}
                 {...(handleEdit ? { onEdit: handleEdit } : {})}
               />
@@ -628,6 +636,7 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
           }}
         />
       )}
+      {custodyId && apiSession && <AssetCustodyModal id={custodyId} session={apiSession} onClose={() => setCustodyId(null)} onSaved={() => { setReloadKey(key => key + 1); setNotice('자산 담당·상태를 저장했습니다.'); }} />}
       {editModal && (
         <CreateFormModal
           entityLabel={screen.label}
