@@ -11,6 +11,7 @@ import {
 import { approvalBody, initialApprovalFormRevision, legacyApprovalAmount, normalizeApprovalFields, validateApprovalSubmission } from '../services/approval-forms.service.js';
 import { consumeLegacyReceipts } from '../services/legacy-receipt-files.service.js';
 import { notify } from '../services/notification.service.js';
+import { legacyRoleGrants } from '../services/company-roles.service.js';
 import { verifyPassword } from '../utils/crypto.js';
 import { ApiError, notFound } from '../utils/errors.js';
 
@@ -84,6 +85,19 @@ export function createForm(req, res) {
 export function listForms(req, res) {
   const principal = resolvePrincipal(req); principal.require('approval.request');
   res.json({ items: legacyApprovalForms(principal) });
+}
+
+// 구성원 목록 권한을 확대하지 않고 기안에 필요한 활성 결재자 ID/이름만 제공한다.
+export function approverCandidates(req, res) {
+  const principal = resolvePrincipal(req); principal.require('approval.request');
+  const rows = db().prepare(`SELECT u.id,u.name,m.roles FROM membership m JOIN app_user u ON u.id=m.user_id
+    WHERE m.tenant_id=? AND m.org_id=? AND m.status='active' AND m.deleted_at IS NULL AND u.auth_status='active'
+    ORDER BY u.name,u.id`).all(principal.tenantId, principal.orgId);
+  const items = rows.filter(row => {
+    const { permissions } = legacyRoleGrants(principal, (row.roles ?? '').split(',').filter(Boolean));
+    return permissions.has('*') || (permissions.has('approval.decide') && permissions.has('menu.approvals'));
+  }).map(({ id, name }) => ({ id, name }));
+  res.json({ items });
 }
 
 // Compatibility route: existing callers still create an immediately submitted pending request.
@@ -172,28 +186,32 @@ export function submitDraft(req, res) {
 export function listRequests(req, res) {
   const principal = resolvePrincipal(req); requireApprovalSurface(principal);
   const box = req.query.box ?? 'inbox';
-  const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
+  const limit = Math.min(Math.max(z.coerce.number().int().default(50).parse(req.query.limit), 1), 200);
+  const offset = z.coerce.number().int().min(0).max(1000000).default(0).parse(req.query.offset);
   let rows;
   if (box === 'sent' || box === 'drafts') {
     rows = db().prepare(`SELECT * FROM approval WHERE tenant_id=? AND org_id=? AND requester_id=?
-      AND deleted_at IS NULL ${box === 'drafts' ? "AND status='draft'" : ''} ORDER BY created_at DESC LIMIT ?`)
-      .all(principal.tenantId, principal.orgId, principal.userId, limit);
+      AND deleted_at IS NULL ${box === 'drafts' ? "AND status='draft'" : ''} ORDER BY created_at DESC,id DESC`)
+      .all(principal.tenantId, principal.orgId, principal.userId);
   } else if (box === 'completed') {
     rows = db().prepare(`SELECT a.* FROM approval a WHERE a.tenant_id=? AND a.org_id=? AND a.deleted_at IS NULL
       AND a.status IN ('approved','rejected','withdrawn')
       AND ((a.requester_id=? AND ?=1) OR (a.requester_id<>? AND ?=1 AND EXISTS(
         SELECT 1 FROM approval_step s WHERE s.approval_id=a.id AND s.tenant_id=a.tenant_id AND s.approver_id=? AND s.deleted_at IS NULL)))
-      ORDER BY a.created_at DESC,a.id DESC LIMIT ?`)
+      ORDER BY a.created_at DESC,a.id DESC`)
       .all(principal.tenantId, principal.orgId, principal.userId, Number(principal.has('approval.request')),
-        principal.userId, Number(principal.has('approval.decide')), principal.userId, limit);
+        principal.userId, Number(principal.has('approval.decide')), principal.userId);
   } else {
     rows = db().prepare(`SELECT DISTINCT a.* FROM approval a JOIN approval_step s ON s.approval_id=a.id AND s.tenant_id=a.tenant_id
       WHERE a.tenant_id=? AND a.org_id=? AND a.status='pending' AND a.deleted_at IS NULL
-        AND s.approver_id=? AND s.deleted_at IS NULL ORDER BY a.created_at DESC LIMIT ?`)
-      .all(principal.tenantId, principal.orgId, principal.userId, limit)
+        AND s.approver_id=? AND s.deleted_at IS NULL ORDER BY a.created_at DESC,a.id DESC`)
+      .all(principal.tenantId, principal.orgId, principal.userId)
       .filter(row => canReadApproval(principal, row));
   }
-  res.json({ items: rows.filter(row => canReadApproval(principal, row)).map(row => approvalView(principal, row)), box });
+  // 인가된 집합에서 페이지를 잘라 비공개 행의 존재/건수를 공개하지 않는다.
+  const readable = rows.filter(row => canReadApproval(principal, row));
+  res.json({ items: readable.slice(offset, offset + limit).map(row => approvalView(principal, row)), box,
+    offset, limit, has_more: readable.length > offset + limit });
 }
 
 export function getRequest(req, res) {

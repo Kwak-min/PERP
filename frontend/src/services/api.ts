@@ -141,6 +141,27 @@ export async function apiBlob(
   return { blob: await response.blob(), filename };
 }
 
+// 결재 원본은 multipart가 아닌 검증된 원본 바이트 계약으로 전송한다.
+export async function apiUpload(path: string, file: File, options: Readonly<{ session: ApiSession; signal?: AbortSignal }>): Promise<unknown> {
+  if (!/^\/(?:pg\/)?approvals\/receipt-uploads$/.test(path)) {
+    throw new ApiError('첨부 업로드 경로가 올바르지 않습니다.', { code: 'VALIDATION_ERROR', status: 400, requestId: '', details: {} });
+  }
+  const headers = new Headers({ Accept: 'application/json', 'Content-Type': file.type || 'application/octet-stream',
+    'X-Upload-Name': encodeURIComponent(file.name), Authorization: `Bearer ${options.session.token}` });
+  if (options.session.orgId) headers.set('X-Org-Id', options.session.orgId);
+  const response = await fetch(`${API_BASE_URL}${workspaceEndpoint(path, options.session.orgId)}`, { method: 'POST', headers, body: file,
+    redirect: 'error', signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(10000)]) : AbortSignal.timeout(10000) });
+  const payload: unknown = await response.json();
+  if (!response.ok) {
+    const parsed = apiErrorSchema.safeParse(payload);
+    throw new ApiError(parsed.success ? parsed.data.error.message : `첨부 실패 (${response.status})`, {
+      code: parsed.success ? parsed.data.error.code : 'HTTP_ERROR', status: response.status,
+      requestId: response.headers.get('x-request-id') ?? '', details: parsed.success ? parsed.data.error.details : {},
+    });
+  }
+  return payload;
+}
+
 export function userMessageOf(error: unknown): string {
   if (error instanceof ApiError) {
     // 503 은 원인·조치가 담긴 운영 안내라 그대로 노출한다.

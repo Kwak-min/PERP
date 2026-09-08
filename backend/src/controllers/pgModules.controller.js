@@ -281,7 +281,7 @@ export async function approvals(req, res) {
   if (!principal.has('approval.decide')) principal.require('approval.request');
   const canDecide = principal.has('approval.decide');
   const { rows } = await pgQuery(
-    `SELECT ar.id AS __id, ar.requester_id, ar.request_type AS 유형, r.name AS 신청자, t.name AS 대상,
+    `SELECT ar.id AS __id, ar.requester_id, to_jsonb(ar)->>'title' AS title, ar.request_type AS 유형, r.name AS 신청자, t.name AS 대상,
             ar.status AS status, ar.created_at AS 신청일, ar.payload, ar.decision_note, ar.decided_at
        FROM org.approval_requests ar
        LEFT JOIN auth.users r ON r.id = ar.requester_id
@@ -290,7 +290,8 @@ export async function approvals(req, res) {
       ORDER BY ar.created_at DESC, ar.id DESC`,
     [companyId],
   );
-  const items = rows.filter(row => canReadPgApproval(principal, row)).map(({ requester_id, ...row }) => row);
+  // 같은 읽기 predicate를 통과한 행에만 인증 ID 기반 내 요청 분류용 ID를 투영한다.
+  const items = rows.filter(row => canReadPgApproval(principal, row));
   res.json({ items, can_decide: canDecide, can_request: principal.has('approval.request') });
 }
 

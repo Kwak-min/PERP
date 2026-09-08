@@ -18,6 +18,7 @@ import { RoleSettingsScreen } from './RoleSettingsScreen';
 import { SettingsScreen } from './SettingsScreen';
 import { ProjectTaskScreen } from './ProjectTaskScreen';
 import { DailyFinanceScreen } from './DailyFinanceScreen';
+import { ApprovalsScreen } from './ApprovalsScreen';
 
 export type ScreenComponent = ComponentType<Readonly<{ screen: ScreenDefinition }>>;
 
@@ -25,7 +26,7 @@ export type ScreenComponent = ComponentType<Readonly<{ screen: ScreenDefinition 
  * 화면 ID별 전용 화면. 여기 없는 화면은 공통 ScreenPage가 렌더한다.
  */
 export const screenOverrides: Readonly<Record<string, ScreenComponent>> = {
-  'APR-001': DailyFinanceScreen,
+  'APR-001': ApprovalsScreen,
   'FIN-004': DailyFinanceScreen,
   "ORG-001": OrgModulesScreen,
   'ORG-002': OrgChartScreen,

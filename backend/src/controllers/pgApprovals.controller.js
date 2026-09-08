@@ -196,7 +196,7 @@ export async function pgApprovalHistory(req, res) {
   const items = await pgTransaction(async client => { const fresh = await freshPrincipal(client, principal); const row = await requestRow(client, fresh, id);
     if (!canReadPgApproval(fresh, row)) throw notFound('approval');
     const recorded = (await client.query(`SELECT id::text,actor_id::text,action,status,snapshot,created_at
-      FROM org.approval_request_history WHERE company_id=$1 AND approval_id=$2 ORDER BY id`, [fresh.companyId, id])).rows;
+      FROM org.approval_request_history WHERE company_id=$1 AND approval_id=$2 ORDER BY approval_request_history.id`, [fresh.companyId, id])).rows;
     if (!recorded.some(item => item.action.startsWith('decision.')) && row.decided_at && ['approved', 'rejected'].includes(row.status)) {
       recorded.push({ id: null, actor_id: row.decided_by == null ? null : String(row.decided_by),
         action: row.status === 'approved' ? 'decision.approve' : 'decision.reject', status: row.status,

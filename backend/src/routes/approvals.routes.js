@@ -14,6 +14,7 @@ approvalsRouter.get('/requests/:id/receipts/:fileId', asyncRoute(downloadReceipt
 
 approvalsRouter.post('/forms', asyncRoute(controller.createForm));
 approvalsRouter.get('/forms', asyncRoute(controller.listForms));
+approvalsRouter.get('/approver-candidates', asyncRoute(controller.approverCandidates));
 approvalsRouter.post('/drafts', asyncRoute(controller.createDraft));
 approvalsRouter.post('/requests', asyncRoute(controller.requestApproval));
 approvalsRouter.get('/requests', asyncRoute(controller.listRequests));

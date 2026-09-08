@@ -15,7 +15,9 @@ import { networkAudit, protectedPorts } from '../../scripts/deadline-isolation-g
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const args = process.argv.slice(2);
-if (args[0] !== '--scenario' || !['baseline', 'recruitment-nav'].includes(args[1]) || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {
+if (args[0] === '--scenario' && args[1] === 'approval-workflow' && args.length === 2) {
+  await (await import('./deadline-approval-workflow.scenario.mjs')).approvalWorkflow();
+} else if (args[0] !== '--scenario' || !['baseline', 'recruitment-nav'].includes(args[1]) || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {
   console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav [--probe error|cancel]');
   process.exitCode = 2;
 } else {
