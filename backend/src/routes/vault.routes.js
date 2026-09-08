@@ -3,7 +3,10 @@ import { Router } from "express";
 import * as controller from "../controllers/vault.controller.js";
 import { asyncRoute } from "../middleware/error.js";
 
+import { knowledgeWikiRouter } from './knowledge-wiki.routes.js';
+
 export const vaultRouter = Router();
+vaultRouter.use('/wiki', knowledgeWikiRouter('legacy', 'personal'));
 
 vaultRouter.post("/notes", asyncRoute(controller.createNote));
 vaultRouter.get("/notes", asyncRoute(controller.listNotes));

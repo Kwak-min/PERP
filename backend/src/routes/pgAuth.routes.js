@@ -15,7 +15,11 @@ import { duesPaymentHistory, recordDuesPayment } from '../controllers/pgDuesPaym
 
 // perp_db (PostgreSQL) 슬라이스 라우터. strangler-fig: 기존 SQLite 라우트와 분리.
 // 마운트 지점: /api/v1/pg
+import { knowledgeWikiRouter } from './knowledge-wiki.routes.js';
+
 export const pgRouter = Router();
+pgRouter.use('/vault/wiki', knowledgeWikiRouter('pg', 'personal'));
+pgRouter.use('/documents/wiki', knowledgeWikiRouter('pg', 'company'));
 
 pgRouter.use("/agent/api-key", pgAgentKeyRouter);
 pgRouter.get("/health", asyncRoute(controller.health));

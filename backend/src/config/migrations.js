@@ -1,3 +1,5 @@
+import { knowledgeDDL } from './knowledge-schema.js';
+
 function columnsOf(conn, table) {
   return new Set(conn.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
 }
@@ -233,6 +235,7 @@ const MIGRATIONS = [
       addColumn(conn, 'membership', 'roles_version INTEGER NOT NULL DEFAULT 1');
     },
   },
+  { version: 12, up(conn) { conn.exec(knowledgeDDL('sqlite')); } },
 ];
 
 export function applyMigrations(conn) {
