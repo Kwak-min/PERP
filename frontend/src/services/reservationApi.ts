@@ -19,6 +19,23 @@ import { spaceSchema } from "../screens/reservation/model";
 const RESERVATION_API_BASE =
   import.meta.env.VITE_RESERVATION_API_URL ?? "http://localhost:8080";
 
+const errorFieldsSchema = z.object({
+  code: z.string().optional(), message: z.string().optional(), details: z.unknown().optional(),
+});
+const errorEnvelopeSchema = errorFieldsSchema.extend({ error: errorFieldsSchema.optional() });
+
+export class ReservationApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+    readonly details?: unknown,
+  ) {
+    super(message);
+    this.name = 'ReservationApiError';
+  }
+}
+
 async function rsvFetch<T>(
   path: string,
   options: RequestInit = {},
@@ -42,9 +59,12 @@ async function rsvFetch<T>(
 
   if (!res.ok) {
     if (res.status === 401) sessionStore.clear();
-    const message =
-      payload?.error?.message ?? `요청 실패 (HTTP ${res.status})`;
-    throw new Error(message);
+    const parsed = errorEnvelopeSchema.safeParse(payload);
+    const fields = parsed.success ? parsed.data.error ?? parsed.data : undefined;
+    throw new ReservationApiError(
+      res.status, fields?.code ?? `HTTP_${res.status}`,
+      fields?.message ?? `요청 실패 (HTTP ${res.status})`, fields?.details,
+    );
   }
 
   // 백엔드 응답 형식: { success, data, message }
