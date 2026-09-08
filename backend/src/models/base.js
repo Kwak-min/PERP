@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 
 import { db } from "../config/db.js";
 import { notFound } from "../utils/errors.js";
+import { signalWikiWrite } from "../config/knowledge-wake.js";
 
 export const newId = () => crypto.randomUUID();
 export const nowIso = () => new Date().toISOString();
@@ -117,6 +118,7 @@ export function update(table, id, patch, actorId = null) {
   const assignments = keys.map((k) => `${k} = ?`).join(", ");
   const params = keys.map((k) => normalize(record[k]));
   db().prepare(`UPDATE ${table} SET ${assignments} WHERE id = ?`).run(...params, id);
+  signalWikiWrite();
   return db().prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id);
 }
 
@@ -129,7 +131,9 @@ export function softDelete(table, id, actorId = null) {
 }
 
 export function hardDelete(table, whereSql, params = []) {
-  return db().prepare(`DELETE FROM ${table} WHERE ${whereSql}`).run(...params);
+  const result = db().prepare(`DELETE FROM ${table} WHERE ${whereSql}`).run(...params);
+  signalWikiWrite();
+  return result;
 }
 
 /** node:sqlite 는 boolean/undefined 바인딩을 거부하므로 정규화한다. */

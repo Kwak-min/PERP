@@ -9,6 +9,7 @@ import { assertEnabled } from '../middleware/modules.js';
 import { canReadDocument, SENSITIVITY_RANK } from './rag.service.js';
 import { extractSupportedTextUpload, MAX_DOCUMENT_UPLOAD_BYTES } from './document-ingestion.service.js';
 import { canonical, sha256, wikiError, deepFreeze, freezeManifest, restoreSpan, citationFor, rankAuthorized } from './knowledge-wiki-contract.service.js';
+import { signalWikiWrite } from '../config/knowledge-wake.js';
 
 const now = () => new Date().toISOString();
 const fail = (code = 'NOT_FOUND', status = 404) => { throw wikiError(code, status); };
@@ -123,7 +124,7 @@ class WikiTransaction {
     if (Object.keys(references).some(k => !['source_revision_id','page_revision_id','job_id','change_set_id'].includes(k))) throw new Error('invalid event reference');
     const seq = yield* this.one('SELECT COALESCE(MAX(sequence),0)+1 AS n FROM knowledge_event WHERE wiki_id=?', [this.wiki.id]);
     return yield* this.insert('event', { sequence: Number(seq.n), kind, actor_id: this.context.actorId,
-      ...references, metadata_json: canonical(metadata), created_at: now() });
+      ...references, metadata_json: canonical(metadata), created_at: yield* this.clock() });
   }
   *authorize() {
     const c = this.context, action = c.scope === 'company' ? `document.${this.write ? 'write' : 'read'}` : 'agent.chat';
@@ -173,7 +174,7 @@ class WikiTransaction {
     const c = this.context;
     if (kind !== (c.scope === 'personal' ? 'note' : 'document')) return null;
     if (!this.pg) {
-      const row = yield* this.one(`SELECT * FROM ${kind === 'note' ? 'vault_note' : 'document'} WHERE id=? AND tenant_id=? AND org_id=? AND deleted_at IS NULL`,[id,c.tenantId,c.companyId]);
+      const row = yield* this.one(`SELECT * FROM ${kind === 'note' ? 'vault_note' : 'document'} WHERE id=? AND tenant_id=? AND org_id=? AND deleted_at IS NULL${kind === 'document' ? ' AND archived=0' : ''}`,[id,c.tenantId,c.companyId]);
       if (!row || (kind === 'note' ? row.owner_id !== c.actorId : !canReadDocument(this.authority,row))) return null;
       return { title:row.title,content:row.content,version:String(row.version),restrictions:{ owner_id:row.owner_id,visibility:kind === 'note' ? 'private' : row.visibility,sensitivity:row.sensitivity } };
     }
@@ -195,6 +196,9 @@ class WikiTransaction {
     const source = yield* this.get('source',revision.source_id);
     if (!source || source.withdrawn_at) return null;
     let freshness = source.current_revision_id === id ? 'current' : 'stale';
+    // 구 캡처의 access_version은 당시 source version과 같았다. 원본 쓰기/복원은 별도 vector를 올린다.
+    const capturedAccess = JSON.parse(revision.restrictions_json).source_access_version ?? source.version;
+    if (capturedAccess !== source.access_version) freshness = 'stale';
     if (source.kind === 'record') {
       const origin = yield* this.origin(source.origin_kind,source.origin_id);
       if (!origin) return null;
@@ -203,7 +207,7 @@ class WikiTransaction {
     if (current && freshness !== 'current') return null;
     return { ...revision, artifact_kind:'source_revision',freshness,source_identity:{ store:this.context.store,company:this.context.companyId,owner:this.context.ownerId,kind:source.origin_kind ?? 'upload',opaque_id:source.origin_id ?? source.id },source_id:source.id };
   }
-  *pageRevision(id, { current = true, visiting = new Set() } = {}) {
+  *pageRevision(id, { current = true, visiting = new Set() } = {}, projectLinks = true) {
     if (visiting.has(id)) return null;
     const revision = yield* this.get('page_revision',id);
     if (!revision) return null;
@@ -211,16 +215,23 @@ class WikiTransaction {
     if (!page || page.state !== 'published') return null;
     // History는 실제 게시 receipt에 포함된 revision만 허용한다. draft를 history로 우회하지 않는다.
     const publications = yield* this.all('publication');
-    if (!publications.some(p => (JSON.parse(p.result_json).page_revision_ids ?? []).includes(id))) return null;
+    const publication = publications.find(p => (JSON.parse(p.result_json).page_revision_ids ?? []).includes(id));
+    if (!publication) return null;
     let freshness = page.published_head_id === id ? 'current' : 'stale';
     const next = new Set(visiting).add(id);
     for (const dep of yield* this.all('dependency','AND dependent_page_revision_id=?',[id])) {
-      const artifact = dep.source_revision_id ? yield* this.sourceRevision(dep.source_revision_id) : yield* this.pageRevision(dep.page_revision_id,{current:false,visiting:next});
+      const artifact = dep.source_revision_id ? yield* this.sourceRevision(dep.source_revision_id) : yield* this.pageRevision(dep.page_revision_id,{current:false,visiting:next},false);
       if (!artifact) return null;
       if (artifact.freshness !== 'current') freshness = 'stale';
     }
     if (current && freshness !== 'current') return null;
-    return { ...revision,artifact_kind:'page_revision',content:revision.markdown,freshness,version:page.version,kind:page.kind };
+    const publishedVersion = JSON.parse(publication.result_json).pages?.find(p => p.revision_id === id)?.version;
+    const links = [];
+    if (projectLinks) for (const link of JSON.parse(revision.links_json)) {
+      const target = yield* this.get('page',link.target_page_id);
+      if (target && (target.id === page.id || (yield* this.pageRevision(target.published_head_id,{},false)))) links.push(link);
+    }
+    return { ...revision,links_json:projectLinks ? canonical(links) : revision.links_json,artifact_kind:'page_revision',content:revision.markdown,freshness,version:publishedVersion ?? page.version,kind:page.kind };
   }
   *register(input) {
     if (input.kind === 'record') {
@@ -251,6 +262,7 @@ class WikiTransaction {
       const extracted = extractSupportedTextUpload(input); title = input.filename; content = extracted.text; bytes = extracted.bytes;
       restrictions = { owner_id:this.context.ownerId,visibility:this.context.scope === 'personal' ? 'private' : 'org',sensitivity:this.context.scope === 'personal' ? 'personal' : 'internal' };
     }
+    restrictions.source_access_version = source.current_revision_id ? source.access_version+1 : source.access_version;
     const revision = yield* this.insert('source_revision',{ source_id:source.id,extraction_revision_id:randomUUID(),title,content,original_base64:bytes.toString('base64'),original_sha256:sha256(bytes),content_sha256:sha256(content),origin_version,restrictions_json:canonical(restrictions),actor_id:this.context.actorId,created_at:now() });
     const updated = yield* this.update('source',source.id,{current_revision_id:revision.id,version:source.current_revision_id ? source.version+1 : source.version,access_version:source.current_revision_id ? source.access_version+1 : source.access_version});
     yield* this.event('source.captured',{source_revision_id:revision.id});
@@ -424,18 +436,29 @@ export function withKnowledgeTransaction(context, {write = false} = {}, work) {
   if (context.store === 'pg') return pgTransaction(async client => {
     try {
       if (!write) await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY');
-      return await runPg(operation(),client,tx);
+      const result=await runPg(operation(),client,tx);
+      // Delivered only at COMMIT, for event-only writes too; no actor/job payload.
+      if(write)await client.query("SELECT pg_notify('orbitflow_wiki_invalidated','{}')");
+      return result;
     } finally { tx.expire(); }
+  }).catch(error => {
+    if (['40001','40P01'].includes(error.code)) throw wikiError('VERSION_CONFLICT',409);
+    throw error;
   });
   const conn = db();
   if (conn.isTransaction) throw new Error('nested knowledge transaction');
   const queryOnly = conn.prepare('PRAGMA query_only').get().query_only;
+  const busyTimeout = conn.prepare('PRAGMA busy_timeout').get().timeout;
   try {
+    if (write) conn.exec('PRAGMA busy_timeout=5000');
     if (!write) conn.exec('PRAGMA query_only=ON');
     conn.exec(write ? 'BEGIN IMMEDIATE' : 'BEGIN');
-    try { const result = runSync(operation(),conn,tx); tx.expire(); conn.exec('COMMIT'); return result; }
+    try { const result = runSync(operation(),conn,tx); tx.expire(); conn.exec('COMMIT'); if (write) signalWikiWrite(); return result; }
     catch (error) { tx.expire(); conn.exec('ROLLBACK'); throw error; }
-  } finally { tx.expire(); conn.exec(`PRAGMA query_only=${queryOnly ? 'ON' : 'OFF'}`); }
+  } catch (error) {
+    if (error.code === 'ERR_SQLITE_ERROR' && (error.errcode & 255) === 5) throw wikiError('VERSION_CONFLICT',409);
+    throw error;
+  } finally { tx.expire(); conn.exec(`PRAGMA query_only=${queryOnly ? 'ON' : 'OFF'}`); conn.exec(`PRAGMA busy_timeout=${busyTimeout}`); }
 }
 export function registerSource(context, input) { return withKnowledgeTransaction(context,{write:true},function*(tx) { return yield* tx.register(input); }); }
 export function retrieveKnowledge(context, input) { return withKnowledgeTransaction(context,{},function*(tx) { return yield* tx.retrieve(input); }); }
