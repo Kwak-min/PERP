@@ -15,12 +15,17 @@ import { networkAudit, protectedPorts } from '../../scripts/deadline-isolation-g
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const args = process.argv.slice(2);
-if (args[0] !== '--scenario' || !['baseline', 'recruitment-nav', 'knowledge-graphs'].includes(args[1]) || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|knowledge-graphs [--probe error|cancel]');
+if (args[0] !== '--scenario' || !['baseline', 'recruitment-nav', 'knowledge-graphs', 'graph-engine'].includes(args[1]) || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {
+  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|knowledge-graphs|graph-engine [--probe error|cancel]');
   process.exitCode = 2;
 } else {
   assertIsolated();
-  await baseline(args[3], args[1]);
+  if (args[1] === 'graph-engine') {
+    const { graphEngineScenario } = await import('./deadline-graph-engine.scenario.mjs');
+    await graphEngineScenario();
+  } else {
+    await baseline(args[3], args[1]);
+  }
 }
 
 // 브라우저 DOM 변경 신호를 기다린다. sleep/networkidle/polling으로 완성을 추정하지 않는다.
