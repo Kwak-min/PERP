@@ -17,11 +17,11 @@ import { initializeDeadlineSession } from './deadline-browser-session.mjs';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const args = process.argv.slice(2);
 const sharedScenarioArgs = args[0] === '--scenario'
-  && ['baseline', 'recruitment-nav', 'nav-pref', 'members-pagination', 'assets-footer', 'sidebar', 'knowledge-graphs'].includes(args[1])
+  && ['baseline', 'recruitment-nav', 'nav-pref', 'members-pagination', 'assets-footer', 'sidebar', 'knowledge-graphs', 'project-members', 'project-members-access'].includes(args[1])
   && (args.length === 2 || (args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])));
 const dedicatedScenarioArgs = args.length === 2 && args[0] === '--scenario' && ['month-summary', 'roles', 'role-toggles', 'role-toggles-native', 'disabled-hr-features'].includes(args[1]);
 if (!sharedScenarioArgs && !dedicatedScenarioArgs) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar|knowledge-graphs [--probe error|cancel] | --scenario month-summary|roles|role-toggles|role-toggles-native|disabled-hr-features');
+  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar|knowledge-graphs|project-members|project-members-access [--probe error|cancel] | --scenario month-summary|roles|role-toggles|role-toggles-native|disabled-hr-features');
   process.exitCode = 2;
 } else {
   assertIsolated();
@@ -50,7 +50,8 @@ async function rendered(page, selector) {
 
 async function baseline(probe, scenario) {
   const taskNumber = scenario === 'recruitment-nav' ? 3 : scenario === 'members-pagination' ? 6 : scenario === 'assets-footer' ? 7 : scenario === 'sidebar' ? 5 : scenario === 'knowledge-graphs' ? 26 : 1;
-  const evidence = path.join(root, `.omo/evidence/task-${taskNumber}-deadline-erp-redesign`, ...(probe ? [`probe-${probe}`] : []));
+  const projectMemberScenario = scenario.startsWith('project-members');
+  const evidence = path.join(root, projectMemberScenario ? `.omo/evidence/task-11-revision/${scenario}` : `.omo/evidence/task-${taskNumber}-deadline-erp-redesign`, ...(probe ? [`probe-${probe}`] : []));
   const runId = randomUUID(), attempt = path.join(evidence, 'runs', runId);
   await mkdir(attempt, { recursive: true });
   // 이전 성공 스크린샷을 현재 실패의 증거로 오인하지 않도록 current pointer를 먼저 무효화한다.
@@ -59,6 +60,7 @@ async function baseline(probe, scenario) {
   result.provenance = { head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', timeout: 5000 }).trim(), files: {} };
   for (const file of ['scripts/run_deadline_isolated.mjs', 'scripts/deadline-isolation-guard.mjs', 'scripts/deadline-runner.test.mjs', 'backend/tests/deadline-fixture.js', 'backend/tests/deadline-fixture.test.js', 'frontend/scripts/deadline-qa.e2e.mjs', 'frontend/scripts/deadline-harness.test.mjs', 'frontend/scripts/deadline-browser-session.mjs', 'frontend/scripts/deadline-browser-session.test.mjs', ...(scenario === 'recruitment-nav' ? ['frontend/scripts/deadline-recruitment-nav.scenario.mjs', 'frontend/src/routes/catalog.ts'] : []), ...(scenario === 'sidebar' ? ['frontend/scripts/deadline-sidebar.scenario.mjs', 'frontend/src/components/layout/AppShell.tsx', 'frontend/src/styles.css', 'frontend/src/services/auth.ts', 'frontend/src/store/navPref.ts'] : []), ...(scenario === 'knowledge-graphs' ? ['frontend/src/screens/VaultGraphScreen.tsx', 'frontend/src/screens/KnowledgeGraphScreen.tsx', 'frontend/src/screens/vault/graph3d.ts', 'backend/src/controllers/vault.controller.js', 'backend/src/controllers/documents.controller.js'] : [])]) result.provenance.files[file] = createHash('sha256').update(await readFile(path.join(root, file))).digest('hex');
   if (scenario === 'members-pagination') for (const file of ['frontend/scripts/deadline-members-pagination.mjs', 'frontend/scripts/deadline-members-pagination-edges.mjs', 'frontend/src/screens/orgchart/MemberDirectory.tsx', 'frontend/src/screens/OrgChartScreen.tsx', 'frontend/src/components/data/MemberListModal.tsx', 'frontend/src/components/data/member-pagination.css']) result.provenance.files[file] = createHash('sha256').update(await readFile(path.join(root, file))).digest('hex');
+  if (projectMemberScenario) for (const file of ['frontend/scripts/deadline-project-members-access.scenario.mjs', 'backend/src/controllers/tasks.controller.js', 'backend/src/controllers/settingsRoles.controller.js', 'backend/src/services/company-roles.service.js', 'backend/src/services/pg-company-roles.service.js', 'frontend/src/hooks/useWorkspaceAccess.tsx', 'frontend/scripts/deadline-project-members.scenario.mjs', 'frontend/scripts/deadline-project-members-recovery.scenario.mjs', 'frontend/src/screens/ProjectTaskScreen.tsx', 'frontend/src/screens/projects/ProjectAssignmentModal.tsx', 'frontend/src/screens/projects/ProjectTaskCreateModal.tsx', 'frontend/src/screens/projects/TaskDetail.tsx', 'frontend/src/screens/projects/useTaskVersion.ts', 'frontend/src/components/common/AssigneeSelect.tsx']) result.provenance.files[file] = createHash('sha256').update(await readFile(path.join(root, file))).digest('hex');
   await writeFile(path.join(evidence, 'scenario.json'), JSON.stringify(result, null, 2));
   await writeFile(path.join(evidence, 'cleanup.json'), JSON.stringify({ runId, status: 'pending' }, null, 2));
   const controller = new AbortController();
@@ -144,7 +146,8 @@ async function baseline(probe, scenario) {
       page.on('response', response => {
         if (!new URL(response.url()).pathname.startsWith('/api/')) return;
         const task = (async () => {
-          const record = { surface: name, url: response.url(), status: response.status() };
+          const record = { surface: name, url: response.url(), status: response.status(), method: response.request().method() };
+          if (projectMemberScenario && response.request().postData()) record.requestBody = evidenceBody(response.request().postDataJSON());
           try { record.body = evidenceBody(await response.json()); } catch (error) { record.bodyError = error.message; }
           result.browserResponses.push(record);
         })();
@@ -159,8 +162,9 @@ async function baseline(probe, scenario) {
         for (const width of widths) {
           await page.setViewportSize({ width, height: 900 });
           await page.evaluate(() => document.fonts.ready);
+          if (projectMemberScenario) await page.evaluate(() => window.scrollTo(0, 0));
           const screenshot = path.join(attempt, `${name}-${width}.png`);
-          await page.screenshot({ path: screenshot, fullPage: !name.includes('modal'), animations: 'disabled', timeout: 20000 });
+          await page.screenshot({ path: screenshot, fullPage: !projectMemberScenario && !name.includes('modal'), animations: 'disabled', timeout: 20000 });
           firstScreenshot ??= screenshot;
           const geometry = await page.evaluate(() => ({ viewport: innerWidth, documentWidth: document.documentElement.scrollWidth, mainWidth: document.querySelector('main')?.getBoundingClientRect().width ?? null }));
           result.surfaces.push({ name, route, actor: actor.userId, orgId: actor.orgId, width, screenshot: path.relative(evidence, screenshot), observations, geometry, pageErrors: [...errors] });
@@ -168,7 +172,13 @@ async function baseline(probe, scenario) {
         assert.deepEqual(errors, [], `${name}: browser crash`);
       } finally { await context.unrouteAll({ behavior: 'wait' }); await context.close(); }
     }
-    if (scenario === 'recruitment-nav') {
+    if (scenario === 'project-members-access') {
+      const { projectMemberAccess } = await import('./deadline-project-members-access.scenario.mjs');
+      await projectMemberAccess({ surface, api, fixture, result });
+    } else if (scenario === 'project-members') {
+      const { projectMembers } = await import('./deadline-project-members.scenario.mjs');
+      await projectMembers({ surface, api, fixture, rendered, result, attempt });
+    } else if (scenario === 'recruitment-nav') {
       const { recruitmentNav } = await import('./deadline-recruitment-nav.scenario.mjs');
       await recruitmentNav({ surface, api, fixture, rendered, result });
     } else if (scenario === 'members-pagination') {

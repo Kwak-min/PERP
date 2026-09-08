@@ -1,7 +1,7 @@
 import { pgQuery, pgTransaction } from '../config/pg.js';
 import { COMPANY_PERMISSIONS } from '../config/rbac.js';
 import { effectivePgPermissions } from '../config/menu-permissions.js';
-import { assertDelegation, isAdministrator, resolveRoleKeys, roleGrants, assertRoleVersion, sameKeys } from './company-roles.service.js';
+import { assertDelegation, isAdministrator, isCompanyAdministratorForRoles, resolveRoleKeys, roleGrants, assertRoleVersion, sameKeys } from './company-roles.service.js';
 import { ApiError } from '../utils/errors.js';
 
 const adminDefinition = { id: 'company_admin', version: 1, key: 'company_admin', name: '관리자', label: '관리자', scope: 'all', permissions: COMPANY_PERMISSIONS, system: true };
@@ -25,6 +25,12 @@ export async function pgRoleMembers(companyId, query = pgQuery, activeOnly = tru
     WHERE m.company_id = $1 ${activeOnly ? "AND m.status = 'active' AND u.account_status = 'active' AND u.approval_status = 'approved'" : ''}
     GROUP BY m.user_id, m.roles_version, u.name, u.email ORDER BY u.name`, [companyId]);
   return rows.map(row => ({ membership_id: String(row.user_id), user_id: String(row.user_id), name: row.name, email: row.email, roles: row.roles, roles_version: row.roles_version }));
+}
+
+export async function isPgCompanyAdministrator(companyId, userId, query = pgQuery) {
+  const [roles, members] = await Promise.all([pgRoleDefinitions(companyId, query), pgRoleMembers(companyId, query)]);
+  const member = members.find(row => row.user_id === userId);
+  return member ? isCompanyAdministratorForRoles(roles, member.roles) : false;
 }
 
 function fullAdmin(member, roles) {

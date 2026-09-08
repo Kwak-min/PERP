@@ -10,6 +10,14 @@ export const permissionCatalog = COMPANY_PERMISSIONS.map(code => ({ code,
   kind: code.startsWith('menu.') ? 'menu' : 'action' }));
 export const isAdministrator = (permissions, scope) => scope === 'all' &&
   (permissions.has('*') || COMPANY_PERMISSIONS.every(code => permissions.has(code)));
+export const isCompanyAdministrator = (permissions, scope, allowLegacyWildcard = false) => scope === 'all' &&
+  ((allowLegacyWildcard && permissions.has('*')) || COMPANY_PERMISSIONS.every(code => permissions.has(code)));
+
+export function isCompanyAdministratorForRoles(definitions, keys, allowLegacyWildcard = false) {
+  const grants = roleGrants(definitions.filter(role => role.scope === 'all'), keys);
+  return isCompanyAdministrator(grants.permissions, grants.scope, allowLegacyWildcard);
+}
+
 export const sameKeys = (a, b) => a.length === b.length && a.every(key => b.includes(key));
 export function assertRoleVersion(expected, current) {
   if (!Number.isSafeInteger(expected) || expected < 1) throw new ApiError('VALIDATION_ERROR', '현재 역할 버전이 필요합니다');
