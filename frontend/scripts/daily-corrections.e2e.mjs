@@ -12,6 +12,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const evidence = fileURLToPath(new URL('../../.omo/daily-chrome/', import.meta.url));
 await mkdir(evidence, { recursive: true });
 let browser, vite, server, fixture;
+const pageErrors = [];
 try {
   if (process.env.DAILY_TEST_PG_BIN) { fixture = await startDailyNativePostgres(); server = await startTestServer(); }
   else { server = await startTestServer(); fixture = await installDailyPgFixture(); }
@@ -30,6 +31,7 @@ try {
   else { vite = await createServer({ configFile: false, root, plugins: [react()], server: serverOptions }); await vite.listen(); }
   const origin = `http://127.0.0.1:${vite.httpServer.address().port}`;
   console.log('SURFACE', process.env.DAILY_BUILT === '1' ? 'production build' : 'Vite development');
+  console.log(JSON.stringify({ ownedApi: server.baseUrl, ownedPreview: origin }));
   browser = await chromium.launch({ channel: 'chrome' }); console.log('Chrome', browser.version());
   for (const session of [{ ...owner, userId: colleague.userId, pg: false }, { token: login.body.token, orgId: `pg:${fixture.companyId ?? '77'}`, pg: true, userId: fixture.assigneeId ?? '102' }]) {
     const prefix = session.pg ? '/pg' : '';
@@ -38,11 +40,14 @@ try {
     const task = (await request('/tasks', { project_id: project, title: 'Browser task' })).body.id;
     const secondTask = (await request('/tasks', { project_id: project, title: 'Second browser task' })).body.id;
     const event = (await request('/calendar', { title: 'Browser event', ...(session.pg ? { starts_at: '2026-09-08T09:00:00Z', ends_at: '2026-09-08T10:00:00Z' } : { start_at: '2026-09-08T09:00:00Z', end_at: '2026-09-08T10:00:00Z' }) })).body.id;
-    const asset = (await request('/assets', { name: 'Browser asset', asset_no: 'QA-CHROME' })).body.id;
+    const createdAsset = await request('/assets', { name: 'Browser asset', asset_no: 'QA-CHROME' }); assert.equal(createdAsset.status, 201);
+    const asset = createdAsset.body.id;
+    for (let i = 0; i < 12; i++) assert.equal((await request('/assets', { name: `Unrelated asset ${i}`, asset_no: `QA-DECOY-${i}` })).status, 201);
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     await context.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
     await context.addInitScript(stored => localStorage.setItem('orbitflow.session.v1', JSON.stringify(stored)), { ...session, name: 'QA', email: 'qa@example.invalid', mustChangePassword: false, organizations: [{ org_id: session.orgId, org_name: 'QA', org_type: session.pg ? 'perp_db' : 'custom', roles: ['owner'] }] });
     const page = await context.newPage(); page.setDefaultTimeout(10000);
+    page.on('pageerror', error => pageErrors.push(error.message));
     const responseFor = (path, method = 'PATCH') => page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1${prefix}${path}` && response.request().method() === method, { timeout: 10000 });
     const save = async (path, button, method = 'PATCH') => { const pending = responseFor(path, method); await button.click(); const response = await pending;
       assert.equal(response.status(), 200); const body = response.request().postDataJSON(); assert.equal(typeof body.version, 'number'); assert.equal('expected_version' in body, false);
@@ -58,6 +63,16 @@ try {
     await expect(page.getByLabel('담당자', { exact: true })).toBeEnabled(); await page.getByLabel('담당자', { exact: true }).selectOption(session.userId);
     await save(`/tasks/${secondTask}`, page.getByRole('dialog').getByRole('button', { name: '배정 저장', exact: true }));
     await expect(page.locator(`[data-task-id="${secondTask}"]`)).toBeVisible();
+    await page.getByRole('button', { name: '업무 만들기', exact: true }).click();
+    await page.getByLabel('제목', { exact: true }).fill('Initially assigned browser task');
+    await expect(page.getByLabel('담당자', { exact: true })).toBeEnabled();
+    await page.getByLabel('담당자', { exact: true }).selectOption(session.userId);
+    const taskCreated = responseFor('/tasks', 'POST');
+    await page.getByRole('dialog').getByRole('button', { name: '만들기', exact: true }).click();
+    const creation = await taskCreated; assert.equal(creation.status(), 201);
+    assert.equal(creation.request().postDataJSON().assignee_id, session.userId);
+    const assignedTask = (await creation.json()).id;
+    await expect(page.locator(`[data-task-id="${assignedTask}"]`)).toBeVisible();
     for (const width of [375,768,1280]) {
       await page.setViewportSize({ width, height: 900 });
       // 화면 갱신으로 취소될 수 있는 CSS 애니메이션은 스크린샷의 최종 상태로 진행시킨다. 시간 지연은 사용하지 않는다.
@@ -100,12 +115,20 @@ try {
     await page.reload(); await expect(page.getByText('Concurrent event', { exact: true })).toBeVisible();
     page.once('dialog', dialog => dialog.accept());
     await save(`/calendar/${event}/cancel`, page.getByRole('button', { name: '일정 취소', exact: true }), 'POST');
-    await page.goto(`${origin}/assets`); const row = page.getByRole('row').filter({ hasText: 'Browser asset' });
+    await page.goto(`${origin}/assets`);
+    await page.getByRole('searchbox', { name: '이 화면에서 검색' }).fill('Browser asset');
+    const row = page.getByRole('row').filter({ hasText: 'Browser asset' });
+    if (session.pg) {
+      await expect(row.getByRole('button', { name: '수정', exact: true })).toHaveCount(0);
+      await expect(row.getByRole('button', { name: '삭제', exact: true })).toHaveCount(0);
+    }
     await row.getByRole('button', { name: '담당·상태', exact: true }).click();
     await expect(page.getByLabel('담당자', { exact: true })).toBeEnabled(); await page.getByLabel('담당자', { exact: true }).selectOption(session.userId);
     const status = session.pg ? 'stored' : 'loaned'; await page.getByLabel('상태', { exact: true }).selectOption(status);
     await save(`/assets/${asset}/custody`, page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }));
-    await page.reload(); await row.getByRole('button', { name: '담당·상태', exact: true }).click();
+    await page.reload();
+    await page.getByRole('searchbox', { name: '이 화면에서 검색' }).fill('Browser asset');
+    await row.getByRole('button', { name: '담당·상태', exact: true }).click();
     await expect(page.getByLabel('상태', { exact: true })).toHaveValue(status); await expect(page.getByLabel('담당자', { exact: true })).toHaveValue(session.userId);
     // 실제 동시 HTTP 변경 후 오래된 브라우저 폼 저장: 409와 초안 보존.
     const current = await api(server.baseUrl, `${prefix}/assets/${asset}${session.pg ? '/custody' : ''}`, session);
@@ -142,6 +165,9 @@ try {
       const newRecipientNotifications = await request('/notifications', undefined, 'GET'); assert.equal(newRecipientNotifications.status, 200); assert.equal(newRecipientNotifications.body.items.filter(item => item.link === `/tasks/${task}`).length, 1);
       console.log('NATIVE_HTTP audit retention, real concurrent [200,409], history/notification rollback, assignment no-op, new-recipient delivery, foreign-resource404 PASS');
     }
+    if (session.pg && fixture.pool) {
+      await fixture.pool.query("INSERT INTO notice.notifications(company_id,user_id,kind,title,link) VALUES ($1,$2,'task.assigned','Foreign company notification','/tasks/foreign'),($3,$4,'task.assigned','Other recipient notification','/tasks/private')", [fixture.otherCompanyId, session.userId, fixture.companyId, fixture.identity.users[0].id]);
+    }
     const targetEmail = session.pg ? fixture.identity.users[1].email : db().prepare('SELECT email FROM app_user WHERE id=?').get(session.userId).email;
     const targetLogin = await api(server.baseUrl, `${prefix}/auth/login`, { method: 'POST', body: { email: targetEmail, password: 'password-1234' } }); assert.equal(targetLogin.status, 200);
     const targetToken = session.pg ? targetLogin.body.token : targetLogin.body.access_token;
@@ -149,19 +175,27 @@ try {
     await targetContext.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
     await targetContext.addInitScript(stored => localStorage.setItem('orbitflow.session.v1', JSON.stringify(stored)), { token: targetToken, orgId: session.orgId, name: 'Recipient', email: targetEmail, mustChangePassword: false, organizations: [{ org_id: session.orgId, org_name: 'QA', org_type: session.pg ? 'perp_db' : 'custom', roles: ['member'] }] });
     const targetPage = await targetContext.newPage();
+    targetPage.on('pageerror', error => pageErrors.push(error.message));
     const notificationResponse = targetPage.waitForResponse(response => new URL(response.url()).pathname === `/api/v1${prefix}/notifications`);
     await targetPage.goto(origin + '/notifications'); const notifications = await notificationResponse; assert.equal(notifications.status(), 200);
     const delivered = (await notifications.json()).items;
-    assert.equal(delivered.filter(item => item.link === `/tasks/${task}`).length, 1); assert.equal(delivered.filter(item => item.link === `/tasks/${secondTask}`).length, 1);
+    const expectedLinks = [task, secondTask, assignedTask].map(id => `/tasks/${id}`).sort();
+    assert.deepEqual(delivered.map(item => item.link).sort(), expectedLinks);
     await expect(targetPage.getByRole('row').filter({ hasText: 'Second browser task' })).toHaveCount(1);
-    await targetPage.reload(); await expect(targetPage.getByRole('row').filter({ hasText: 'Second browser task' })).toHaveCount(1);
+    await expect(targetPage.getByRole('row').filter({ hasText: 'Initially assigned browser task' })).toHaveCount(1);
+    const reloadedNotifications = targetPage.waitForResponse(response => new URL(response.url()).pathname === `/api/v1${prefix}/notifications`);
+    await targetPage.reload();
+    const reloadedResponse = await reloadedNotifications; assert.equal(reloadedResponse.status(), 200);
+    assert.deepEqual((await reloadedResponse.json()).items.map(item => item.link).sort(), expectedLinks);
+    await expect(targetPage.getByRole('row').filter({ hasText: 'Second browser task' })).toHaveCount(1);
     await targetPage.screenshot({ path: `${evidence}/${session.pg ? 'pg' : 'legacy'}-recipient-notifications.png`, fullPage: true }); await targetContext.close();
-    console.log(session.pg ? 'PG' : 'LEGACY', 'actual recipient login + two task-row assignments + durable notification list PASS');
+    console.log(session.pg ? 'PG' : 'LEGACY', 'actual recipient login + two task-row assignments + assigned task creation + exact recipient-only durable notification list PASS');
     console.log(session.pg ? process.env.DAILY_TEST_PG_BIN ? 'PG_NATIVE_REAL_AUTH' : 'PG_SQL_ENGINE' : 'LEGACY_SQLITE', 'project/date, reassignment, reschedule/cancel, custody/reload, stale draft PASS');
     await context.close();
   }
+  assert.deepEqual(pageErrors, []); console.log('DAILY_COMPLETE_NO_PAGE_ERRORS');
 } finally { await browser?.close();
   if (vite) { if (process.env.DAILY_BUILT === '1') await new Promise((resolve, reject) => vite.httpServer.close(error => error ? reject(error) : resolve())); else await vite.close(); }
   await server?.close();
   if (process.env.DAILY_TEST_PG_BIN) { const { closePgPool } = await import('../../backend/src/config/pg.js'); await closePgPool(); }
-  await fixture?.close(); }
+  await fixture?.close(); console.log('DAILY_CORRECTIONS_OWNED_SERVICES_AND_DATA_CLEANED'); }

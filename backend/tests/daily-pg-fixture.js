@@ -8,7 +8,7 @@ export async function installDailyPgFixture({ migration = true } = {}) {
   const { pgPool } = await import('../src/config/pg.js');
   const identityQuery = pgPool.query;
   const engine = new PGlite();
-  await engine.exec(`CREATE SCHEMA common; CREATE SCHEMA org; CREATE SCHEMA auth; CREATE SCHEMA project; CREATE SCHEMA calendar; CREATE SCHEMA asset; CREATE SCHEMA notice;
+  await engine.exec(`CREATE SCHEMA common; CREATE SCHEMA org; CREATE SCHEMA auth; CREATE SCHEMA project; CREATE SCHEMA calendar; CREATE SCHEMA asset; CREATE SCHEMA notice; CREATE SCHEMA accounting;
     CREATE TYPE common.visibility AS ENUM ('private', 'company', 'department', 'team');
     CREATE TABLE org.companies (id bigint PRIMARY KEY); INSERT INTO org.companies VALUES (77), (88);
     CREATE TABLE auth.users (id bigint PRIMARY KEY, name text, account_status text DEFAULT 'active', approval_status text DEFAULT 'approved');
@@ -19,8 +19,9 @@ export async function installDailyPgFixture({ migration = true } = {}) {
     INSERT INTO org.company_memberships(company_id,user_id) VALUES (77,101), (77,102), (88,103);`);
   const schema = await readFile(new URL('../../db/perp_schema.sql', import.meta.url), 'utf8');
   const additions = await readFile(new URL('../../db/perp_additions_v3.sql', import.meta.url), 'utf8');
-  for (const [source, table] of [[schema, 'project.projects'], [schema, 'project.project_members'], [schema, 'calendar.events'], [additions, 'project.tasks'], [additions, 'asset.assets'], [additions, 'asset.history'], [additions, 'notice.notifications']]) {
-    const start = source.indexOf(`CREATE TABLE ${source === additions ? 'IF NOT EXISTS ' : ''}${table} (`);
+  const finance = await readFile(new URL('../../db/perp_additions_v8_daily_finance.sql', import.meta.url), 'utf8');
+  for (const [source, table] of [[schema, 'project.projects'], [schema, 'project.project_members'], [schema, 'calendar.events'], [additions, 'project.tasks'], [additions, 'asset.assets'], [additions, 'asset.history'], [additions, 'notice.notifications'], [finance, 'accounting.request_replays']]) {
+    const start = source.indexOf(`CREATE TABLE ${source === schema ? '' : 'IF NOT EXISTS '}${table} (`);
     await engine.exec(source.slice(start, source.indexOf('\n);', start) + 3));
   }
   if (migration) await engine.exec(await readFile(new URL('../../db/perp_additions_v9_daily_corrections.sql', import.meta.url), 'utf8'));
@@ -31,7 +32,7 @@ export async function installDailyPgFixture({ migration = true } = {}) {
     const result = await engine.query(text, params);
     return { ...result, rowCount: result.affectedRows ?? result.rows.length };
   };
-  pgPool.query = (text, values) => /project\.|calendar\.|asset\.|notice\.|org.daily_correction_events/.test(text) && !text.includes('AS members')
+  pgPool.query = (text, values) => /project\.|calendar\.|asset\.|notice\.|accounting.request_replays|org.daily_correction_events/.test(text) && !text.includes('AS members')
     ? execute(text, values) : identityQuery(text, values);
   // 트랜잭션은 풀 클라이언트처럼 단독 소유한다. 동시 HTTP 요청도 BEGIN을 섞지 않는다.
   let tail = Promise.resolve();

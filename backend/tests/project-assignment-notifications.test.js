@@ -37,6 +37,17 @@ for (const backend of ['legacy', 'pg']) {
     if (backend === 'pg') assert.equal((await request(state, `/projects/${rows.project}/members`, { user_id: '103' })).status, 403);
     assert.equal((await request(state, `/tasks/${rows.task}`, { version: 1, assignee_id: state.recipientId }, 'PATCH')).status, 200);
   });
+  test(`${backend}: assigned task creation validates roster and persists exactly one recipient notification`, async () => {
+    const state = backend === 'pg' ? pg : legacy, rows = await setup(state);
+    const body = { project_id: rows.project, title: 'Initially assigned task', assignee_id: state.recipientId };
+    assert.equal((await request(state, '/tasks', body)).status, 403);
+    assert.equal((await request(state, `/projects/${rows.project}/members`, { user_id: state.recipientId })).status, 201);
+    const created = await request(state, '/tasks', body); assert.equal(created.status, 201);
+    const recipient = await request(state, '/notifications', undefined, 'GET', state.recipient); assert.equal(recipient.status, 200);
+    assert.equal(recipient.body.items.filter(item => item.link === `/tasks/${created.body.id}`).length, 1);
+    const owner = await request(state, '/notifications', undefined, 'GET'); assert.equal(owner.status, 200);
+    assert.equal(owner.body.items.filter(item => item.link === `/tasks/${created.body.id}`).length, 0);
+  });
   test(`${backend}: recipient login sees one durable notification, same assignment is idempotent, reassignment informs new recipient`, async () => {
     const state = backend === 'pg' ? pg : legacy, rows = await setup(state);
     assert.equal((await request(state, `/projects/${rows.project}/members`, { user_id: state.recipientId })).status, 201);
@@ -58,12 +69,19 @@ for (const backend of ['legacy', 'pg']) {
   test(`${backend}: notification storage failure rolls back assignment and audit`, async () => {
     const state = backend === 'pg' ? pg : legacy, rows = await setup(state);
     assert.equal((await request(state, `/projects/${rows.project}/members`, { user_id: state.recipientId })).status, 201);
+    const snapshot = async () => backend === 'pg'
+      ? Promise.all(['project.tasks','org.daily_correction_events','notice.notifications'].map(async table => (await fixture.engine.query(`SELECT * FROM ${table} ORDER BY id`)).rows))
+      : ['task','audit_event','notification'].map(table => db().prepare(`SELECT * FROM ${table} ORDER BY id`).all());
+    const before = await snapshot();
     if (backend === 'pg') await fixture.engine.exec("CREATE FUNCTION notice.reject_assignment() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'notification failure'; END $$; CREATE TRIGGER reject_assignment BEFORE INSERT ON notice.notifications FOR EACH ROW EXECUTE FUNCTION notice.reject_assignment();");
     else db().exec("CREATE TRIGGER reject_assignment BEFORE INSERT ON notification BEGIN SELECT RAISE(ABORT,'notification failure'); END;");
     try {
       assert.equal((await request(state, `/tasks/${rows.task}`, { version: 1, assignee_id: state.recipientId }, 'PATCH')).status, 500);
       const current = backend === 'pg' ? (await fixture.engine.query('SELECT version,assignee_id FROM project.tasks WHERE id=$1', [rows.task])).rows[0] : db().prepare('SELECT version,assignee_id FROM task WHERE id=?').get(rows.task);
       assert.equal(current.version, 1); assert.notEqual(String(current.assignee_id), state.recipientId);
+      assert.deepEqual(await snapshot(), before);
+      assert.equal((await request(state, '/tasks', { project_id: rows.project, title: 'Rolled back creation', assignee_id: state.recipientId })).status, 500);
+      assert.deepEqual(await snapshot(), before);
     } finally { if (backend === 'pg') await fixture.engine.exec('DROP TRIGGER reject_assignment ON notice.notifications'); else db().exec('DROP TRIGGER reject_assignment'); }
   });
 }

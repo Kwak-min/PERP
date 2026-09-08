@@ -12,7 +12,8 @@ before(async () => {
   assert.equal(login.status, 200); session = { token: login.body.token, orgId: 'pg:77' };
 });
 after(async () => { await server?.close(); await fixture?.close(); });
-const request = (path, body, method = 'PATCH') => api(server.baseUrl, `/pg${path}`, { ...session, method, body });
+const request = (path, body, method = 'PATCH') => api(server.baseUrl, `/pg${path}`, { ...session, method, body,
+  ...(method === 'POST' && path === '/assets' ? { headers: { 'Idempotency-Key': crypto.randomUUID() } } : {}) });
 async function project() { return (await request('/projects', { name: 'Original', starts_on: '2026-09-01', ends_on: '2026-09-30' }, 'POST')).body.id; }
 test('PG project title and dates persist with mandatory optimistic version', async () => {
   const id = await project();
@@ -39,7 +40,8 @@ test('PG reschedule then cancel retains event and before/after audit', async () 
   assert.equal(audit.length, 2); assert.equal(audit[1].before_data.version, 2); assert.equal(audit[1].after_data.version, 3);
 });
 test('PG asset custody is atomic, rejects foreign users and stale saves', async () => {
-  const id = (await request('/assets', { name: 'Laptop' }, 'POST')).body.id;
+  const created = await request('/assets', { name: 'Laptop' }, 'POST'); assert.equal(created.status, 201);
+  const id = created.body.id;
   const saved = await request(`/assets/${id}/custody`, { version: 1, assignee_id: '102', status: 'stored' }); assert.equal(saved.status, 200); assert.equal(saved.body.status, 'stored');
   assert.equal((await request(`/assets/${id}/custody`, { version: 1, status: 'lost' })).status, 409);
   assert.equal((await request(`/assets/${id}/custody`, { version: 2, assignee_id: '103' })).status, 403);
@@ -77,7 +79,8 @@ test('PG corrections reject invalid merged dates, absent versions and terminal a
   assert.equal((await request(`/projects/${id}`, { name: 'No version' })).status, 400);
   assert.equal((await request(`/projects/${id}`, { version: 1, starts_on: '2026-10-01' })).status, 400);
   assert.equal((await request(`/projects/${id}`, { version: 1, starts_on: 'not-a-date' })).status, 400);
-  const a = (await request('/assets', { name: 'Retired' }, 'POST')).body.id;
+  const created = await request('/assets', { name: 'Retired' }, 'POST'); assert.equal(created.status, 201);
+  const a = created.body.id;
   assert.equal((await request(`/assets/${a}/custody`, { version: 1, status: 'disposed' })).status, 200);
   assert.equal((await request(`/assets/${a}/custody`, { version: 2, status: 'in_use' })).status, 409);
 });
