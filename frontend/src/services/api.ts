@@ -111,6 +111,29 @@ export async function apiRequest(
   return payload;
 }
 
+// 원증빙은 JSON이 아닌 원본 bytes로 전송한다. 모든 네트워크 경계는 이 모듈에 둔다.
+export async function apiReceiptUpload(
+  path: string,
+  options: Readonly<{ file: File; session: ApiSession; signal: AbortSignal }>,
+): Promise<unknown> {
+  if (!/^\/(?:pg\/)?finance\/transactions\/receipt-uploads$/.test(path)) {
+    throw new ApiError("영수증 업로드 경로가 올바르지 않습니다.", { code: "VALIDATION_ERROR", status: 400, requestId: "", details: {} });
+  }
+  const headers = new Headers({ Authorization: `Bearer ${options.session.token}`, "Content-Type": options.file.type, "X-Upload-Name": encodeURIComponent(options.file.name) });
+  if (options.session.orgId) headers.set("X-Org-Id", options.session.orgId);
+  const response = await fetch(`${API_BASE_URL}${path}`, { method: "POST", headers, body: options.file,
+    signal: AbortSignal.any([options.signal, AbortSignal.timeout(30000)]), redirect: "error" });
+  const payload: unknown = await response.json();
+  if (!response.ok) {
+    const parsed = apiErrorSchema.safeParse(payload);
+    throw new ApiError(parsed.success ? parsed.data.error.message : `업로드 실패 (${response.status})`, {
+      code: parsed.success ? parsed.data.error.code : "HTTP_ERROR", status: response.status,
+      requestId: response.headers.get("x-request-id") ?? "", details: parsed.success ? parsed.data.error.details : {},
+    });
+  }
+  return payload;
+}
+
 // 호출자는 blob을 사용한 뒤 objectURL을 revoke한다. 인증정보를 URL에 넣지 않는다.
 export async function apiBlob(
   path: string,
