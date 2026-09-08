@@ -9,6 +9,7 @@ import { pgEnabledFeatures } from "../middleware/features.js";
 import { validateSelection } from "../middleware/modules.js";
 import { hashPassword } from "../utils/crypto.js";
 import { isCompanyMember } from "../services/pg-company.service.js";
+import { readOrgActivity } from "../services/pg-org-audit.service.js";
 import { ApiError } from "../utils/errors.js";
 import { CANDIDATE_LIMIT, pgVaultScope, vaultSemantic } from "../services/vault-semantic.service.js";
 import {
@@ -700,9 +701,9 @@ export async function updateRecord(req, res) {
 }
 
 // ── 조직 변경 로그 / 브랜치 접근 (간이) ──────────────────────────
-// GET /api/v1/pg/members/activity — perp_db 통합 감사 소스 없음 → 빈 목록
-export async function membersActivity() {
-  throw new ApiError("NOT_IMPLEMENTED", "PG 감사 기록 저장소가 아직 연결되지 않았습니다", {}, 501);
+// GET /api/v1/pg/members/activity — 선택 회사의 실제 조직 감사 기록
+export async function membersActivity(req, res) {
+  return readOrgActivity(req, res);
 }
 // PUT /api/v1/pg/members/departments/:id/access — 접근권한은 perp_db 미모델 → no-op
 export async function departmentAccess() {

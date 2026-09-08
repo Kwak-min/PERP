@@ -29,6 +29,7 @@ pgRouter.post("/members", asyncRoute(pgRoute(mod.createMember, ["member.write", 
 pgRouter.get("/members/departments", asyncRoute(pgRoute(members.listDepartments, "member.read", null)));
 pgRouter.post("/members/departments", asyncRoute(pgRoute(members.createDepartment, "department.write", null)));
 pgRouter.patch("/members/departments/:id", asyncRoute(pgRoute(members.updateDepartment, "department.write", null)));
+pgRouter.patch("/members/departments/:id/seat", asyncRoute(pgRoute(members.saveSeat, "department.write", null)));
 pgRouter.get("/members/roles", asyncRoute(pgRoute(members.listRoles, "member.read", null)));
 pgRouter.get("/members/org-chart", asyncRoute(pgRoute(members.orgChart, "member.read", null)));
 pgRouter.get("/members/activity", asyncRoute(pgRoute(mod.membersActivity, "audit.read", null)));
