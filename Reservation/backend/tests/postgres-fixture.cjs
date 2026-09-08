@@ -15,7 +15,7 @@ function fixtureEnv(databaseUrl) {
     MAIL_HOST: '127.0.0.1', MAIL_PORT: '1', USER_SERVICE_URL: 'http://127.0.0.1:1' };
   delete env.MAIL_USER;
   delete env.MAIL_PASS;
-  delete env.NODE_OPTIONS;
+  if (process.env.DEADLINE_ISOLATED !== '1') delete env.NODE_OPTIONS;
   return env;
 }
 

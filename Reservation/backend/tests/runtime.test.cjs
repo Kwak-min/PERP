@@ -32,6 +32,7 @@ for (const host of [undefined, '127.0.0.2']) {
     runtime = startRuntime(fixture.url, { ERP_API_URL: `http://127.0.0.1:${authority.address().port}`, ...(host ? { HOST: host } : {}) });
     const listening = await runtime.ready;
     assert.equal(listening.kind, 'listening');
+    if (process.env.DEADLINE_ISOLATED === '1') assert.equal(listening.guardBlocked, true);
     assert.equal(listening.address.address, host ?? '127.0.0.1');
     assert.equal(listening.address.family, 'IPv4');
     assert.ok(listening.address.port > 0);
@@ -60,7 +61,18 @@ for (const host of [undefined, '127.0.0.2']) {
     assert.deepEqual(await request('GET', 'fixture-b'), []);
     const counts = await fixture.db.query('SELECT (SELECT count(*)::int FROM spaces) AS spaces, (SELECT count(*)::int FROM reservations) AS reservations, (SELECT count(*)::int FROM attendees) AS attendees');
     assert.deepEqual(counts.rows, [{ spaces: 5, reservations: 0, attendees: 0 }]);
-    t.diagnostic(`Actual listener ${listening.address.address}:${listening.address.port}; health 200, unauthenticated 401; real Prisma creates 5, replay creates 0, foreign scope empty; no bookings/attendees`);
+    await runtime.close();
+    if (process.env.DEADLINE_ISOLATED === '1' && host === '127.0.0.2') {
+      assert.throws(() => net.connect({ host, port: listening.address.port }), { code: 'DEADLINE_NETWORK_DENIED' });
+      // close() 호출 없이 자식이 종료되어도 endpoint 수명이 끝나야 한다.
+      runtime = startRuntime(fixture.url, { HOST: host });
+      const restarted = await runtime.ready;
+      const exited = once(runtime.child, 'exit', { signal: AbortSignal.timeout(5000) });
+      runtime.child.kill(); await exited;
+      assert.throws(() => net.connect({ host, port: restarted.address.port }), { code: 'DEADLINE_NETWORK_DENIED' });
+      t.diagnostic(`Child exit revoked ${host}:${restarted.address.port}; PID ${runtime.child.pid}`);
+    }
+    t.diagnostic(`Actual listener ${listening.address.address}:${listening.address.port}; child guard ${listening.guardBlocked}; health 200, unauthenticated 401; real Prisma creates 5, replay creates 0, foreign scope empty; no bookings/attendees; runtime closed`);
   });
 }
 

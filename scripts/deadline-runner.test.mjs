@@ -52,6 +52,80 @@ test('network guard rejects protected loopback ports and external hosts before c
   assert.equal(result.status, 0, result.stderr); assert.match(result.stdout, /GUARD_PASS/);
 });
 
+test('fixture registration permits only its listener endpoint until revoked', () => {
+  const result = invoke(['node', '--input-type=module', '-e', `
+    import net from 'node:net';
+    import assert from 'node:assert/strict';
+    import { once } from 'node:events';
+    import { spawnSync } from 'node:child_process';
+    import { registerFixtureEndpoint, protectedPorts } from './scripts/deadline-isolation-guard.mjs';
+    const denied = (host, port) => assert.throws(() => net.connect({host, port}), {code:'DEADLINE_NETWORK_DENIED'});
+    const server = net.createServer(socket => socket.end());
+    let revoke;
+    try {
+      const listening = once(server, 'listening', {signal:AbortSignal.timeout(5000)});
+      server.listen(0, '127.0.0.2'); await listening;
+      const address = server.address();
+      denied(address.address, address.port);
+      for (const port of [...protectedPorts, 0, 1, 80, 65536, 1.5]) {
+        assert.throws(() => registerFixtureEndpoint({...address, port}), {code:'DEADLINE_FIXTURE_ENDPOINT_DENIED'});
+      }
+      for (const host of ['127.0.0.3', '127.1.2.3', '0.0.0.0', 'example.invalid', '192.0.2.1']) {
+        assert.throws(() => registerFixtureEndpoint({...address, address:host}), {code:'DEADLINE_FIXTURE_ENDPOINT_DENIED'});
+        denied(host, address.port);
+      }
+      revoke = registerFixtureEndpoint(address);
+      // 다른 소유자가 등록 수명을 바꾸거나 자식 프로세스가 등록을 상속하지 않는다.
+      assert.throws(() => registerFixtureEndpoint(address), {code:'DEADLINE_FIXTURE_ENDPOINT_DENIED'});
+      const foreignChild = spawnSync(process.execPath, ['-e',
+        'const assert=require("node:assert/strict");const net=require("node:net");assert.throws(()=>net.connect('+JSON.stringify({host:address.address, port:address.port})+'),{code:"DEADLINE_NETWORK_DENIED"});'
+      ], {encoding:'utf8', timeout:5000, env:process.env});
+      assert.equal(foreignChild.status, 0, foreignChild.stderr);
+      denied('127.0.0.2', address.port === 65535 ? 65534 : address.port + 1);
+      for (const port of [...protectedPorts, 1]) denied('127.0.0.2', port);
+      const socket = new net.Socket();
+      const connected = once(socket, 'connect', {signal:AbortSignal.timeout(5000)});
+      const closed = once(socket, 'close', {signal:AbortSignal.timeout(5000)});
+      socket.connect({host:address.address, port:address.port}); await connected;
+      socket.destroy(); await closed;
+      revoke(); revoke();
+      denied(address.address, address.port);
+      console.log(JSON.stringify({address, preDenied:true, connected:true, postRevokeDenied:true}));
+    } finally {
+      revoke?.();
+      if (server.listening) {
+        const closed = once(server, 'close', {signal:AbortSignal.timeout(5000)});
+        server.close(); await closed;
+      }
+    }
+  `]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout.trim()).postRevokeDenied, true);
+});
+
+test('legacy fixture children inherit the active runner guard, not just an environment marker', () => {
+  const result = invoke(['node', '-e', `
+    const assert = require('node:assert/strict');
+    const {spawnSync} = require('node:child_process');
+    const {fixtureEnv} = require('./Reservation/backend/tests/postgres-fixture.cjs');
+    const env = fixtureEnv('postgresql://fixture:fixture@127.0.0.1:1/offline');
+    assert.equal(env.NODE_OPTIONS, process.env.NODE_OPTIONS);
+    const child = spawnSync(process.execPath, ['-e', ${JSON.stringify(`
+      const assert = require('node:assert/strict');
+      const net = require('node:net');
+      assert.equal(process.env.DEADLINE_ISOLATED, '1');
+      for (const [host, port] of [['127.0.0.2', 60000], ['example.invalid', 443], ...[8000,5174,8080,55432,1].map(port => ['127.0.0.1', port])]) {
+        assert.throws(() => net.connect({host, port}), {code:'DEADLINE_NETWORK_DENIED'});
+      }
+      console.log('CHILD_GUARD_ACTIVE');
+    `)}], {env, encoding:'utf8', timeout:5000});
+    assert.equal(child.status, 0, child.stderr);
+    process.stdout.write(child.stdout);
+  `]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /CHILD_GUARD_ACTIVE/);
+});
+
 test('native binary paths require explicit CLI configuration, never ambient propagation', () => {
   const bin = mkdtempSync(path.join(tmpdir(), 'deadline-bin-config-'));
   try {
