@@ -1,29 +1,16 @@
 import type { CreateReservationDto } from './reservation.schema';
+import { BadRequestError } from '../../common/errors';
 
-// 날짜 유틸 (외부 라이브러리 없이 순수 구현)
+const SEOUL_OFFSET_MS = 9 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const addDays = (date: Date, days: number): Date =>
+  new Date(date.getTime() + days * DAY_MS);
 
-export const addDays = (date: Date, days: number): Date => {
-  const d = new Date(date);
-  d.setDate(d.getDate() + days);
-  return d;
-};
+export const businessDate = (date: Date): string =>
+  new Date(date.getTime() + SEOUL_OFFSET_MS).toISOString().slice(0, 10);
 
-export const addWeeks = (date: Date, weeks: number): Date =>
-  addDays(date, weeks * 7);
-
-export const addMonths = (date: Date, months: number): Date => {
-  const d = new Date(date);
-  d.setMonth(d.getMonth() + months);
-  return d;
-};
-
-export const startOfWeek = (date: Date): Date => {
-  const d = new Date(date);
-  const day = d.getDay(); // 0=일
-  d.setDate(d.getDate() - day);
-  d.setHours(0, 0, 0, 0);
-  return d;
-};
+export const startOfBusinessDay = (date: Date): Date =>
+  new Date(`${businessDate(date)}T00:00:00+09:00`);
 
 export const format = (date: Date): string =>
   date.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
@@ -33,35 +20,50 @@ export function calcRecurrenceDates(
   rule: NonNullable<CreateReservationDto['recurrence']>,
 ): Date[] {
   const dates: Date[] = [];
-  const maxCount = rule.maxOccurrences ?? 365;
-  const interval = rule.interval ?? 1;
-
-  if (rule.frequency === 'DAILY' || rule.frequency === 'MONTHLY') {
-    let current = new Date(startDate);
-    while (dates.length < maxCount && (!rule.endDate || current <= rule.endDate)) {
-      dates.push(new Date(current));
-      current = rule.frequency === 'DAILY' ? addDays(current, interval) : addMonths(current, interval);
-    }
-    return dates;
-  }
-
-  if (!rule.daysOfWeek?.length) {
-    let current = new Date(startDate);
-    while (dates.length < maxCount && (!rule.endDate || current <= rule.endDate)) {
-      dates.push(new Date(current));
-      current = addWeeks(current, interval);
-    }
-    return dates;
-  }
-
+  // 종료일이 있으면 367번째까지 계산해 초과를 거절한다. 무기한 기본값은 기존 365회다.
+  const maxCount = rule.maxOccurrences ?? (rule.endDate ? 367 : 365);
+  const endDay = rule.endDate ? businessDate(rule.endDate) : undefined;
+  const localStart = new Date(startDate.getTime() + SEOUL_OFFSET_MS);
   const weekdays = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as const;
-  let weekStart = startOfWeek(startDate);
-  while (dates.length < maxCount && (!rule.endDate || weekStart <= rule.endDate)) {
-    for (let index = 0; index < weekdays.length && dates.length < maxCount; index++) {
-      const day = addDays(weekStart, index);
-      if (day >= startDate && (!rule.endDate || day <= rule.endDate) && rule.daysOfWeek.includes(weekdays[index])) dates.push(day);
+  const weekStart = addDays(startDate, -localStart.getUTCDay());
+  const append = (date: Date): boolean => {
+    if (!Number.isFinite(date.getTime())) throw new BadRequestError('반복 날짜 범위를 벗어났습니다.');
+    if (endDay && businessDate(date) > endDay) return false;
+    if (date >= startDate) dates.push(date);
+    if (dates.length > 366) throw new BadRequestError('반복 예약은 최대 366회입니다.');
+    return dates.length < maxCount;
+  };
+
+  for (let cycle = 0; ; cycle++) {
+    switch (rule.frequency) {
+      case 'DAILY':
+        if (!append(addDays(startDate, cycle * rule.interval))) return dates;
+        break;
+      case 'MONTHLY': {
+        // 매번 첫 시작일에서 계산하므로 1/31 -> 2월 말 -> 3/31 anchor가 유지된다.
+        const local = new Date(localStart);
+        local.setUTCDate(1);
+        local.setUTCMonth(localStart.getUTCMonth() + cycle * rule.interval);
+        const monthEnd = new Date(local);
+        monthEnd.setUTCMonth(monthEnd.getUTCMonth() + 1, 0);
+        local.setUTCDate(Math.min(localStart.getUTCDate(), monthEnd.getUTCDate()));
+        if (!append(new Date(local.getTime() - SEOUL_OFFSET_MS))) return dates;
+        break;
+      }
+      case 'WEEKLY':
+        if (!rule.daysOfWeek?.length) {
+          if (!append(addDays(startDate, cycle * rule.interval * 7))) return dates;
+        } else {
+          for (const [index, weekday] of weekdays.entries()) {
+            if (rule.daysOfWeek.includes(weekday) &&
+                !append(addDays(weekStart, cycle * rule.interval * 7 + index))) return dates;
+          }
+        }
+        break;
+      default: {
+        const exhaustive: never = rule.frequency;
+        return exhaustive;
+      }
     }
-    weekStart = addWeeks(weekStart, interval);
   }
-  return dates;
 }
