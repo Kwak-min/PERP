@@ -34,7 +34,7 @@ async function workspaceOf(userId, membership) {
   const [grants, modules] = await Promise.all([
     pgQuery(`SELECT DISTINCT p.code, r.name AS role
       FROM org.user_roles ur
-      JOIN org.roles r ON r.id = ur.role_id AND r.company_id = $2
+      JOIN org.roles r ON r.id = ur.role_id AND r.company_id = $2 AND r.deleted_at IS NULL
       JOIN org.role_permissions rp ON rp.role_id = r.id
       JOIN org.permissions p ON p.id = rp.permission_id
       WHERE ur.user_id = $1 AND ur.workspace_id IS NULL`, [userId, companyId]),

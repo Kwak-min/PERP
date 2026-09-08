@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict';
 import { before, after, describe, it } from 'node:test';
 import { api, createOwnerOrg, startTestServer } from './http.js';
+import { COMPANY_PERMISSIONS } from '../src/config/rbac.js';
 
 describe('company custom roles over real HTTP', { timeout: 30000 }, () => {
   let server, owner, member, db;
-  const request = (actor, route, method = 'GET', body) => api(server.baseUrl, route, { ...actor, orgId: actor.orgId ?? owner.orgId, method, body });
+  const request = (actor, route, method = 'GET', body) => {
+    const roleId = /^\/settings\/roles\/([^/]+)$/.exec(route)?.[1];
+    const membershipId = /^\/(?:settings\/)?members\/([^/]+)\/(?:roles|status)$/.exec(route)?.[1];
+    if (roleId && ['PATCH','DELETE'].includes(method)) body = { ...body, expected_version: db().prepare('SELECT version FROM company_role WHERE id = ?').get(roleId)?.version };
+    if (membershipId && ['PUT','PATCH'].includes(method)) body = { ...body, expected_roles_version: db().prepare('SELECT roles_version FROM membership WHERE id = ?').get(membershipId)?.roles_version };
+    return api(server.baseUrl, route, { ...actor, orgId: actor.orgId ?? owner.orgId, method, body });
+  };
   before(async () => {
     server = await startTestServer();
     ({ db } = await import('../src/config/db.js'));
@@ -74,7 +81,7 @@ describe('company custom roles over real HTTP', { timeout: 30000 }, () => {
 
   it('supports custom-role invitation and refuses last-admin edits when another admin account is disabled', async () => {
     const isolated = await createOwnerOrg(server.baseUrl, []);
-    const created = await request(isolated, '/settings/roles', 'POST', { name: '활성 관리자', scope: 'all', permissions: ['role.assign', 'organization.settings', 'menu.roles'] });
+    const created = await request(isolated, '/settings/roles', 'POST', { name: '활성 관리자', scope: 'all', permissions: COMPANY_PERMISSIONS });
     assert.equal(created.status, 201);
     const email = `custom-admin-${crypto.randomUUID()}@example.invalid`;
     const invitation = await request(isolated, '/members/invites', 'POST', { email, roles: [created.body.key] });
@@ -83,7 +90,7 @@ describe('company custom roles over real HTTP', { timeout: 30000 }, () => {
     assert.equal(signup.status, 201);
     const admin = { token: signup.body.access_token, orgId: isolated.orgId };
     db().prepare("UPDATE app_user SET auth_status = 'inactive' WHERE id = ?").run(isolated.userId);
-    const edited = await request(admin, `/settings/roles/${created.body.key}`, 'PATCH', { name: '활성 관리자', scope: 'all', permissions: ['role.assign', 'menu.roles'] });
+    const edited = await request(admin, `/settings/roles/${created.body.key}`, 'PATCH', { name: '활성 관리자', scope: 'all', permissions: COMPANY_PERMISSIONS.filter(code => code !== 'organization.settings') });
     assert.equal(edited.status, 409);
     assert.equal((await request(admin, `/settings/roles/${created.body.key}`, 'DELETE')).status, 409);
     assert.ok((await request(admin, '/settings/access')).body.permissions.includes('organization.settings'));

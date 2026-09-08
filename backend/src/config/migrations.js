@@ -226,6 +226,13 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 9,
+    up(conn) {
+      // 일반 membership version과 독립적인 역할 교체 CAS.
+      addColumn(conn, 'membership', 'roles_version INTEGER NOT NULL DEFAULT 1');
+    },
+  },
 ];
 
 export function applyMigrations(conn) {
