@@ -111,6 +111,36 @@ export async function apiRequest(
   return payload;
 }
 
+// 호출자는 blob을 사용한 뒤 objectURL을 revoke한다. 인증정보를 URL에 넣지 않는다.
+export async function apiBlob(
+  path: string,
+  options: Readonly<{ session: ApiSession; signal?: AbortSignal }>,
+): Promise<Readonly<{ blob: Blob; filename: string }>> {
+  if (!/^\/(?:pg\/)?(?:finance\/transactions|approvals(?:\/requests)?)\/[^/?#]+\/receipts\/[^/?#]+$/.test(path)) {
+    throw new ApiError("원증빙 다운로드 경로가 올바르지 않습니다.", { code: "VALIDATION_ERROR", status: 400, requestId: "", details: {} });
+  }
+  const headers = new Headers({ Accept: "image/jpeg, image/png, application/pdf", Authorization: `Bearer ${options.session.token}` });
+  if (options.session.orgId) headers.set("X-Org-Id", options.session.orgId);
+  const response = await fetch(`${API_BASE_URL}${workspaceEndpoint(path, options.session.orgId)}`, {
+    headers, cache: "no-store", redirect: "error",
+    signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(10000)]) : AbortSignal.timeout(10000),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    let payload: unknown = text;
+    try { payload = JSON.parse(text); } catch (error) { if (!(error instanceof SyntaxError)) throw error; }
+    const parsed = apiErrorSchema.safeParse(payload);
+    throw new ApiError(parsed.success ? parsed.data.error.message : `다운로드 실패 (${response.status})`, {
+      code: parsed.success ? parsed.data.error.code : "HTTP_ERROR", status: response.status,
+      requestId: response.headers.get("x-request-id") ?? "", details: parsed.success ? parsed.data.error.details : {},
+    });
+  }
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+  const filename = encoded ? decodeURIComponent(encoded) : "receipt";
+  return { blob: await response.blob(), filename };
+}
+
 export function userMessageOf(error: unknown): string {
   if (error instanceof ApiError) {
     // 503 은 원인·조치가 담긴 운영 안내라 그대로 노출한다.
