@@ -117,7 +117,7 @@ export async function projects(req, res) {
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
     `SELECT p.id AS __id, p.name AS 프로젝트, p.status AS status,
-            u.name AS 책임자, p.starts_on AS 시작, p.ends_on AS 종료
+            u.name AS 책임자, to_char(p.starts_on, 'YYYY-MM-DD') AS 시작, to_char(p.ends_on, 'YYYY-MM-DD') AS 종료, p.version, p.description
        FROM project.projects p
        LEFT JOIN auth.users u ON u.id = p.lead_id
       WHERE p.company_id = $1
@@ -135,12 +135,12 @@ export async function calendar(req, res) {
     .refine(value => Boolean(value.from) === Boolean(value.to) && (!value.from || (Date.parse(value.to) > Date.parse(value.from) && Date.parse(value.to) - Date.parse(value.from) <= 32 * 86_400_000)), "조회 기간은 32일 이내여야 합니다")
     .parse(req.query);
   const params = [companyId];
-  const filters = ["company_id = $1"];
+  const filters = ["company_id = $1", "cancelled_at IS NULL"];
   if (window.from && window.to) { params.push(window.from, window.to); filters.push("ends_at >= $2 AND starts_at < $3"); }
   if (window.event_id) { params.push(window.event_id); filters.push(`id = $${params.length}`); }
   const { rows } = await pgQuery(
     `SELECT id AS __id, title AS 일정, starts_at AS 시작, ends_at AS 종료,
-            location AS 장소, scope AS status
+            location AS 장소, scope AS status, version
        FROM calendar.events
       WHERE ${filters.join(" AND ")}
       ORDER BY starts_at DESC
@@ -299,7 +299,7 @@ export async function tasks(req, res) {
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
     `SELECT t.id AS __id, t.project_id, t.title AS 업무, p.name AS 프로젝트, u.name AS 담당,
-            t.status AS status, t.due_on AS 기한, t.description
+            t.status AS status, to_char(t.due_on, 'YYYY-MM-DD') AS 기한, t.description, t.assignee_id, t.version
        FROM project.tasks t
        JOIN project.projects p ON p.id = t.project_id
        LEFT JOIN auth.users u ON u.id = t.assignee_id
@@ -1062,7 +1062,7 @@ export async function assets(req, res) {
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
     `SELECT a.id AS __id, a.name AS 이름, a.category AS 분류, a.status AS status,
-            u.name AS 담당, a.location AS 위치, a.acquired_on AS 취득일
+            u.name AS 담당, a.location AS 위치, a.acquired_on AS 취득일, a.assignee_id, a.version
        FROM asset.assets a
        LEFT JOIN auth.users u ON u.id = a.assignee_id
       WHERE a.company_id = $1
