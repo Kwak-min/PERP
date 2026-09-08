@@ -219,7 +219,7 @@ export async function financeTransactions(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT e.id AS __id, e.entry_date AS 일자, e.memo AS 내용,
+    `SELECT e.id AS __id, to_char(e.entry_date, 'YYYY-MM-DD') AS 일자, e.memo AS 내용,
             e.counterparty,e.occurred_at,e.input_currency,e.no_receipt_reason,e.budget_id,
             COALESCE(SUM(l.debit), 0) AS 차변,
             COALESCE(SUM(l.credit), 0) AS 대변,

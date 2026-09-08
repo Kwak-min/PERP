@@ -15,7 +15,9 @@ import { networkAudit, protectedPorts } from '../../scripts/deadline-isolation-g
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const args = process.argv.slice(2);
-if (args[0] !== '--scenario' || !['baseline', 'recruitment-nav'].includes(args[1]) || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {
+if (args[0] === '--scenario' && args[1] === 'expense-receipt' && args.length === 2) {
+  await import('./deadline-expense-receipt.scenario.mjs');
+} else if (args[0] !== '--scenario' || !['baseline', 'recruitment-nav'].includes(args[1]) || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {
   console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav [--probe error|cancel]');
   process.exitCode = 2;
 } else {
