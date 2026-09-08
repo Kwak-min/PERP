@@ -23,7 +23,7 @@ test('SQLite source HTTP: scope, immutable capture, exact history, CAS, uniquene
     const {closeDb} = await import('../src/config/db.js');
     closeDb();
     assert.deepEqual(db().prepare('SELECT id,original_sha256,content_sha256 FROM knowledge_source_revision ORDER BY id').all(),snapshot,'source hashes survive SQLite close/reopen');
-    assert.equal(await readFile(new URL('../../db/perp_additions_v15_knowledge_wiki.sql', import.meta.url),'utf8'), knowledgeDDL('pg'));
+    assert.equal((await readFile(new URL('../../db/perp_additions_v15_knowledge_wiki.sql', import.meta.url),'utf8')).replaceAll('\r\n', '\n'), knowledgeDDL('pg').replaceAll('\r\n', '\n'));
   } finally {
     await api.close();
     await writeFile(new URL('sqlite-http.json', evidence), JSON.stringify({ http: api.http, cleanup: api.resource }, null, 2));

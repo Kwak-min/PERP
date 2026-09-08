@@ -22,6 +22,8 @@
 | 보더 / 강한 보더 | `--of-border` `--of-border-strong` | `#e2e8f0` `#cbd5e1` |
 | 본문 / 보조 텍스트 | `--of-text` `--of-text-muted` | `#0f172a` `#5b6b80` |
 | 사이드바(라이트) | `--of-sidebar` `--of-sidebar-border` | `#ffffff` `#e2e8f0` |
+| 3D 그래프 관계 | `--of-graph-wiki` `--of-graph-ai` `--of-graph-space` | 보조 텍스트 / 성공 / 본문 토큰 재사용 |
+| 3D 그래프 노드 상태 | `--of-graph-document` `--of-graph-note` `--of-graph-selected` | 주요 / AI / 경고 토큰 재사용 |
 
 반경: `--r-sm 4px` / `--r-md 6px` / `--r-lg 8px` — 이 셋만 사용한다.
 간격: 4의 배수. 카드 내부 패딩 16px, 그리드 간격 12px.
@@ -47,6 +49,7 @@ Pretendard → Noto Sans KR → system-ui.
 | `MonthCalendar` | 월요일 시작 7열 월 그리드, 기기 시간대 날짜, 일정 상세 링크 | 빈 달도 그리드 유지, 오늘 강조, 3건 초과 펼치기, 모바일 44px 링크·전체 제목 접근성 이름 |
 | `MemberListModal` | 구성원 전체 목록과 즉시 검색 | 로딩/빈 결과/오류/모바일/키보드 닫기 |
 | `OrgTreeEditor` | 상하 연결선 + 담당자·직급·부서 + 권한 배지 + 하위 직급 추가 | 편집/저장/취소/비활성 |
+| `KnowledgeGraphStage` | 실제 WebGL 3D 그래프 + 시점 제어 + 동일 내용의 키보드 목록 | 로딩/빈 상태/WebGL 오류/선택/hover/reduced motion |
 
 ## 4. 레이아웃
 
@@ -59,6 +62,13 @@ Pretendard → Noto Sans KR → system-ui.
 
 모든 화면은 로딩·빈·오류·권한거부·모바일 상태를 가진다.
 서버 응답과 사용자가 선택한 실제 항목만 표시한다. 백엔드 오류는 오류 상태로, 빈 응답은 빈 상태로 표시하며 샘플 데이터로 대체하지 않는다. 부서·브랜치는 사용자가 명시적으로 추가한 항목만 생성한다.
+
+## 5.1 모션과 상호작용
+
+- 3D 그래프의 회전은 구조 탐색을 위한 시점 변경만 표현하며 장식 입자는 사용하지 않는다.
+- 카메라 버튼과 노드 초점 이동은 240ms quadratic tween을 사용한다. 자동 회전이 꺼졌거나 reduced motion이면 즉시 이동한다.
+- reduced motion에서는 자동 회전, tween, 진행형 force layout을 모두 끄고 정착 뒤 RAF를 중지한다.
+- WebGL canvas와 별도로 모든 노드·방향 연결을 담은 키보드 목록을 항상 유지한다.
 
 ## 6. 접근성
 
