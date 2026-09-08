@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
 import sharp from 'sharp';
@@ -12,6 +12,7 @@ assert.equal(process.env.DEADLINE_ISOLATED, '1');
 process.env.PG_CONNECTION_TIMEOUT_MS = '10000';
 process.env.ORBITFLOW_UPLOAD_DIR = path.join(process.env.DEADLINE_TEMP_ROOT, 'native-receipts');
 const evidence = new URL('../../.omo/evidence/task-16-deadline-erp-redesign/', import.meta.url);
+await mkdir(evidence, { recursive: true });
 const native = await startDailyNativePostgres();
 let server, closePgPool, passed = false;
 const scenarios = [], cleanup = { nativeClosed: false, serverClosed: false };
