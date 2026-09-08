@@ -66,6 +66,8 @@ async function csvRows() {
 test('all 25 company rows are reachable across pages; foreign rows never enter list or CSV', async () => {
   const result = await api(server.baseUrl, '/pg/finance/budgets', session);
   assert.equal(result.body.items.length, 25);
+  assert.ok(result.body.items.every(row => row.__version === 1));
+  await expect(page.locator('thead th')).toHaveCount(5);
   const names = [];
   for (const count of [10, 10, 5]) {
     await expect(page.locator('tbody tr')).toHaveCount(count);
@@ -109,19 +111,31 @@ for (const [position, id] of [[2, 23], [9, 16], [24, 1]]) {
     const patch = page.waitForResponse(r => r.url().endsWith(`/pg/records/budgets/${id}`) && r.request().method() === 'PATCH');
     const reload = page.waitForResponse(r => r.url().includes('/pg/finance/budgets'));
     await page.getByRole('button', { name: '저장', exact: true }).click();
-    assert.equal((await patch).status(), 200); await reload;
+    const patched = await patch;
+    assert.equal(patched.status(), 200);
+    assert.equal(patched.request().postDataJSON().expected_version, 1);
+    await reload;
     const edited = page.getByRole('row').filter({ has: page.getByRole('cell', { name: `${name}-수정`, exact: true }) });
     await edited.waitFor();
-    assert.deepEqual(fixture.snapshot(), before.map(record => record.id === id ? { ...record, name: `${name}-수정` } : record));
+    assert.deepEqual(fixture.snapshot(), before.map(record => record.id === id ? { ...record, name: `${name}-수정`, version: 2 } : record));
     const deletion = page.waitForResponse(r => r.url().includes('/pg/records/budgets/') && r.request().method() === 'DELETE');
     const deleteReload = page.waitForResponse(r => r.url().includes('/pg/finance/budgets'));
     page.once('dialog', dialog => dialog.accept());
     await edited.getByRole('button', { name: '삭제', exact: true }).click();
     const deleted = await deletion;
     assert.equal(new URL(deleted.url()).pathname, `/api/v1/pg/records/budgets/${id}`);
-    assert.equal(deleted.status(), 200); await deleteReload;
+    assert.equal(deleted.status(), 200);
+    assert.equal(deleted.request().postDataJSON().expected_version, 2);
+    await deleteReload;
     await expect(page.getByRole('cell', { name: `${name}-수정`, exact: true })).toHaveCount(0);
     assert.deepEqual(fixture.snapshot(), before.filter(record => record.id !== id));
+    const events = fixture.events();
+    assert.equal(events.length, 2);
+    assert.ok(events.every(event => event.company_id === '77' && event.actor_id === '101' && event.resource === 'budgets' && event.resource_id === String(id) && event.request_id));
+    assert.deepEqual(events[0].before_data, before.find(record => record.id === id));
+    assert.deepEqual(events[0].after_data, { ...events[0].before_data, name: `${name}-수정`, version: 2 });
+    assert.deepEqual(events[1].before_data, events[0].after_data);
+    assert.equal(events[1].after_data, null);
   });
 }
 
@@ -150,7 +164,7 @@ for (const width of [375, 768]) {
 test('record endpoints reject another company for GET, PATCH and DELETE without changes', async () => {
   const before = fixture.snapshot();
   for (const method of ['GET', 'PATCH', 'DELETE']) {
-    const result = await api(server.baseUrl, '/pg/records/budgets/99', { ...session, method, ...(method === 'PATCH' ? { body: { name: 'LEAK' } } : {}) });
+    const result = await api(server.baseUrl, '/pg/records/budgets/99', { ...session, method, ...(method !== 'GET' ? { body: { ...(method === 'PATCH' ? { name: 'LEAK' } : {}), expected_version: 1 } } : {}) });
     assert.equal(result.status, 404);
   }
   assert.deepEqual(fixture.snapshot(), before);
