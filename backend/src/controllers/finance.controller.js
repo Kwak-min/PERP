@@ -7,6 +7,7 @@ import * as audit from "../services/audit.service.js";
 import { createApproval } from "../services/approval.service.js";
 import { notify } from "../services/notification.service.js";
 import { ApiError, notFound } from "../utils/errors.js";
+import { txView, assertLegacyPeriodOpen as assertPeriodOpen, withLegacyFinanceTransaction, replayLegacyMutation, writeLegacyTransaction } from '../services/legacy-expenses.service.js';
 
 const TX = "transaction_record";
 
@@ -18,14 +19,14 @@ const accountSchema = z.object({
 
 const txSchema = z.object({
   kind: z.enum(["income", "expense"]),
-  amount_minor: z.number().int().positive(),
-  occurred_on: z.string().length(10),
+  amount_minor: z.number().int().positive().safe(),
+  occurred_on: z.string().date(),
   account_id: z.string().nullable().optional(),
   counterparty_id: z.string().nullable().optional(),
   project_id: z.string().nullable().optional(),
   budget_id: z.string().nullable().optional(),
   memo: z.string().default(""),
-});
+}).strict('Use /finance/expenses for expense fields.');
 
 const txPatchSchema = z.object({
   amount_minor: z.number().int().optional(),
@@ -79,41 +80,6 @@ const reopenSchema = z.object({
   reason: z.string().default(""),
 });
 
-const periodOf = (occurredOn) => occurredOn.slice(0, 7);
-
-function assertPeriodOpen(principal, occurredOn) {
-  const lock = db()
-    .prepare(
-      `SELECT * FROM fiscal_period_lock
-       WHERE tenant_id = ? AND org_id = ? AND period = ? AND deleted_at IS NULL`,
-    )
-    .get(principal.tenantId, principal.orgId, periodOf(occurredOn));
-  if (lock && lock.status === "locked") {
-    throw new ApiError(
-      "PERIOD_LOCKED",
-      `fiscal period ${lock.period} is locked; reopen approval required`,
-    );
-  }
-}
-
-const txView = (t) => ({
-  id: t.id,
-  kind: t.kind,
-  account_id: t.account_id,
-  counterparty_id: t.counterparty_id,
-  project_id: t.project_id,
-  budget_id: t.budget_id,
-  amount_minor: t.amount_minor,
-  currency: t.currency,
-  occurred_on: t.occurred_on,
-  memo: t.memo,
-  status: t.status,
-  approval_id: t.approval_id,
-  evidence_count: t.evidence_count,
-  ai_generated: Boolean(t.ai_generated),
-  version: t.version,
-});
-
 function confirmedExpenseFor(principal, budgetId) {
   return db()
     .prepare(
@@ -158,54 +124,18 @@ export function createAccount(req, res) {
 export function listAccounts(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("transaction.read");
-  const rows = listScoped("account", principal, [], { limit: 500, orderBy: "code ASC" });
+  const rows = listScoped("account", principal, [{ sql: "active = 1", params: [] }], { limit: 500, orderBy: "code ASC" });
   res.json({ items: rows.map((a) => ({ id: a.id, code: a.code, name: a.name, kind: a.kind })) });
 }
 
 export function createTransaction(req, res) {
-  const principal = resolvePrincipal(req);
-  principal.require("transaction.write");
   const payload = txSchema.parse(req.body);
-  assertPeriodOpen(principal, payload.occurred_on);
-
-  const dedupe = `${payload.kind}:${payload.amount_minor}:${payload.occurred_on}:${payload.memo}`;
-  const duplicate = db()
-    .prepare(
-      `SELECT id FROM ${TX}
-       WHERE tenant_id = ? AND org_id = ? AND dedupe_key = ? AND deleted_at IS NULL LIMIT 1`,
-    )
-    .get(principal.tenantId, principal.orgId, dedupe);
-
-  const tx = insert(TX, {
-    tenant_id: principal.tenantId,
-    org_id: principal.orgId,
-    kind: payload.kind,
-    amount_minor: payload.amount_minor,
-    occurred_on: payload.occurred_on,
-    account_id: payload.account_id ?? null,
-    counterparty_id: payload.counterparty_id ?? null,
-    project_id: payload.project_id ?? null,
-    budget_id: payload.budget_id ?? null,
-    memo: payload.memo,
-    dedupe_key: dedupe,
-    created_by: principal.userId,
-  });
-
-  audit.record({
-    tenantId: principal.tenantId,
-    action: "transaction.created",
-    resourceType: "transaction",
-    resourceId: tx.id,
-    actorId: principal.userId,
-    after: txView(tx),
-    requestId: req.requestId,
-  });
-
-  res.status(201).json({
-    ...txView(tx),
-    duplicate_warning: duplicate ? { id: duplicate.id } : null,
-    budget_warning: budgetWarning(principal, tx),
-  });
+  const result = withLegacyFinanceTransaction(req, principal => replayLegacyMutation(req, principal,
+    { operation: 'transaction.create', payload, keyRequired: false }, () => {
+      const tx = writeLegacyTransaction(principal, payload, req.requestId);
+      return { ...tx, budget_warning: budgetWarning(principal, tx) };
+    }));
+  res.status(201).json(result);
 }
 
 export function listTransactions(req, res) {
@@ -224,6 +154,7 @@ export function patchTransaction(req, res) {
   const payload = txPatchSchema.parse(req.body);
   const tx = getScoped(TX, principal, req.params.transactionId, "transaction");
   assertPeriodOpen(principal, tx.occurred_on);
+  if (tx.status === 'confirmed') throw new ApiError('CONFLICT', '확정된 금융 기록은 덮어쓸 수 없습니다.');
 
   if (payload.version !== undefined && payload.version !== tx.version) {
     throw new ApiError("VERSION_CONFLICT", "transaction was modified by someone else");
@@ -561,7 +492,7 @@ export function reportSummary(req, res) {
     balance_minor: income - expense,
     budget_total_minor: budgetTotal,
     budget_execution_rate: budgetTotal ? Math.round((1000 * expense) / budgetTotal) / 10 : 0,
-    unevidenced_count: rows.filter((t) => t.kind === "expense" && t.evidence_count === 0).length,
+    unevidenced_count: rows.filter((t) => t.kind === "expense" && txView(t).evidence_count === 0).length,
     transaction_count: rows.length,
     formula: "수지 = 확정 수입 합계 - 확정 지출 합계",
     generated_from: "transaction(status=confirmed)",

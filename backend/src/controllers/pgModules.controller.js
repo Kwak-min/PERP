@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import { pgIdentity, resolvePgCompanyPrincipal } from "../middleware/pgAccess.js";
 import { money, idempotentMutation, MONEY_TABLES, mutateFinancialRecord } from '../services/pg-finance.service.js';
+import { pgExpenseMutation, postPgTransaction } from '../services/pg-expenses.service.js';
 import { pgQuery, pgTransaction } from "../config/pg.js";
 import { MODULE_CATALOG } from "../config/modules.js";
 import { enabledFeatures, FEATURE_CATALOG, modulesForFeatures, validateFeatureSelection } from "../config/features.js";
@@ -162,7 +163,7 @@ export async function financeSummary(req, res) {
        FROM accounting.journal_lines l
        JOIN accounting.journal_entries e ON e.id = l.entry_id
        JOIN accounting.accounts a ON a.id = l.account_id
-      WHERE e.company_id = $1`,
+      WHERE e.company_id = $1 AND e.posted=true`,
     [companyId],
   );
   // Keep aggregate NUMERIC precision, including totals larger than a single entry.
@@ -185,6 +186,7 @@ export async function financeAccounts(req, res) {
   const items = rows.map((r) => ({
     value: String(r.id),
     label: `[${typeLabel[r.account_type] ?? r.account_type}] ${r.code} ${r.name}`,
+    account_type: r.account_type,
   }));
   res.json({ items });
 }
@@ -197,60 +199,18 @@ export async function createTransaction(req, res) {
     throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 거래를 만들 수 있습니다");
   }
   const body = req.body ?? {};
+  // Keep old value normalization, but never silently discard strict expense fields.
+  if (Object.keys(body).some(field => !['account_id', 'amount', 'entry_date', 'memo'].includes(field))) {
+    throw new ApiError('VALIDATION_ERROR', 'Use /pg/finance/expenses for expense fields.');
+  }
   const accountId = body.account_id;
   const amount = money(body.amount);
   const entryDate = body.entry_date || null;
   if (entryDate) z.string().date().parse(entryDate);
   const memo = String(body.memo ?? "").trim() || null;
   if (!accountId) throw new ApiError("VALIDATION_ERROR", "계정을 선택하세요");
-  const result = await idempotentMutation(req, 'transaction.create', { account_id: String(accountId), amount, entry_date: entryDate, memo }, async client => {
-  // 계정 조회부터 게시까지 같은 트랜잭션이다.
-  const { rows: accRows } = await client.query(
-    `SELECT id, account_type FROM accounting.accounts
-      WHERE id = $1 AND company_id = $2 AND is_active = true AND account_type IN ('revenue','expense') FOR SHARE`,
-    [accountId, companyId],
-  );
-  const account = accRows[0];
-  if (!account) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 계정입니다");
-
-  // 상대 계정 = 회사의 자산(현금) 계정 중 코드 최소값
-  const { rows: cashRows } = await client.query(
-    `SELECT id FROM accounting.accounts
-      WHERE company_id = $1 AND account_type = 'asset' AND is_active = true
-      ORDER BY code LIMIT 1 FOR SHARE`,
-    [companyId],
-  );
-  const cash = cashRows[0];
-  if (!cash) throw new ApiError("VALIDATION_ERROR", "현금(자산) 계정이 없어 거래를 만들 수 없습니다");
-
-  const { rows: entryRows } = await client.query(
-    `INSERT INTO accounting.journal_entries (company_id, entry_date, memo, created_by, posted)
-     VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3, $4, false) RETURNING id`,
-    [companyId, entryDate, memo, userId],
-  );
-  const entryId = entryRows[0].id;
-
-  // 수입: 현금 차변 / 수입 대변 · 지출: 지출 차변 / 현금 대변
-  const lines =
-    account.account_type === "revenue"
-      ? [
-          { accountId: cash.id, debit: amount, credit: 0 },
-          { accountId: account.id, debit: 0, credit: amount },
-        ]
-      : [
-          { accountId: account.id, debit: amount, credit: 0 },
-          { accountId: cash.id, debit: 0, credit: amount },
-        ];
-  for (const l of lines) {
-    await client.query(
-      `INSERT INTO accounting.journal_lines (entry_id, account_id, debit, credit)
-       VALUES ($1, $2, $3, $4)`,
-      [entryId, l.accountId, l.debit, l.credit],
-    );
-  }
-  await client.query('UPDATE accounting.journal_entries SET posted=true WHERE id=$1', [entryId]);
-  return { id: String(entryId), version: 1 };
-  });
+  const payload = { account_id: String(accountId), amount, entry_date: entryDate, memo };
+  const result = await pgExpenseMutation(req, 'transaction.create', payload, client => postPgTransaction(client, req, payload));
   res.status(201).json(result);
 }
 
@@ -260,6 +220,7 @@ export async function financeTransactions(req, res) {
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
     `SELECT e.id AS __id, e.entry_date AS 일자, e.memo AS 내용,
+            e.counterparty,e.occurred_at,e.input_currency,e.no_receipt_reason,e.budget_id,
             COALESCE(SUM(l.debit), 0) AS 차변,
             COALESCE(SUM(l.credit), 0) AS 대변,
             CASE WHEN e.posted THEN 'confirmed' ELSE 'pending' END AS status, e.version AS __version

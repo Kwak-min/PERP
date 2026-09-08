@@ -23,9 +23,13 @@ export function decimal(value) { return `${value / 100n}.${String(value % 100n).
 export const expectedVersion = value => z.number().int().positive().safe().parse(value);
 
 export async function idempotentMutation(req, operation, payload, run) {
+  return pgTransaction(client => replayPgMutation(client, req, { operation, payload }, run));
+}
+
+// 호출자가 transaction과 fresh 인가/회사 잠금을 소유한다. CSV도 전행에 한 번만 호출한다.
+export async function replayPgMutation(client, req, { operation, payload }, run) {
   const { companyId, userId } = pgIdentity(req);
   const key = z.string().min(1).max(128).regex(/^[\x21-\x7e]+$/).parse(req.get('Idempotency-Key'));
-  return pgTransaction(async client => {
     const scope = [companyId, userId, operation, key];
     await client.query(`INSERT INTO accounting.request_replays(company_id,actor_id,operation,request_key,payload)
       VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT DO NOTHING`, [...scope, JSON.stringify(payload)]);
@@ -37,7 +41,6 @@ export async function idempotentMutation(req, operation, payload, run) {
     await client.query(`UPDATE accounting.request_replays SET response=$5::jsonb
       WHERE company_id=$1 AND actor_id=$2 AND operation=$3 AND request_key=$4`, [...scope, JSON.stringify(response)]);
     return response;
-  });
 }
 
 export const MONEY_TABLES = {

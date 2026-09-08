@@ -4,6 +4,7 @@ import * as controller from "../controllers/pgAuth.controller.js";
 import { createCompany } from "../controllers/pgCompanies.controller.js";
 import * as members from "../controllers/pgMembers.controller.js";
 import * as mod from "../controllers/pgModules.controller.js";
+import * as expenses from '../controllers/pgExpenses.controller.js';
 import * as corrections from '../controllers/pgDailyCorrections.controller.js';
 import * as projectMembers from '../controllers/projectMembers.controller.js';
 import { pgRoute, pgRecordRoute } from "../middleware/pgAccess.js";
@@ -18,6 +19,9 @@ import { duesPaymentHistory, recordDuesPayment } from '../controllers/pgDuesPaym
 import { receiptRaw, uploadReceipt, downloadReceipt } from '../controllers/receiptFiles.controller.js';
 
 export const pgRouter = Router();
+pgRouter.post('/finance/expenses', asyncRoute(pgRoute(expenses.createExpense, 'transaction.write', 'finance')));
+pgRouter.post('/finance/transactions/:id/receipts', asyncRoute(pgRoute(expenses.appendReceipts, 'transaction.write', 'finance')));
+pgRouter.get('/finance/transactions/:id', asyncRoute(pgRoute(expenses.transactionDetail, 'transaction.read', 'finance')));
 pgRouter.post('/finance/transactions/receipt-uploads', (req, res, next) => asyncRoute(pgRoute(() => next(), 'transaction.write', 'finance'))(req, res, next), receiptRaw, asyncRoute(uploadReceipt('perp_db', 'transaction')));
 pgRouter.get('/finance/transactions/:id/receipts/:fileId', asyncRoute(pgRoute(downloadReceipt('perp_db', 'transaction'), 'transaction.read', 'finance')));
 pgRouter.post('/approvals/receipt-uploads', (req, res, next) => asyncRoute(pgRoute(withPgFeature('approvals', () => next()), 'approval.request', null))(req, res, next), receiptRaw, asyncRoute(uploadReceipt('perp_db', 'approval')));

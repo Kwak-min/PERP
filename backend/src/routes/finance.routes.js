@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import * as controller from "../controllers/finance.controller.js";
+import * as expenses from '../controllers/legacyExpenses.controller.js';
 import { asyncRoute } from "../middleware/error.js";
 
 import { authorizeReceiptUpload, receiptRaw, uploadReceipt, downloadReceipt } from '../controllers/receiptFiles.controller.js';
@@ -12,6 +13,9 @@ financeRouter.get('/transactions/:id/receipts/:fileId', asyncRoute(downloadRecei
 financeRouter.post("/accounts", asyncRoute(controller.createAccount));
 financeRouter.get("/accounts", asyncRoute(controller.listAccounts));
 
+financeRouter.post('/expenses', asyncRoute(expenses.createExpense));
+financeRouter.post('/transactions/:id/receipts', asyncRoute(expenses.appendReceipts));
+financeRouter.get('/transactions/:id', asyncRoute(expenses.transactionDetail));
 financeRouter.post("/transactions", asyncRoute(controller.createTransaction));
 financeRouter.get("/transactions", asyncRoute(controller.listTransactions));
 financeRouter.patch("/transactions/:transactionId", asyncRoute(controller.patchTransaction));

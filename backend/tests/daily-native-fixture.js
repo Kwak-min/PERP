@@ -35,7 +35,7 @@ export async function startDailyNativePostgres() {
     process.env.DATABASE_URL = ''; process.env.PG_HOST = '127.0.0.1'; process.env.PG_PORT = String(port);
     process.env.PG_DATABASE = 'postgres'; process.env.PG_USER = 'daily_test'; process.env.PG_PASSWORD = '';
     pool = new pg.Pool({ host: '127.0.0.1', port, database: 'postgres', user: 'daily_test' });
-    for (const file of ['perp_schema.sql', ...[2,3,4,5,6,7].map(v => `perp_additions_v${v}.sql`), 'perp_additions_v8_daily_finance.sql', 'perp_additions_v9_daily_corrections.sql', 'perp_additions_v9_daily_corrections.sql', 'perp_additions_v10_org_audit.sql']) {
+    for (const file of ['perp_schema.sql', ...[2,3,4,5,6,7].map(v => `perp_additions_v${v}.sql`), 'perp_additions_v8_daily_finance.sql', 'perp_additions_v9_daily_corrections.sql', 'perp_additions_v9_daily_corrections.sql', 'perp_additions_v10_org_audit.sql', 'perp_additions_v12_deadline_expenses.sql', 'perp_additions_v12_deadline_expense_writer.sql']) {
       await pool.query(await readFile(new URL(`../../db/${file}`, import.meta.url), 'utf8'));
     }
     const companies = (await pool.query("INSERT INTO org.companies(name) VALUES ('DAILY_ISOLATED_A'),('DAILY_ISOLATED_B') RETURNING id")).rows;

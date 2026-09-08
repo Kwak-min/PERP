@@ -40,7 +40,7 @@ export async function pgReceiptParent(client, principal, { kind, parentId, write
   return parent;
 }
 
-async function freshPgReceiptPrincipal(client, principal, kind) {
+export async function freshPgReceiptPrincipal(client, principal, kind) {
   await client.query('SELECT id FROM org.companies WHERE id=$1 FOR UPDATE', [principal.companyId]);
   const permission = kind === 'transaction' ? 'transaction.write' : 'approval.request';
   const { rows: [membership] } = await client.query(`SELECT m.user_id FROM org.company_memberships m JOIN auth.users u ON u.id=m.user_id

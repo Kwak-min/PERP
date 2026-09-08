@@ -6,7 +6,7 @@ import { legacyRoleGrants } from './company-roles.service.js';
 import { assertFeatureEnabled } from '../config/features.js';
 import { assertReceiptBounds, newReceiptStage, receiptUploadView, removeStagedReceipt, tokenHash, writeReceipt, receiptTokensSchema, RECEIPT_LIMITS } from './receipt-files.service.js';
 
-function freshReceiptPrincipal(principal, kind) {
+export function freshReceiptPrincipal(principal, kind) {
   const member = db().prepare(`SELECT m.roles,o.modules,o.enabled_features FROM membership m
     JOIN app_user u ON u.id=m.user_id JOIN organization o ON o.id=m.org_id AND o.tenant_id=m.tenant_id JOIN tenant t ON t.id=o.tenant_id
     WHERE m.user_id=? AND m.org_id=? AND m.tenant_id=? AND m.status='active' AND m.deleted_at IS NULL
