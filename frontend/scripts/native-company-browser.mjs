@@ -57,11 +57,18 @@ export async function nativeCompanyScenarios({ scenario, signIn, origin, storage
     await page.locator('.workspace-picker__button').click();
     await page.getByRole('button', { name: '브랜치 만들기', exact: true }).click();
     await page.getByLabel('브랜치 이름', { exact: true }).fill('QA_NATIVE_EXPLICIT_BRANCH');
+    assert.equal(await page.locator('.branch-create input[type="checkbox"]').count(), 0, 'PG must not offer unsupported branch ACL controls');
     const department = page.waitForResponse(response => response.url().endsWith('/members/departments') && response.request().method() === 'POST');
     await page.locator('.branch-create__submit').click();
     const saved = await department;
     assert.equal(saved.status(), 201);
     assert.ok(saved.url().endsWith('/pg/members/departments'));
+    assert.deepEqual(saved.request().postDataJSON(), { name: 'QA_NATIVE_EXPLICIT_BRANCH' });
+    const branch = await saved.json();
+    assert.ok(fixture.state.departments.some(row => row.id === branch.id && row.company_id === company.org_id.slice(3) && row.name === 'QA_NATIVE_EXPLICIT_BRANCH'));
+    await page.getByRole('menuitemradio', { name: /QA_NATIVE_EXPLICIT_BRANCH/ }).waitFor();
+    await page.reload();
+    await page.locator('.workspace-picker__button').click();
     await page.getByRole('menuitemradio', { name: /QA_NATIVE_EXPLICIT_BRANCH/ }).waitFor();
   });
 }
