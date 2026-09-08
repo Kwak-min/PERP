@@ -130,8 +130,13 @@ try {
       assert.equal((await request(`/projects/${foreign}`, { version: 1, name: 'Forbidden' }, 'PATCH')).status, 404);
       const duplicate = await request(`/tasks/${task}`, { version: 4, assignee_id: session.userId }, 'PATCH'); assert.equal(duplicate.status, 200); assert.equal(duplicate.body.version, 4);
       await fixture.pool.query("CREATE FUNCTION notice.reject_daily_assignment() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected native notification failure'; END $$; CREATE TRIGGER reject_daily_assignment BEFORE INSERT ON notice.notifications FOR EACH ROW EXECUTE FUNCTION notice.reject_daily_assignment();");
-      try { assert.equal((await request(`/tasks/${task}`, { version: 4, assignee_id: fixture.identity.users[0].id }, 'PATCH')).status, 500); }
-      finally { await fixture.pool.query('DROP TRIGGER reject_daily_assignment ON notice.notifications'); }
+      try {
+        await page.goto(`${origin}/projects/${project}`); await page.locator(`[data-task-id="${task}"]`).getByRole('button', { name: '담당자 배정', exact: true }).click();
+        await expect(page.getByLabel('담당자', { exact: true })).toBeEnabled(); await page.getByLabel('담당자', { exact: true }).selectOption(fixture.identity.users[0].id);
+        const failedAssignment = responseFor(`/tasks/${task}`); await page.getByRole('dialog').getByRole('button', { name: '배정 저장', exact: true }).click(); assert.equal((await failedAssignment).status(), 500);
+        await expect(page.getByRole('alert')).toBeVisible(); await expect(page.getByLabel('담당자', { exact: true })).toHaveValue(fixture.identity.users[0].id);
+        await page.screenshot({ path: `${evidence}/pg-assignment-notification-failure.png`, fullPage: true });
+      } finally { await fixture.pool.query('DROP TRIGGER reject_daily_assignment ON notice.notifications'); }
       const retainedTask = (await fixture.pool.query('SELECT version,assignee_id FROM project.tasks WHERE id=$1', [task])).rows[0]; assert.equal(retainedTask.version, 4); assert.equal(retainedTask.assignee_id, session.userId);
       assert.equal((await request(`/tasks/${task}`, { version: 4, assignee_id: fixture.identity.users[0].id }, 'PATCH')).status, 200);
       const newRecipientNotifications = await request('/notifications', undefined, 'GET'); assert.equal(newRecipientNotifications.status, 200); assert.equal(newRecipientNotifications.body.items.filter(item => item.link === `/tasks/${task}`).length, 1);
