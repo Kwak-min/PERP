@@ -1,13 +1,16 @@
 import type { GraphIdentity } from "../../screens/vault/graph3d.ts";
 
-export const KNOWLEDGE_GRAPH_RELATIONS = ["manual", "wiki", "link", "ai_similarity", "space", "project"] as const;
+export type WikiGraphIdentity = Omit<GraphIdentity, "kind"> & { readonly kind: "source" | "page" | "entity" | "concept" };
+export type StageGraphIdentity = GraphIdentity | WikiGraphIdentity;
+
+export const KNOWLEDGE_GRAPH_RELATIONS = ["manual", "wiki", "link", "ai_similarity", "space", "project", "citation", "ai_derived"] as const;
 export type KnowledgeGraphRelation = (typeof KNOWLEDGE_GRAPH_RELATIONS)[number];
 
 export type KnowledgeGraphStageNode = {
   readonly id: string;
   readonly renderer_id: string;
-  readonly identity: GraphIdentity;
-  readonly kind: GraphIdentity["kind"];
+  readonly identity: StageGraphIdentity;
+  readonly kind: StageGraphIdentity["kind"];
   readonly title: string;
   readonly folder?: string;
   readonly [field: string]: unknown;
@@ -22,7 +25,8 @@ export type KnowledgeGraphStageEdge = {
   readonly kind: KnowledgeGraphRelation;
   readonly binding: "explicit" | "title" | "membership" | "inference";
   readonly resolution: "resolved" | "unresolved" | "unavailable";
-  readonly provenance?: object;
+  readonly direction?: "directed" | "undirected";
+  readonly provenance?: object | undefined;
   readonly [field: string]: unknown;
 };
 
@@ -53,7 +57,7 @@ export type PreparedKnowledgeGraph = {
   readonly identityMap: ReadonlyMap<string, KnowledgeGraphStageNode>;
 };
 
-export type KnowledgeGraphRelationClass = "wiki" | "ai" | "space";
+export type KnowledgeGraphRelationClass = "wiki" | "ai" | "space" | "citation" | "derived";
 
 export function relationClass(kind: KnowledgeGraphRelation): KnowledgeGraphRelationClass {
   switch (kind) {
@@ -63,6 +67,10 @@ export function relationClass(kind: KnowledgeGraphRelation): KnowledgeGraphRelat
       return "wiki";
     case "ai_similarity":
       return "ai";
+    case "citation":
+      return "citation";
+    case "ai_derived":
+      return "derived";
     case "space":
     case "project":
       return "space";
@@ -80,6 +88,10 @@ export function relationLabel(kind: KnowledgeGraphRelation): string {
       return "AI 유사도 추론";
     case "space":
       return "프로젝트·공간 소속";
+    case "citation":
+      return "고정 판 인용";
+    case "derived":
+      return "AI 근거 기반 파생 관계";
     default:
       return assertNever(relation);
   }

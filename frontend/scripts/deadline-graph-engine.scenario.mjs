@@ -37,7 +37,7 @@ export async function graphEngineScenario() {
       configFile: false,
       root: path.join(root, "frontend"),
       envDir: process.env.DEADLINE_TEMP_ROOT,
-      cacheDir: path.join(process.env.DEADLINE_TEMP_ROOT, 'vite-cache'),
+      cacheDir: path.join(process.env.DEADLINE_TEMP_ROOT, "vite-graph-engine"),
       plugins: [
         {
           name: "task-27-fixture",
@@ -119,7 +119,18 @@ export async function graphEngineScenario() {
       await armStage(happy.page, { state: "ready" });
       await happy.page.getByRole("button", { name: "1000개 노드", exact: true }).click();
       await stageSignal(happy.page);
-      assert.equal(await happy.page.locator(".knowledge-graph-stage__nodes button").count(), 1000);
+      const keyboardNodes = happy.page.locator(".knowledge-graph-stage__nodes button");
+      assert.equal(await keyboardNodes.count(), 1000);
+      await keyboardNodes.first().focus();
+      await keyboardNodes.first().press("ArrowDown");
+      assert.equal(await keyboardNodes.nth(1).evaluate(node => node === document.activeElement), true);
+      await keyboardNodes.nth(1).press("End");
+      assert.equal(await keyboardNodes.last().evaluate(node => node === document.activeElement), true);
+      await keyboardNodes.last().press("Home");
+      await keyboardNodes.first().press("Enter");
+      assert.equal(await keyboardNodes.first().getAttribute("aria-pressed"), "true");
+      assert.equal(await happy.page.getByTestId("selected-node").textContent(), await happy.page.evaluate(() => window.__task27Source.nodes[0].renderer_id));
+      result.cases.push({ name: "keyboard-focus-selection", arrows: true, homeEnd: true, enterSelectsExactIdentity: true });
       await happy.page.getByText(/연결 1001개/).click();
       assert.deepEqual((await happy.page.locator(".knowledge-graph-stage__edges li").evaluateAll((items) => items.slice(0, 3).map((item) => ({ relation: item.getAttribute("data-relation"), text: item.textContent })))).map((item) => item.relation), ["wiki", "wiki", "ai"]);
       assert.equal(await happy.page.evaluate(() => window.__task27Unchanged()), true);
@@ -166,6 +177,20 @@ export async function graphEngineScenario() {
       assert.equal(await reduced.page.evaluate(() => window.__task27Unchanged()), true);
       assert.equal(await reduced.page.locator(".knowledge-graph-stage").count(), 1);
       assert.deepEqual(reduced.errors, []);
+      await reduced.page.evaluate(() => {
+        const canvas = document.querySelector("canvas"), width = canvas.width;
+        window.__task28Resize = new Promise((resolve, reject) => {
+          const observer = new MutationObserver(() => { if (canvas.width !== width) { clearTimeout(timer); observer.disconnect(); resolve(); } });
+          const timer = setTimeout(() => { observer.disconnect(); reject(new Error("canvas resize deadline")); }, 15000);
+          observer.observe(canvas, { attributes: true, attributeFilter: ["width"] });
+        });
+      });
+      await reduced.page.setViewportSize({ width: 375, height: 900 });
+      await reduced.page.evaluate(() => window.__task28Resize);
+      const resizedImage = await reduced.page.locator(".knowledge-graph-stage__viewport").screenshot({ path: path.join(screenshotDir, "reduced-resized.png"), animations: "disabled" });
+      const colored = Number(execFileSync("python", ["-c", "import sys,io;from PIL import Image;im=Image.open(io.BytesIO(sys.stdin.buffer.read())).convert('RGB');print(sum(1 for r,g,b in im.get_flattened_data() if r<140 and b>150 and b>r+60))"], { input: resizedImage, timeout: 10000 }).toString().trim());
+      assert.ok(colored > 100, `paused renderer must repaint its node after actual canvas resize; colored=${colored}`);
+      result.cases.push({ name: "paused-resize-pixels", colored });
       await reduced.page.screenshot({ path: path.join(screenshotDir, "reduced-motion.png"), fullPage: true, animations: "disabled" });
       result.cases.push({ name: "reduced-motion", autoRotate: false, cameraTween: false, animatedLayout: false, idleRaf: 0 });
     } finally {

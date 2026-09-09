@@ -68,6 +68,7 @@ export function useKnowledgeGraphEngine(request: GraphEngineRequest): GraphEngin
 
     let mounted = true;
     let observer: ResizeObserver | null = null;
+    let canvasSizeObserver: MutationObserver | null = null;
     let canvas: HTMLCanvasElement | null = null;
     let controls: OrbitControls | null = null;
     let controlRoot: Node | null = null;
@@ -79,6 +80,7 @@ export function useKnowledgeGraphEngine(request: GraphEngineRequest): GraphEngin
       // Retire callbacks before disposal, which can itself emit engine/context events.
       mounted = false;
       observer?.disconnect();
+      canvasSizeObserver?.disconnect();
       canvas?.removeEventListener("webglcontextlost", fail);
       if (renderOnce) {
         canvas?.removeEventListener("pointermove", renderOnce);
@@ -134,6 +136,8 @@ export function useKnowledgeGraphEngine(request: GraphEngineRequest): GraphEngin
         hover: computed.getPropertyValue("--of-graph-hover").trim(), note: computed.getPropertyValue("--of-graph-note").trim(),
         selected: computed.getPropertyValue("--of-graph-selected").trim(), space: computed.getPropertyValue("--of-graph-space").trim(),
         wiki: computed.getPropertyValue("--of-graph-wiki").trim(),
+        citation: computed.getPropertyValue("--of-graph-citation").trim(),
+        derived: computed.getPropertyValue("--of-graph-derived").trim(),
       };
       const current: ActiveGraph = { graph: instance, controls: candidateControls, nodes: renderNodes, settled: false, wakeFrame: 0 };
       activeRef.current = current;
@@ -165,9 +169,9 @@ export function useKnowledgeGraphEngine(request: GraphEngineRequest): GraphEngin
         .nodeOpacity(0.94).linkColor((link) => isRenderLink(link) ? colors[relationClass(link.kind)] : colors.wiki)
         .linkWidth((link) => isRenderLink(link) && relationClass(link.kind) === "ai" ? 1.7 : 1.1)
         .linkOpacity(0.72).linkCurvature("curvature")
-        .linkDirectionalArrowLength((link) => isRenderLink(link) && relationClass(link.kind) === "space" ? 3.5 : 5)
+        .linkDirectionalArrowLength((link) => isRenderLink(link) && link.direction === "undirected" ? 0 : isRenderLink(link) && relationClass(link.kind) === "space" ? 3.5 : 5)
         .linkDirectionalArrowRelPos(0.83).enableNodeDrag(false)
-        .warmupTicks(0).cooldownTicks(reducedMotion ? 0 : 120)
+        .warmupTicks(reducedMotion ? 120 : 0).cooldownTicks(reducedMotion ? 0 : 120)
         .onNodeHover((node) => {
           if (!mounted) return;
           const title = node && isRenderNode(node) ? prepared.identityMap.get(node.render_id)?.title ?? "" : "";
@@ -194,10 +198,15 @@ export function useKnowledgeGraphEngine(request: GraphEngineRequest): GraphEngin
         canvas?.addEventListener("pointermove", renderOnce, { passive: true });
         canvas?.addEventListener("pointerdown", renderOnce, { passive: true });
       }
+      // Kapsule applies width/height asynchronously. Repaint after the actual
+      // drawing-buffer resize, not before the deferred update clears it.
+      canvasSizeObserver = new MutationObserver(() => {
+        if (mounted && current.settled && !spinRef.current) paint();
+      });
+      canvasSizeObserver.observe(instanceCanvas, { attributes: true, attributeFilter: ["width", "height"] });
       observer = new ResizeObserver(() => {
         if (!mounted) return;
         instance.width(Math.max(1, host.clientWidth)).height(Math.max(1, host.clientHeight));
-        if (current.settled && !spinRef.current) paint();
       });
       observer.observe(host);
       if (reducedMotion) {

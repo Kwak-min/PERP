@@ -23,8 +23,10 @@ const dedicatedScenarioArgs = args[0] === '--scenario' && (
   (args.length === 2 && ['month-summary', 'roles', 'role-toggles', 'role-toggles-native', 'disabled-hr-features', 'reservation-conflict-edit', 'reservation-space-calendar', 'expense-receipt', 'expense-csv-import', 'approval-workflow', 'analytics', 'analytics-pg', 'graph-engine'].includes(args[1]))
   || (args.length === 3 && args[1] === 'reservation-space-calendar' && args[2] === '--baseline')
 );
-if (!sharedScenarioArgs && !dedicatedScenarioArgs) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar|knowledge-graphs|project-members|project-members-access [--probe error|cancel] | --scenario month-summary|roles|role-toggles|role-toggles-native|disabled-hr-features|reservation-conflict-edit|expense-receipt|expense-csv-import|approval-workflow|analytics|analytics-pg|graph-engine | --scenario reservation-space-calendar [--baseline]');
+const wikiScenarioArgs = args[0] === '--scenario' && args[1] === 'knowledge-wiki'
+  && (args.length === 2 || (args.length === 4 && args[2] === '--store' && ['legacy', 'pg'].includes(args[3])));
+if (!sharedScenarioArgs && !dedicatedScenarioArgs && !wikiScenarioArgs) {
+  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar|knowledge-graphs|project-members|project-members-access [--probe error|cancel] | --scenario month-summary|roles|role-toggles|role-toggles-native|disabled-hr-features|reservation-conflict-edit|expense-receipt|expense-csv-import|approval-workflow|analytics|analytics-pg|graph-engine | --scenario reservation-space-calendar [--baseline] | --scenario knowledge-wiki [--store legacy|pg]');
   process.exitCode = 2;
 } else {
   assertIsolated();
@@ -40,6 +42,8 @@ if (!sharedScenarioArgs && !dedicatedScenarioArgs) {
   else if (args[1] === 'graph-engine') await (await import('./deadline-graph-engine.scenario.mjs')).graphEngineScenario();
   else if (args[1] === 'month-summary') await (await import('./deadline-month-summary.e2e.mjs')).monthSummary();
   else if (args[1] === 'nav-pref') await (await import('./deadline-nav-pref.e2e.mjs')).navPrefScenario(args[3]);
+  else if (wikiScenarioArgs) await (await import('./task28-workflow.e2e.mjs')).task28Workflow({ mode: args[3] ?? 'legacy', evidence: path.join(root, '.omo/evidence/task-28-gate-revision/browser', args[3] ?? 'legacy') });
+  else if (args[1] === 'knowledge-graphs' && !args[3]) await (await import('./task28-workflow.e2e.mjs')).task28Workflow();
   else await baseline(args[3], args[1]);
 }
 
@@ -297,8 +301,8 @@ async function baseline(probe, scenario) {
       ['finance-transactions', '/finance/transactions', '/api/v1/finance/transactions', 'main [data-transaction-id]'],
       ['approvals-admin-inbox-empty', '/approvals', '/api/v1/approvals/requests', 'main .approvals-list:empty'],
       ['analytics', '/analytics', '/api/v1/analytics/kpis', 'main [data-analytics-kpis][data-state="ready"]'],
-      ['company-graph', '/documents/graph', '/api/v1/documents/graph', 'main .graph-stage__canvas'],
-      ['personal-graph', '/vault/graph', '/api/v1/vault/graph', 'main .graph-stage__empty:not([role])'],
+      ['company-graph', '/documents/graph', '/api/v1/documents/graph', 'main .graph-layout [data-engine-state="empty"]'],
+      ['personal-graph', '/vault/graph', '/api/v1/vault/graph', 'main .graph-layout [data-engine-state="empty"]'],
       ['reservation-unavailable', '/reserve', '/api/v1/spaces', 'main .rsv-error-banner'],
     ]) await surface(name, fixture.actorAdmin, route, selector, apiPath, null, [375, 1280]);
     }
