@@ -198,7 +198,7 @@ test('1100/1101 drawer boundary, Tab/inert and permission refresh keep focus', a
     assert.equal(await first.evaluate(node => node === document.activeElement), true);
     await page.keyboard.press('Shift+Tab');
     assert.equal(await last.evaluate(node => node === document.activeElement), true);
-    const pin = page.locator('.nav-group').getByRole('button', { name: '프로젝트/업무 메뉴 동작', exact: true });
+    const pin = page.locator('.nav-group').getByRole('button', { name: '프로젝트 메뉴 동작', exact: true });
     await pin.focus();
     // 실제 응답의 관련 없는 메뉴만 숨겨 React 권한 재렌더 완료를 DOM에서 관측한다.
     await page.route('**/api/v1/settings/access', async route => {

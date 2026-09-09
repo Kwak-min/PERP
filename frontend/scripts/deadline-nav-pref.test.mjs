@@ -7,7 +7,7 @@ registerHooks({ resolve(specifier, context, next) {
   return next(specifier === '../routes/catalog' ? new URL('../src/routes/catalog.ts', import.meta.url).href : specifier, context);
 } });
 const pref = await import('../src/store/navPref.ts');
-const { screens } = await import('../src/routes/catalog.ts');
+const { screens, navigation } = await import('../src/routes/catalog.ts');
 const A = { userId: 'actor-a', source: 'legacy', orgId: 'company-a' };
 const value = (favorites = [], collapsed = [], hidden = []) => ({ version: 1, favoriteScreenIds: favorites, collapsedSectionIds: collapsed, hiddenScreenIds: hidden });
 let values;
@@ -17,6 +17,12 @@ beforeEach(() => {
     getItem: key => values.get(key) ?? null,
     setItem: (key, item) => values.set(key, String(item)),
   } });
+});
+
+test('project and task navigation retain distinct screen IDs, routes and modules', () => {
+  assert.deepEqual(navigation.filter(screen => ['PRJ-001', 'TSK-001'].includes(screen.id)).map(({ id, path, module }) => ({ id, path, module })), [
+    { id: 'PRJ-001', path: '/projects', module: 'projects' }, { id: 'TSK-001', path: '/tasks', module: 'tasks' },
+  ]);
 });
 
 test('version 1 order and collapsed IDs survive a fresh read, without storing private fields', () => {

@@ -131,7 +131,7 @@ export async function sidebar({ surface, api, fixture, result, attempt, evidence
     assert.equal(await page.locator('[data-testid="nav-favorites"]').count(), 0);
     assert.ok((await page.locator('.sidebar nav > *').evaluateAll(nodes => nodes.map(node => node.className))).includes('nav-group nav-group--home'));
 
-    await pressAndWait(page, '프로젝트/업무 즐겨찾기에 추가', '[data-testid="nav-favorites"]', { attribute: 'data-order', value: 'PRJ-001' });
+    await pressAndWait(page, '프로젝트 즐겨찾기에 추가', '[data-testid="nav-favorites"]', { attribute: 'data-order', value: 'PRJ-001' });
     await pressAndWait(page, '캘린더 즐겨찾기에 추가', '[data-testid="nav-favorites"]', { attribute: 'data-order', value: 'PRJ-001,CAL-001' });
     await pressAndWait(page, '자산 즐겨찾기에 추가', '[data-testid="nav-favorites"]', { attribute: 'data-order', value: 'PRJ-001,CAL-001,AST-001' });
     assert.deepEqual(await favoriteIds(page), ['PRJ-001', 'CAL-001', 'AST-001']);
@@ -305,7 +305,7 @@ export async function sidebar({ surface, api, fixture, result, attempt, evidence
   const manager = assignments.items.find(member => member.membership_id === fixture.actorManager.membershipId);
   const originalRoles = manager.roles;
   await surface('sidebar-access-revoke', fixture.actorManager, '/projects', '[data-screen-id="PRJ-001"]', '/api/v1/projects', async page => {
-    await pressAndWait(page, '프로젝트/업무 즐겨찾기에 추가', '[data-testid="nav-favorites"] a[href="/projects"]');
+    await pressAndWait(page, '프로젝트 즐겨찾기에 추가', '[data-testid="nav-favorites"] a[href="/projects"]');
     const before = await page.evaluate(() => Object.entries(localStorage).find(([key]) => key.startsWith('orbitflow.nav.v1:'))?.[1]);
     await armDom(page, '.sidebar a[href="/projects"]', { count: 0 });
     const revokedAccess = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/settings/access');

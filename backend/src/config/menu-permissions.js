@@ -1,7 +1,7 @@
 // 메뉴 접근과 동작 권한은 별개다. 사용자 정의 역할은 메뉴를 명시적으로 선택한다.
 export const MENU_CATALOG = [
   ['home', '홈', 'member.read'], ['members', '구성원/조직도', 'member.read', 'member.write', 'department.write'],
-  ['projects', '프로젝트/업무', 'project.read', 'task.read', 'project.write', 'task.write'], ['calendar', '캘린더', 'event.read'],
+  ['projects', '프로젝트', 'project.read', 'task.read', 'project.write', 'task.write'], ['calendar', '캘린더', 'event.read'],
   ['finance', '재무', 'transaction.read', 'budget.read', 'dues.read'], ['assets', '자산', 'asset.read'],
   ['attendance', '근태', 'attendance.read', 'member.read'], ['leave', '휴가', 'member.read', 'leave.approve'],
   ['recruitment', '모집', 'recruitment.manage'], ['documents', '문서', 'document.read'],

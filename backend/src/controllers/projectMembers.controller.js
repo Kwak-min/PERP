@@ -6,6 +6,7 @@ import { pgIdentity } from '../middleware/pgAccess.js';
 import { getScoped, insert } from '../models/base.js';
 import { assertCorrectionMember, correctionDate } from '../services/daily-corrections.service.js';
 import { assertPgProjectAssignee, notifyPgTaskAssignment } from '../services/project-assignment.service.js';
+import { replayPgMutation } from '../services/pg-finance.service.js';
 import * as audit from '../services/audit.service.js';
 import { ApiError } from '../utils/errors.js';
 const pgId = z.string().regex(/^[1-9]\d*$/);
@@ -26,6 +27,11 @@ function legacyCandidates(principal, projectId, membersOnly = false) {
 }
 export function listLegacyProjectCandidates(req, res) {
   const principal = resolvePrincipal(req); principal.require('project.write');
+  const project = getScoped('project', principal, z.string().uuid().parse(req.params.projectId), 'project');
+  res.json({ items: legacyCandidates(principal, project.id) });
+}
+export function listLegacyCreateTaskAssignees(req, res) {
+  const principal = resolvePrincipal(req); principal.require('task.write');
   const project = getScoped('project', principal, z.string().uuid().parse(req.params.projectId), 'project');
   res.json({ items: legacyCandidates(principal, project.id) });
 }
@@ -123,9 +129,13 @@ export async function createPgProjectTask(req, res) {
     const project = (await client.query('SELECT id FROM project.projects WHERE id = $1 AND company_id = $2 FOR SHARE', [payload.project_id, identity.companyId])).rows[0];
     if (!project) throw new ApiError('NOT_FOUND', '프로젝트를 찾을 수 없습니다');
     await assertPgProjectAssignee(client, { companyId: identity.companyId, projectId: payload.project_id, userId: payload.assignee_id });
-    const row = (await client.query("INSERT INTO project.tasks(project_id,assignee_id,title,due_on,status) VALUES ($1,$2,$3,$4,'todo') RETURNING id,assignee_id,title,version", [payload.project_id,payload.assignee_id,payload.title,payload.due_on])).rows[0];
-    await notifyPgTaskAssignment(client, identity, row);
-    return row;
+    const create = async () => {
+      const row = (await client.query("INSERT INTO project.tasks(project_id,assignee_id,title,due_on,status) VALUES ($1,$2,$3,$4,'todo') RETURNING id,assignee_id,title,version", [payload.project_id,payload.assignee_id,payload.title,payload.due_on])).rows[0];
+      await notifyPgTaskAssignment(client, identity, row);
+      return row;
+    };
+    return req.get('Idempotency-Key') === undefined ? create()
+      : replayPgMutation(client, req, { operation: 'task.create', payload }, create);
   });
   res.status(201).json({ id: String(task.id), version: task.version });
 }

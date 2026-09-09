@@ -93,6 +93,7 @@ pgRouter.patch('/assets/:id/custody', asyncRoute(pgRoute(corrections.patchAssetC
 pgRouter.get("/tasks", asyncRoute(pgRoute(mod.tasks, "task.read", "tasks")));
 pgRouter.post("/tasks", asyncRoute(pgRoute(projectMembers.createPgProjectTask, "task.write", "tasks")));
 pgRouter.get('/projects/:id/candidates', asyncRoute(pgRoute(projectMembers.listPgProjectCandidates, 'project.write', 'projects')));
+pgRouter.get('/projects/:id/task-assignees', asyncRoute(pgRoute(projectMembers.listPgProjectCandidates, 'task.write', 'tasks')));
 pgRouter.get('/tasks/:id/assignees', asyncRoute(pgRoute(projectMembers.listPgTaskAssignees, 'task.write', 'tasks')));
 pgRouter.get('/projects/:id/members', asyncRoute(pgRoute(projectMembers.listPgProjectMembers, 'project.read', 'projects')));
 pgRouter.post('/projects/:id/members', asyncRoute(pgRoute(projectMembers.addPgProjectMember, 'project.write', 'projects')));

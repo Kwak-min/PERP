@@ -104,7 +104,7 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
     </li>)}</ul> : <p className="project-tasks__empty" role="status">등록된 업무가 없습니다.</p>;
   }
   return <div className="screen project-tasks" data-screen-id={screen.id}>
-    <header className="screen-header"><div><h1>{taskId ? "업무 상세" : projectView ? "프로젝트와 업무" : "전체 업무"}</h1><p>실제 프로젝트에 연결된 업무와 완료 현황을 확인합니다.</p></div>
+    <header className="screen-header"><div><h1>{taskId ? "업무 상세" : projectView ? "프로젝트" : "전체 업무"}</h1><p>실제 프로젝트에 연결된 업무와 완료 현황을 확인합니다.</p></div>
       <div className="screen-header__actions"><Link className="button button--neutral" to={projectView ? "/tasks" : "/projects"}>{projectView ? "전체 업무" : "프로젝트로"}</Link>
         <Button tone="neutral" onClick={refresh}>새로고침</Button>
         {!taskId && <Button disabled={projectView ? !can("project.write") : !can("task.write") || projects.status !== "ready" || projects.items.length === 0} onClick={() => setModal({ kind: projectView ? "project" : "task" })}>{projectView ? "프로젝트 만들기" : "업무 만들기"}</Button>}</div></header>
@@ -131,7 +131,7 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
       : <p role="status">업무를 찾을 수 없습니다.</p> : taskList(filteredTasks)}</StateBoundary>}
     {assignmentTarget && <ProjectAssignmentModal target={assignmentTarget} session={session} administrator={administrator} onClose={() => setAssignmentTarget(null)} onSaved={result => { refresh(); setMemberResult(result); setNotice(result === 'existing' ? '이미 소속된 구성원입니다. 현재 명단을 다시 확인했습니다.' : result === 'created' ? '프로젝트 구성원을 추가했습니다.' : '업무 배정을 저장했습니다.'); }} />}
     {editingProject && <ProjectTaskCreateModal kind="project" projects={projects.items} initialProject={editingProject} departmentId={null} session={session} onClose={() => setEditingProject(null)} onSaved={() => { setEditingProject(null); refresh(); setNotice('프로젝트를 저장했습니다.'); }} />}
-    {modal && <ProjectTaskCreateModal {...modal} projects={projects.items} departmentId={pg ? null : branch} session={session} onClose={() => setModal(null)} onSaved={() => { const id = modal.projectId; if (id) setExpanded(current => new Set([...current, id])); setModal(null); refresh(); setNotice("서버에 저장했습니다."); }} />}
+    {modal && <ProjectTaskCreateModal {...modal} canAddProjectMember={can('project.write')} projects={projects.items} departmentId={pg ? null : branch} session={session} onClose={() => setModal(null)} onSaved={() => { const id = modal.projectId; if (id) setExpanded(current => new Set([...current, id])); setModal(null); refresh(); setNotice("서버에 저장했습니다."); }} />}
   </div>;
 }
 

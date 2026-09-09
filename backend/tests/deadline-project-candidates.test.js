@@ -11,9 +11,9 @@ const evidence = path.resolve('.omo/evidence/task-10-deadline-erp-redesign', pro
 const http = [], states = [];
 let native, server, database, closePgPool, cluster, port, nativeVersion;
 const password = 'deadline-candidates-password';
-async function request(actor, route, method = 'GET', body, expected = 200) {
+async function request(actor, route, method = 'GET', body, expected = 200, headers = {}) {
   const response = await fetch(server.baseUrl + route, { method,
-    headers: { 'Content-Type': 'application/json', ...(actor?.token ? { Authorization: `Bearer ${actor.token}` } : {}), ...(actor?.orgId ? { 'X-Org-Id': actor.orgId } : {}) },
+    headers: { ...headers, 'Content-Type': 'application/json', ...(actor?.token ? { Authorization: `Bearer ${actor.token}` } : {}), ...(actor?.orgId ? { 'X-Org-Id': actor.orgId } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(10000) });
   const result = await response.json();
   http.push({ actor: actor?.userId ?? null, orgId: actor?.orgId ?? null, route, method, status: response.status, body: evidenceBody(result) });
@@ -139,6 +139,71 @@ for (const prefix of ['', '/pg']) {
     assert.deepEqual(await snapshot(state), before);
     assert.equal((await request(state.writer, rows.candidates)).items.find(item => item.id === state.candidate.userId).already_member, true);
     assert.equal((await request(state.admin, rows.members)).items.filter(item => item.value === state.candidate.userId).length, 1);
+  });
+  test(`${label}: create flow searches company candidates without directory read and saves the user ID after authorized roster addition`, async () => {
+    const state = states.find(item => item.prefix === prefix), rows = await setup(state);
+    // 기존 생성 팝업의 명단 경로/직접 배정 실패를 실제 HTTP로 재현한다.
+    await request(state.taskWriter, rows.members, 'GET', undefined, 403);
+    await request(state.taskWriter, `${prefix}/tasks`, 'POST', { title: 'Not yet a project member', project_id: rows.project.id, assignee_id: state.candidate.userId }, 403);
+    const path = `${prefix}/projects/${rows.project.id}/task-assignees`;
+    const candidates = await request(state.taskWriter, path);
+    dto(candidates.items);
+    assert.equal(candidates.items.find(item => item.id === state.candidate.userId).already_member, false);
+    assert.ok(!candidates.items.some(item => [state.foreign, state.inactive, state.pending, state.left].some(actor => actor.userId === item.id)));
+    for (const actor of [state.writer, state.reader, state.noMenu]) await request(actor, path, 'GET', undefined, 403);
+    await request(state.foreign, path, 'GET', undefined, 404);
+    await request(null, path, 'GET', undefined, 401);
+    await request(state.taskWriter, rows.members, 'POST', { user_id: state.candidate.userId }, 403);
+    const rolesBefore = (await snapshot(state))[4];
+    await request(state.writer, rows.members, 'POST', { user_id: state.candidate.userId }, 201);
+    const created = await request(state.taskWriter, `${prefix}/tasks`, 'POST', { title: 'Company member creation', project_id: rows.project.id, assignee_id: state.candidate.userId }, 201);
+    const detail = await request(state.admin, prefix ? `/pg/records/tasks/${created.id}` : `/tasks/${created.id}`);
+    assert.equal(String(detail.assignee_id), state.candidate.userId);
+    assert.deepEqual((await snapshot(state))[4], rolesBefore);
+    for (const mutate of [setAccount, setApproval, setMembership]) {
+      await mutate(state, state.candidate, false);
+      try {
+        const before = await snapshot(state);
+        await request(state.taskWriter, `${prefix}/tasks`, 'POST', { title: 'Stale candidate creation', project_id: rows.project.id, assignee_id: state.candidate.userId }, 403);
+        assert.deepEqual(await snapshot(state), before);
+      } finally { await mutate(state, state.candidate, true); }
+    }
+    const before = await snapshot(state);
+    await request(state.taskWriter, `${prefix}/tasks`, 'POST', { title: 'Foreign creation', project_id: rows.project.id, assignee_id: state.foreign.userId }, 403);
+    if (!prefix) await request(state.taskWriter, `${prefix}/tasks`, 'POST', { title: 'Membership is not user', project_id: rows.project.id, assignee_id: state.candidate.membershipId }, 403);
+    assert.deepEqual(await snapshot(state), before);
+  });
+  test(`${label}: keyed create replays once, rejects payload reuse and reauthorizes current actor/company/assignee`, async () => {
+    const state = states.find(item => item.prefix === prefix), rows = await setup(state);
+    await request(state.writer, rows.members, 'POST', { user_id: state.candidate.userId }, 201);
+    const body = { title: 'Immutable operation', project_id: rows.project.id, assignee_id: state.candidate.userId };
+    const headers = { 'Idempotency-Key': crypto.randomUUID() }, route = `${prefix}/tasks`;
+    const before = await snapshot(state);
+    const [first, replay] = await Promise.all([1, 2].map(() => request(state.taskWriter, route, 'POST', body, 201, headers)));
+    assert.deepEqual(replay, first);
+    const committed = await snapshot(state);
+    assert.equal(committed[1].length, before[1].length + 1);
+    assert.equal(committed[3].length, before[3].length + 1);
+    await request(state.taskWriter, route, 'POST', { ...body, title: 'Changed payload' }, 409, headers);
+    await request(state.taskWriter, route, 'POST', body, 400, { 'Idempotency-Key': '' });
+    assert.deepEqual(await snapshot(state), committed);
+    for (const mutate of [setAccount, setApproval, setMembership]) {
+      await mutate(state, state.candidate, false);
+      try { await request(state.taskWriter, route, 'POST', body, 403, headers); }
+      finally { await mutate(state, state.candidate, true); }
+    }
+    await assignRoles(state, state.taskWriter.membershipId, [state.reader.role]);
+    try { await request(state.taskWriter, route, 'POST', body, 403, headers); }
+    finally { await assignRoles(state, state.taskWriter.membershipId, [state.taskWriter.role]); }
+    await request(state.foreign, route, 'POST', body, 404, headers);
+    await request({ ...state.taskWriter, orgId: state.foreign.orgId }, route, 'POST', body, 403, headers);
+    assert.deepEqual(await request(state.taskWriter, route, 'POST', body, 201, headers), first);
+    // actor와 회사가 다르면 같은 키를 공유해도 앞선 응답을 유출/재사용하지 않는다.
+    const otherActor = await request(state.admin, route, 'POST', body, 201, headers);
+    assert.notEqual(otherActor.id, first.id);
+    const foreignProject = await request(state.foreign, `${prefix}/projects`, 'POST', { name: 'Replay foreign scope' }, 201);
+    const foreignTask = await request(state.foreign, route, 'POST', { ...body, project_id: foreignProject.id, assignee_id: state.foreign.userId }, 201, headers);
+    assert.notEqual(foreignTask.id, first.id);
   });
   test(`${label}: task writer without project/member read sees only project assignees and can assign without granting roles`, async () => {
     const state = states.find(item => item.prefix === prefix), rows = await setup(state);

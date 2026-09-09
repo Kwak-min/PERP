@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { correctionVersion } from '../services/daily-corrections.service.js';
 import { assertProjectAssignee, notifyTaskAssignment } from '../services/project-assignment.service.js';
+import { replayLegacyMutation } from '../services/legacy-expenses.service.js';
 
 import { db, transaction } from "../config/db.js";
 import { resolvePrincipal } from "../middleware/auth.js";
@@ -63,31 +64,32 @@ export function create(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("task.write");
   const payload = createSchema.parse(req.body);
-  // 연결 대상도 현재 테넌트/조직 소속이어야 한다.
-  if (payload.project_id) getScoped("project", principal, payload.project_id, "project");
-
   const assigneeId = payload.assignee_id === undefined ? principal.userId : payload.assignee_id;
-  assertProjectAssignee(principal, payload.project_id ?? null, assigneeId);
   const task = transaction(() => {
-    const created = insert("task", {
-      tenant_id: principal.tenantId,
-      org_id: principal.orgId,
-      project_id: payload.project_id ?? null,
-      parent_id: payload.parent_id ?? null,
-      title: payload.title,
-      description: payload.description,
-      assignee_id: assigneeId,
-      priority: payload.priority,
-      due_at: payload.due_at ?? null,
-      recurrence: payload.recurrence ?? null,
-      estimate_hours: payload.estimate_hours,
-      created_by: principal.userId,
-    });
+    // 후보 조회/구성원 추가 이후에도 저장 트랜잭션에서 현재 소속을 재검증한다.
+    if (payload.project_id) getScoped("project", principal, payload.project_id, "project");
+    assertProjectAssignee(principal, payload.project_id ?? null, assigneeId);
+    return replayLegacyMutation(req, principal, { operation: 'task.create', payload: { ...payload, assignee_id: assigneeId }, keyRequired: false }, () => {
+      const created = insert("task", {
+        tenant_id: principal.tenantId,
+        org_id: principal.orgId,
+        project_id: payload.project_id ?? null,
+        parent_id: payload.parent_id ?? null,
+        title: payload.title,
+        description: payload.description,
+        assignee_id: assigneeId,
+        priority: payload.priority,
+        due_at: payload.due_at ?? null,
+        recurrence: payload.recurrence ?? null,
+        estimate_hours: payload.estimate_hours,
+        created_by: principal.userId,
+      });
 
-    audit.record({ tenantId: principal.tenantId, action: 'task.created', resourceType: 'task',
-      resourceId: created.id, actorId: principal.userId, after: { title: created.title }, requestId: req.requestId });
-    notifyTaskAssignment(principal, created);
-    return created;
+      audit.record({ tenantId: principal.tenantId, action: 'task.created', resourceType: 'task',
+        resourceId: created.id, actorId: principal.userId, after: { title: created.title }, requestId: req.requestId });
+      notifyTaskAssignment(principal, created);
+      return created;
+    });
   })();
 
   res.status(201).json(view(task));
