@@ -3,7 +3,7 @@ import { matchPath, NavLink, Outlet, useLocation, useNavigate } from "react-rout
 
 import { useAppContext } from "../../context/AppContext";
 import { AccessContext, canOpenScreen, useWorkspaceAccess } from '../../hooks/useWorkspaceAccess';
-import { navigation, screens, sectionLabels, type ScreenSection } from "../../routes/catalog";
+import { navigation, screens, sectionLabels, type ScreenDefinition, type ScreenSection } from "../../routes/catalog";
 import { authenticatedUserId, logout as revokeSession } from "../../services/auth";
 import { userMessageOf } from "../../services/api";
 import { isPgWorkspace } from "../../services/workspace";
@@ -12,6 +12,7 @@ import { sessionStore, useSession } from "../../store/session";
 import { Button } from "../ui/Button";
 import { AgentPanel } from "./AgentPanel";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
+import { NavigationEntry } from './NavigationEntry';
 
 const mobilePaths = ['/', '/projects', '/calendar', '/settings'];
 const sidebarMedia = '(max-width: 1100px)';
@@ -22,7 +23,7 @@ const searchCategories = [
 const canFocus = (node: HTMLElement) => node.isConnected && !node.closest('[inert]') && !node.matches(':disabled') && node.checkVisibility({ visibilityProperty: true });
 const sidebarControls = (panel: HTMLElement) => [...panel.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]')]
   .filter(node => node.tabIndex >= 0 && canFocus(node));
-const emptyNavPref: NavPref = { version: 1, favoriteScreenIds: [], collapsedSectionIds: [] };
+const emptyNavPref: NavPref = { version: 1, favoriteScreenIds: [], collapsedSectionIds: [], hiddenScreenIds: [] };
 type NavState = Readonly<{ key: string; status: 'loading' | 'ready' | 'unavailable'; value: NavPref; error: string | null }>;
 
 function storageMessage(error: unknown): string {
@@ -43,8 +44,9 @@ export function AppShell() {
   const modalSidebar = responsiveSidebar && sidebarOpen;
   const [search, setSearch] = useState(() => new URLSearchParams(location.search).get('q') ?? '');
   const [searchCategory, setSearchCategory] = useState('');
-  const [editingFavorites, setEditingFavorites] = useState(false);
-  const favoriteEditor = useRef<HTMLButtonElement>(null);
+  const [openAction, setOpenAction] = useState<string | null>(null);
+  const [managingHidden, setManagingHidden] = useState(false);
+  const hiddenManager = useRef<HTMLButtonElement>(null);
   useEffect(() => { setSearch(new URLSearchParams(location.search).get('q') ?? ''); }, [location.search]);
   const [identity, setIdentity] = useState<Readonly<{ token: string; userId: string | null; error: string | null }>>({ token: '', userId: null, error: null });
   const [navState, setNavState] = useState<NavState>({ key: '', status: 'loading', value: emptyNavPref, error: null });
@@ -117,7 +119,10 @@ export function AppShell() {
     orgId: session.orgId,
   } : null;
   const scopeKey = scope ? navPrefKey(scope) : '';
-  useEffect(() => { setEditingFavorites(false); }, [scopeKey, location.pathname]);
+  useLayoutEffect(() => { setOpenAction(null); setManagingHidden(false); }, [scopeKey, session?.token, location.key, sidebarOpen]);
+  useLayoutEffect(() => {
+    if (openAction && !navigation.some(screen => openAction.endsWith(`:${screen.id}`) && access.data && canOpenScreen(access.data, screen))) setOpenAction(null);
+  }, [access.data, openAction]);
 
   useEffect(() => {
     if (!scope || !access.data) return;
@@ -139,7 +144,11 @@ export function AppShell() {
   if (!session) return null;
   const activeSession = session;
   const accessData = access.data;
-  const visibleNavigation = accessData ? navigation.filter(screen => canOpenScreen(accessData, screen)) : [];
+  const authorizedNavigation = accessData ? navigation.filter(screen => canOpenScreen(accessData, screen)) : [];
+  const prefReady = Boolean(scope && access.data && navState.key === scopeKey && navState.status === 'ready');
+  const pref = prefReady ? navState.value : emptyNavPref;
+  const visibleNavigation = authorizedNavigation.filter(screen => screen.path !== '/settings' && !pref.hiddenScreenIds.includes(screen.id));
+  const hiddenNavigation = authorizedNavigation.filter(screen => pref.hiddenScreenIds.includes(screen.id));
   const currentScreen = screens.filter(screen => matchPath({ path: screen.path, end: true }, location.pathname))
     .sort((a, b) => b.path.length - a.path.length)[0];
   const allowed = Boolean(accessData && currentScreen && canOpenScreen(accessData, currentScreen));
@@ -153,8 +162,6 @@ export function AppShell() {
     const current = groups[screen.section] ?? [];
     return { ...groups, [screen.section]: [...current, screen] };
   }, {}));
-  const prefReady = Boolean(scope && access.data && navState.key === scopeKey && navState.status === 'ready');
-  const pref = prefReady ? navState.value : emptyNavPref;
   const favorites = selectNavFavorites(pref, visibleNavigation);
   const prefStatus = !scope || !access.data || navState.key !== scopeKey ? 'loading' : navState.status;
   const prefError = identity.token === session.token && identity.error ? `메뉴 개인화 신원을 확인하지 못했습니다. ${identity.error}` : navState.key === scopeKey ? navState.error : null;
@@ -181,6 +188,31 @@ export function AppShell() {
     savePreference(current => ({ ...current, favoriteScreenIds: current.favoriteScreenIds.map(id =>
       id === screenId ? targetId : id === targetId ? screenId : id),
     }));
+  }
+
+  function renderEntry(screen: ScreenDefinition, list: 'favorite' | 'group') {
+    const key = `${list}:${screen.id}`;
+    const favorite = pref.favoriteScreenIds.includes(screen.id);
+    const index = favorites.findIndex(item => item.id === screen.id);
+    return <NavigationEntry key={screen.id} screen={screen} end={screen.path !== activePath} favorite={favorite} ready={prefReady}
+      open={openAction === key} onOpenChange={open => setOpenAction(open ? key : null)} onNavigate={() => { setOpenAction(null); setSidebarOpen(false); }}
+      actions={[
+        { id: 'favorite', label: favorite ? '즐겨찾기 해제' : '즐겨찾기 추가', run: () => {
+          if (list === 'favorite') {
+            const original = sidebarRef.current?.querySelector<HTMLElement>(`.nav-group [data-favorite-screen-id="${screen.id}"]`);
+            (original && canFocus(original) ? original : hiddenManager.current)?.focus();
+          }
+          toggleFavorite(screen.id);
+        } },
+        ...(favorite ? [
+          { id: 'up' as const, label: '위로 이동', disabled: index <= 0, run: () => moveFavorite(screen.id, -1) },
+          { id: 'down' as const, label: '아래로 이동', disabled: index < 0 || index === favorites.length - 1, run: () => moveFavorite(screen.id, 1) },
+        ] : []),
+        ...(screen.path !== '/' ? [{ id: 'hide' as const, label: '메뉴 비활성화', run: () => {
+          hiddenManager.current?.focus();
+          savePreference(current => ({ ...current, hiddenScreenIds: [...current.hiddenScreenIds, screen.id] }));
+        } }] : []),
+      ]} />;
   }
 
   function toggleSection(section: ScreenSection): void {
@@ -214,31 +246,25 @@ export function AppShell() {
         }}>
         <div className="sidebar__brand"><WorkspaceSwitcher session={activeSession} /></div>
         <nav aria-label="주 메뉴">
-          {favorites.length > 0 && <section className="nav-favorites" data-testid="nav-favorites" data-order={favorites.map(screen => screen.id).join(',')} aria-labelledby="nav-favorites-label" onKeyDown={event => {
-              if (event.key === 'Escape' && editingFavorites) { event.preventDefault(); event.stopPropagation(); setEditingFavorites(false); favoriteEditor.current?.focus(); }
-            }}>
-            <div className="nav-favorites__heading"><p id="nav-favorites-label">즐겨찾기</p><button ref={favoriteEditor} type="button" className="nav-pref-control nav-favorites__edit" aria-label="즐겨찾기 편집" aria-pressed={editingFavorites} onClick={() => setEditingFavorites(value => !value)}>편집</button></div>
-            <div>
-            {favorites.map((screen, index) => <div className="nav-entry nav-entry--favorite" key={screen.id}>
-              <NavLink to={screen.path} end={screen.path !== activePath} data-screen-id={screen.id} onClick={() => setSidebarOpen(false)} className={({ isActive }) => isActive ? "active" : ""}>
-                <span className="nav-mark" aria-hidden="true">{screen.label.slice(0, 1)}</span><span className="nav-label">{screen.label}</span>{screen.ai && <span className="nav-ai">AI</span>}
-              </NavLink>
-              <div className="nav-favorite-actions" hidden={!editingFavorites}>
-              <button type="button" className="nav-pref-control" onClick={() => moveFavorite(screen.id, -1)} disabled={!prefReady || index === 0} aria-label={`${screen.label} 위로 이동`} title={`${screen.label} 위로 이동`}><span aria-hidden="true">↑</span></button>
-              <button type="button" className="nav-pref-control" onClick={() => moveFavorite(screen.id, 1)} disabled={!prefReady || index === favorites.length - 1} aria-label={`${screen.label} 아래로 이동`} title={`${screen.label} 아래로 이동`}><span aria-hidden="true">↓</span></button>
-              <button type="button" className="nav-pref-control" onClick={() => {
-                const panel = sidebarRef.current!;
-                const original = panel.querySelector<HTMLElement>(`[data-favorite-screen-id="${screen.id}"]`);
-                const target = favorites.length > 1 ? favoriteEditor.current : original && canFocus(original) ? original : sidebarControls(panel)[0];
-                target?.focus(); toggleFavorite(screen.id);
-              }} disabled={!prefReady} aria-label={`${screen.label} 즐겨찾기에서 제거`} title={`${screen.label} 즐겨찾기에서 제거`}><span aria-hidden="true">×</span></button>
-              </div>
-            </div>)}
-            </div>
+          {favorites.length > 0 && <section className="nav-favorites" data-testid="nav-favorites" data-order={favorites.map(screen => screen.id).join(',')} aria-labelledby="nav-favorites-label">
+            <div className="nav-favorites__heading"><p id="nav-favorites-label">즐겨찾기</p></div>
+            <div className="nav-items">{favorites.map(screen => renderEntry(screen, 'favorite'))}</div>
           </section>}
           <div className="nav-personalization" data-testid="nav-personalization" data-pref-status={prefStatus}>
             <p>{NAV_PREF_NOTICE}</p>
             {prefError && <p role="alert" data-testid="nav-pref-error">{prefError}</p>}
+            <button ref={hiddenManager} type="button" className="nav-pref-control nav-hidden-manager" disabled={!prefReady} aria-expanded={managingHidden} aria-controls="nav-hidden-items"
+              onClick={() => { setOpenAction(null); setManagingHidden(value => !value); }}>숨긴 메뉴 관리</button>
+            <div id="nav-hidden-items" hidden={!managingHidden} onKeyDown={event => {
+              if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setManagingHidden(false); hiddenManager.current?.focus(); }
+            }}>
+              {hiddenNavigation.length === 0 ? <p>숨긴 메뉴가 없습니다.</p> : hiddenNavigation.map(screen => <div className="nav-hidden-item" key={screen.id} data-hidden-screen-id={screen.id}>
+                <span>{screen.label}</span><button type="button" className="nav-pref-control nav-restore" aria-label={`${screen.label} 복원`} onClick={() => {
+                  hiddenManager.current?.focus();
+                  savePreference(current => ({ ...current, hiddenScreenIds: current.hiddenScreenIds.filter(id => id !== screen.id) }));
+                }}>복원</button>
+              </div>)}
+            </div>
           </div>
           {grouped.map(([, items]) => {
             const section = items[0]?.section;
@@ -250,17 +276,19 @@ export function AppShell() {
                 <span>{sectionLabels[section]}</span><span aria-hidden="true">{expanded ? '−' : '+'}</span>
               </button>}
               <div className="nav-items" id={`nav-section-${section}`} hidden={!expanded}>
-                {items.map(screen => <div className="nav-entry" key={screen.id}>
-                  <NavLink to={screen.path} end={screen.path !== activePath} data-screen-id={screen.id} onClick={() => setSidebarOpen(false)} className={({ isActive }) => isActive ? "active" : ""}>
-                    <span className="nav-mark" aria-hidden="true">{screen.label.slice(0, 1)}</span><span className="nav-label">{screen.label}</span>{screen.ai && <span className="nav-ai">AI</span>}
-                  </NavLink>
-                  <button type="button" data-favorite-screen-id={screen.id} className="nav-pref-control nav-pin" aria-pressed={pref.favoriteScreenIds.includes(screen.id)} disabled={!prefReady} onClick={() => toggleFavorite(screen.id)} aria-label={`${screen.label} 즐겨찾기${pref.favoriteScreenIds.includes(screen.id) ? '에서 제거' : '에 추가'}`} title={`${screen.label} 즐겨찾기${pref.favoriteScreenIds.includes(screen.id) ? '에서 제거' : '에 추가'}`}><span aria-hidden="true">…</span></button>
-                </div>)}
+                {items.map(screen => renderEntry(screen, 'group'))}
               </div>
             </div>;
           })}
         </nav>
-        <div className="sidebar__footer"><div className="user-block"><span className="avatar">{session.name.slice(0, 1)}</span><span><strong>{session.name}</strong><small>{session.email}</small></span></div><Button tone="neutral" size="small" onClick={logout}>로그아웃</Button><Button className="sidebar__close" tone="neutral" size="small" onClick={() => setSidebarOpen(false)}>메뉴 닫기</Button></div>
+        <div className="sidebar__footer"><div className="user-block"><span className="avatar">{session.name.slice(0, 1)}</span><span className="user-block__identity"><strong>{session.name}</strong><small>{session.email}</small></span>
+          {canOpen('/settings') && <NavLink to="/settings" className="user-block__settings" aria-label="설정" title="설정" onClick={() => { setOpenAction(null); setSidebarOpen(false); }}>
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+              <path d="m9 3-.5 2-2 1.2-2-.5-3 5.2L3 12.3v2.4L1.5 16l3 5.2 2-.5 2 1.2.5 2h6l.5-2 2-1.2 2 .5 3-5.2-1.5-1.3v-2.4l1.5-1.4-3-5.2-2 .5-2-1.2L15 3Z" transform="translate(2 0) scale(.83)" />
+              <circle cx="12" cy="11.2" r="3" />
+            </svg>
+          </NavLink>}
+        </div><Button tone="neutral" size="small" onClick={logout}>로그아웃</Button><Button className="sidebar__close" tone="neutral" size="small" onClick={() => setSidebarOpen(false)}>메뉴 닫기</Button></div>
       </div>
 
       <div className="app-main">

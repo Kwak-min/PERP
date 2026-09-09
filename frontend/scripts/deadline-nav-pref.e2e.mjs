@@ -114,14 +114,14 @@ export async function navPrefScenario(probe) {
       release(); await stale;
       return { A: p.readNavPref(A), B: p.readNavPref(B), isolated, entries: Object.entries(localStorage).filter(([key]) => key.startsWith('orbitflow.nav.v1:')) };
     }, scopes);
-    const expectedA = { version: 1, favoriteScreenIds: ['AST-001', 'PRJ-001', 'CAL-001'], collapsedSectionIds: ['work', 'people'] };
+    const expectedA = { version: 1, favoriteScreenIds: ['AST-001', 'PRJ-001', 'CAL-001'], collapsedSectionIds: ['work', 'people'], hiddenScreenIds: [] };
     assert.deepEqual(result.observations.storage.A, { status: 'ready', value: expectedA });
     assert.deepEqual(result.observations.storage.B.value.favoriteScreenIds, ['DOC-001']);
     assert.deepEqual(result.observations.storage.B.value.collapsedSectionIds, ['knowledge']);
     assert.ok(result.observations.storage.isolated.every(read => read.status === 'empty'));
     assert.equal(result.observations.storage.entries.length, 3);
     for (const [, raw] of result.observations.storage.entries) {
-      assert.deepEqual(Object.keys(JSON.parse(raw)).sort(), ['collapsedSectionIds', 'favoriteScreenIds', 'version']);
+      assert.deepEqual(Object.keys(JSON.parse(raw)).sort(), ['collapsedSectionIds', 'favoriteScreenIds', 'hiddenScreenIds', 'version']);
       assert.ok(!raw.includes('DO_NOT_PERSIST') && !raw.includes('PRIVATE_NOTE'));
     }
     await page.reload({ waitUntil: 'domcontentloaded' });

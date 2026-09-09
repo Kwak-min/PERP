@@ -7,11 +7,12 @@ import { chromium } from '@playwright/test';
 import { createServer, preview } from 'vite';
 import react from '@vitejs/plugin-react';
 import { startDeadlineServer, createDeadlineFixture } from '../../backend/tests/deadline-fixture.js';
+import { actionPopupTests } from './navigation-action-popup.scenario.mjs';
 
 // 실제 권한 API + 격리된 합성 회사만 사용한다. 운영 서버/저장소에 연결하지 않는다.
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const production = process.argv.includes('--production');
-const evidence = path.join(root, '.omo/evidence/navigation-ux', production ? 'production' : 'source');
+const evidence = path.join(root, '.omo/evidence/navigation-action-popup', production ? 'production' : 'source');
 let api, fixture, vite, browser, origin;
 const observations = [];
 before(async () => {
@@ -33,7 +34,7 @@ before(async () => {
 });
 after(async () => {
   await browser?.close(); await vite?.close(); await api?.close();
-  await writeFile(path.join(evidence, 'result.json'), JSON.stringify({ observations, apiCleanup: api?.resource }, null, 2));
+  await writeFile(path.join(evidence, 'result.json'), JSON.stringify({ observations, chrome: browser?.version(), browserClosed: !browser?.isConnected(), viteClosed: !vite?.httpServer.listening, apiCleanup: api?.resource }, null, 2));
 });
 
 async function arm(page, selector, count = 1, attribute, value) {
@@ -55,8 +56,8 @@ const signal = page => page.evaluate(() => window.__navigationSignal);
 async function change(page, selector, action, count = 1, attribute, value) {
   await arm(page, selector, count, attribute, value); await action(); await signal(page);
 }
-async function surface(width, route = '/members', actor = fixture.actorAdmin) {
-  const context = await browser.newContext({ viewport: { width, height: 900 }, reducedMotion: 'reduce', serviceWorkers: 'block' });
+async function surface(width, route = '/members', actor = fixture.actorAdmin, hasTouch = width <= 1100) {
+  const context = await browser.newContext({ viewport: { width, height: 900 }, hasTouch, reducedMotion: 'reduce', serviceWorkers: 'block' });
   await context.route('**/*', route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort('blockedbyclient'));
   await context.addInitScript(session => sessionStorage.setItem('orbitflow.session.v1', JSON.stringify(session)), actor.session);
   const page = await context.newPage(); page.setDefaultTimeout(10000);
@@ -70,6 +71,26 @@ async function openSidebar(page, width) {
   if (width <= 1100) await change(page, '.sidebar[aria-modal="true"]', () => page.getByRole('button', { name: '메뉴 열기', exact: true }).click());
 }
 const ids = page => page.locator('.nav-favorites a').evaluateAll(nodes => nodes.map(node => node.dataset.screenId));
+async function openActions(page, id, list = '.nav-group', key = 'Enter') {
+  const trigger = page.locator(`${list} [data-favorite-screen-id="${id}"]`);
+  await change(page, '.nav-action-popup', () => key === 'click' ? trigger.click() : trigger.press(key));
+  return trigger;
+}
+async function chooseAction(page, id, action, list = '.nav-favorites') {
+  await openActions(page, id, list);
+  await change(page, '.nav-action-popup', () => page.locator(`[data-nav-action="${action}"]`).press('Enter'), 0);
+}
+
+test('ellipsis opens actions without changing preferences or navigating', async () => {
+  const { page, context } = await surface(1280);
+  try {
+    const before = await page.evaluate(() => ({ url: location.href, history: history.length, storage: JSON.stringify(localStorage) }));
+    await page.locator('[data-favorite-screen-id="PRJ-001"]').locator('..').hover();
+    await change(page, '.nav-action-popup', () => page.locator('[data-favorite-screen-id="PRJ-001"]').click());
+    assert.equal(await page.locator('.nav-action-popup[role="menu"]').count(), 1);
+    assert.deepEqual(await page.evaluate(() => ({ url: location.href, history: history.length, storage: JSON.stringify(localStorage) })), before);
+  } finally { await context.close(); }
+});
 
 for (const width of [375, 768, 1280]) test(`explicit authorized search and exact member selection at ${width}`, async () => {
   const { page, context, errors } = await surface(width);
@@ -122,15 +143,16 @@ for (const width of [375, 768, 1280]) test(`compact favorites, keyboard manageme
   const { page, context, errors } = await surface(width);
   try {
     await openSidebar(page, width);
-    for (const [label, count] of [['프로젝트/업무', 1], ['캘린더', 2], ['자산', 3]]) {
-      await change(page, '.nav-favorites a', () => page.locator('.nav-group').getByRole('button', { name: `${label} 즐겨찾기에 추가`, exact: true }).press('Enter'), count);
+    for (const [id, count] of [['PRJ-001', 1], ['CAL-001', 2], ['AST-001', 3]]) {
+      await openActions(page, id);
+      await change(page, '.nav-favorites a', () => page.locator('[data-nav-action="favorite"]').press('Enter'), count);
     }
     const box = await page.locator('.nav-favorites').boundingBox();
     assert.ok(box.height <= (width <= 1100 ? 200 : 160), `three favorites height ${box.height}`);
-    const edit = page.getByRole('button', { name: '즐겨찾기 편집', exact: true });
-    assert.equal(await page.getByRole('button', { name: '자산 위로 이동', exact: true }).isVisible(), false);
+    const edit = page.locator('.nav-favorites [data-favorite-screen-id="AST-001"]');
+    assert.equal(await page.locator('[data-nav-action="up"]').isVisible(), false);
     await page.screenshot({ path: path.join(evidence, `favorites-${width}.png`), animations: 'disabled' });
-    await change(page, '.nav-favorite-actions:not([hidden])', () => edit.press('Space'), 3);
+    await change(page, '.nav-action-popup', () => edit.press('Space'));
     if (width <= 1100) {
       const sizes = await page.locator('.nav-pref-control:not(:disabled)').evaluateAll(nodes => nodes.filter(node => node.checkVisibility()).map(node => {
         const { width, height } = node.getBoundingClientRect(); return { width, height };
@@ -138,11 +160,19 @@ for (const width of [375, 768, 1280]) test(`compact favorites, keyboard manageme
       assert.ok(sizes.every(size => size.width >= 44 && size.height >= 44));
       observations.push({ width, height: box.height, minTarget: Math.min(...sizes.map(size => Math.min(size.width, size.height))) });
     } else observations.push({ width, height: box.height });
-    await change(page, '.nav-favorites', () => page.getByRole('button', { name: '자산 위로 이동', exact: true }).press('Enter'), 1, 'data-order', 'PRJ-001,AST-001,CAL-001');
-    await change(page, '.nav-favorites', () => page.getByRole('button', { name: '자산 위로 이동', exact: true }).press('Enter'), 1, 'data-order', 'AST-001,PRJ-001,CAL-001');
-    await change(page, '.nav-favorites a', () => page.locator('.nav-favorites').getByRole('button', { name: '캘린더 즐겨찾기에서 제거', exact: true }).press('Enter'), 2);
-    await edit.focus();
-    await change(page, '.nav-favorite-actions:not([hidden])', () => page.keyboard.press('Escape'), 0);
+    await change(page, '.nav-favorites', () => page.locator('[data-nav-action="up"]').press('Enter'), 1, 'data-order', 'PRJ-001,AST-001,CAL-001');
+    await openActions(page, 'AST-001', '.nav-favorites');
+    await change(page, '.nav-favorites', () => page.locator('[data-nav-action="up"]').press('Enter'), 1, 'data-order', 'AST-001,PRJ-001,CAL-001');
+    await openActions(page, 'AST-001', '.nav-favorites');
+    assert.equal(await page.locator('[data-nav-action="up"]').isDisabled(), true);
+    await change(page, '.nav-favorites', () => page.locator('[data-nav-action="down"]').press('Enter'), 1, 'data-order', 'PRJ-001,AST-001,CAL-001');
+    await openActions(page, 'AST-001', '.nav-favorites');
+    await change(page, '.nav-favorites', () => page.locator('[data-nav-action="up"]').press('Enter'), 1, 'data-order', 'AST-001,PRJ-001,CAL-001');
+    await openActions(page, 'CAL-001', '.nav-favorites');
+    assert.equal(await page.locator('[data-nav-action="down"]').isDisabled(), true);
+    await change(page, '.nav-favorites a', () => page.locator('[data-nav-action="favorite"]').press('Enter'), 2);
+    await openActions(page, 'AST-001', '.nav-favorites');
+    await change(page, '.nav-action-popup', () => page.keyboard.press('Escape'), 0);
     assert.equal(await edit.evaluate(node => document.activeElement === node), true);
     if (width <= 1100) {
       assert.equal(await page.locator('.app-main').evaluate(node => node.inert), true);
@@ -168,7 +198,7 @@ test('1100/1101 drawer boundary, Tab/inert and permission refresh keep focus', a
     assert.equal(await first.evaluate(node => node === document.activeElement), true);
     await page.keyboard.press('Shift+Tab');
     assert.equal(await last.evaluate(node => node === document.activeElement), true);
-    const pin = page.locator('.nav-group').getByRole('button', { name: '프로젝트/업무 즐겨찾기에 추가', exact: true });
+    const pin = page.locator('.nav-group').getByRole('button', { name: '프로젝트/업무 메뉴 동작', exact: true });
     await pin.focus();
     // 실제 응답의 관련 없는 메뉴만 숨겨 React 권한 재렌더 완료를 DOM에서 관측한다.
     await page.route('**/api/v1/settings/access', async route => {
@@ -212,6 +242,8 @@ test('search choices honor menu permissions; project/task q is consumed without 
     assert.equal(await admin.page.locator('[data-task-id]').getAttribute('data-task-id'), fixture.task.id);
   } finally { await admin.context.close(); }
 });
+
+actionPopupTests({ test, surface, openSidebar, openActions, chooseAction, change, arm, signal, ids, evidence, resources: () => ({ api, fixture }) });
 
 test('document category consumes the exact query and excludes unrelated authorized rows', async () => {
   const target = await api.request(fixture.actorAdmin, '/documents', 'POST', { title: '찾을 문서', content: '합성 문서' }, 201);
