@@ -1,13 +1,63 @@
 import assert from 'node:assert/strict';
+import { EventEmitter, once } from 'node:events';
 import { startOrgPostgres } from './pg-org-native-fixture.js';
 import { api, startTestServer } from './http.js';
 
 const red = process.env.ORG_TEST_RED === '1';
-let database, server;
+const failures = [];
+// Observe real driver failures without changing callback/promise behavior or
+// recording SQL, parameters, credentials, names, or arbitrary server messages.
+function observeFailures(target, method, phase) {
+  const original = target[method];
+  const record = error => {
+    if (error) failures.push({ phase, pg_code: error.code ?? null,
+      kind: error.message === 'timeout exceeded when trying to connect' ? 'pool-acquisition-timeout'
+        : error.message === 'Connection terminated due to connection timeout' ? 'connection-startup-timeout' : 'driver-error' });
+  };
+  target[method] = function(...args) {
+    const last = args.length - 1;
+    if (typeof args[last] === 'function') {
+      const callback = args[last];
+      args[last] = function(error, ...values) { record(error); return callback.call(this, error, ...values); };
+    }
+    try {
+      const result = original.apply(this, args);
+      return result?.catch ? result.catch(error => { record(error); throw error; }) : result;
+    } catch (error) { record(error); throw error; }
+  };
+}
+const responseSummary = response => ({ status: response.status, body: {
+  ok: response.body?.ok, revision: response.body?.revision,
+  ...(response.body?.error ? { error: { code: response.body.error.code, details: {
+    reason: response.body.error.details?.reason, pg_code: response.body.error.details?.pg_code,
+    current_revision: response.body.error.details?.current_revision,
+  } } } : {}),
+} });
+let database, server, timeoutConfig, raceDiagnostic;
 try {
+  // Regression: the native fixture must replace the unavailable-path deadline
+  // before env.js and the application pool capture it, even outside the runner.
+  process.env.PG_CONNECTION_TIMEOUT_MS = '100';
   database = await startOrgPostgres({ audit: !red });
   server = await startTestServer();
+  const { pgPool } = await import('../src/config/pg.js');
+  const { env } = await import('../src/config/env.js');
+  observeFailures(pgPool, 'connect', 'acquire');
+  pgPool.on('connect', client => observeFailures(client, 'query', 'query'));
   const { pool, users, depts, companyId, otherCompanyId } = database;
+  timeoutConfig = { fixtureInput: 100, environment: Number(process.env.PG_CONNECTION_TIMEOUT_MS),
+    captured: env.pg.connectionTimeoutMillis, applicationPool: pgPool.options.connectionTimeoutMillis,
+    fixturePool: pool.options.connectionTimeoutMillis };
+  assert.deepEqual(timeoutConfig, { fixtureInput: 100, environment: 5000, captured: 5000, applicationPool: 5000, fixturePool: 5000 });
+  const configurationClient = await pgPool.connect();
+  try {
+    timeoutConfig.applicationClient = configurationClient._connectionTimeoutMillis;
+    assert.equal(timeoutConfig.applicationClient, 5000);
+    const settings = (await configurationClient.query("SELECT current_setting('lock_timeout') AS lock_timeout, current_setting('statement_timeout') AS statement_timeout")).rows[0];
+    assert.deepEqual(settings, { lock_timeout: '0', statement_timeout: '0' });
+    timeoutConfig.sql = settings;
+  } finally { configurationClient.release(); }
+  console.log(JSON.stringify({ NATIVE_TIMEOUT_CONFIG: timeoutConfig }));
   const login = async user => {
     const r = await api(server.baseUrl, '/pg/auth/login', { method: 'POST', body: { email: user.email, password: 'password-1234' } });
     assert.equal(r.status, 200, JSON.stringify(r.body)); return r.body.token;
@@ -81,10 +131,64 @@ try {
     assert.equal(titleEvent.after.title, '선임'); assert.equal(titleEvent.before.title, null);
     // 두 실제 HTTP 요청은 같은 revision에서 경합한다. 실행 순서에 관계없이 하나만 커밋된다.
     const competingRevision = (await call('/org-chart')).body.revision;
-    const competing = await Promise.all([users[1], users[2]].map(user => call(`/departments/${depts[0].id}/seat`, {
-      expected_revision: competingRevision, leader_id: user.id, assigned: [user.id],
-    })));
-    assert.deepEqual(competing.map(r => r.status).sort(), [200, 409]);
+    const signals = new EventEmitter(), waitingPids = new Set(), held = [];
+    const barrier = new AbortController();
+    const signal = AbortSignal.any([barrier.signal, AbortSignal.timeout(10000)]);
+    const connect = pgPool.connect;
+    const onNotice = client => () => {
+      waitingPids.add(client.processID);
+      if (waitingPids.size === 2) signals.emit('locks-waiting');
+    };
+    const notices = new Map();
+    let blocker, pending, competing;
+    const failureStart = failures.length;
+    try {
+      // Exhaust the real pool, subscribe before HTTP starts, and release only
+      // once both requests have entered actual driver connection acquisition.
+      for (let i = 0; i < pgPool.options.max; i++) {
+        const client = await pgPool.connect(); held.push(client);
+        // PostgreSQL emits a notice when a real lock wait crosses its reporting
+        // threshold. Await that event, not a sleep or pg_stat_activity polling.
+        await client.query("SET client_min_messages='log'; SET log_lock_waits=on; SET deadlock_timeout='100ms'");
+        const listener = onNotice(client); notices.set(client, listener); client.on('notice', listener);
+      }
+      blocker = await pool.connect();
+      await blocker.query('BEGIN');
+      await blocker.query('SELECT id FROM org.companies WHERE id=$1 FOR UPDATE', [companyId]);
+      pgPool.connect = function(...args) {
+        const result = connect.apply(this, args);
+        if (this.waitingCount === 2) signals.emit('acquisitions-queued');
+        return result;
+      };
+      const queued = once(signals, 'acquisitions-queued', { signal });
+      pending = Promise.all([users[1], users[2]].map(user => call(`/departments/${depts[0].id}/seat`, {
+        expected_revision: competingRevision, leader_id: user.id, assigned: [user.id],
+      })));
+      const premature = pending.then(results => { throw new Error(`Race completed before lock barrier: ${JSON.stringify(results.map(responseSummary))}`); });
+      await Promise.race([queued, premature]);
+      const locked = once(signals, 'locks-waiting', { signal });
+      for (const client of held.splice(0)) client.release();
+      await Promise.race([locked, premature]);
+      // Notices are only wake-up signals: SQL is authoritative about lock state.
+      const waiters = (await blocker.query(`SELECT wait_event_type, cardinality(pg_blocking_pids(pid)) > 0 AS blocked
+        FROM pg_stat_activity WHERE pid=ANY($1::int[])`, [[...waitingPids]])).rows;
+      assert.deepEqual(waiters, [{ wait_event_type: 'Lock', blocked: true }, { wait_event_type: 'Lock', blocked: true }]);
+      console.log(JSON.stringify({ NATIVE_RACE_BARRIER: { queuedAcquisitions: 2, lockWaiters: waiters.length, poolMax: pgPool.options.max } }));
+    } finally {
+      pgPool.connect = connect;
+      barrier.abort();
+      for (const [client, listener] of notices) client.off('notice', listener);
+      for (const client of held) client.release();
+      if (blocker) { await blocker.query('ROLLBACK'); blocker.release(); }
+      if (pending) {
+        competing = await pending;
+        raceDiagnostic = { responses: competing.map(responseSummary), failures: failures.slice(failureStart), timeoutConfig };
+        console.log(JSON.stringify({ NATIVE_RACE_DIAGNOSTICS: raceDiagnostic }));
+      }
+    }
+    assert.deepEqual(competing.map(r => r.status).sort(), [200, 409], JSON.stringify(raceDiagnostic));
+    assert.equal(competing.find(r => r.status === 409).body.error.code, 'VERSION_CONFLICT');
+    assert.deepEqual(failures.slice(failureStart), [], JSON.stringify(raceDiagnostic));
     const afterRace = await snapshot();
     assert.equal(afterRace.events.length, 6);
     const winner = competing[0].status === 200 ? users[1] : users[2];
@@ -105,8 +209,13 @@ try {
     await pool.query('DROP TRIGGER f8_fail_single_audit ON org.organization_change_events; DROP FUNCTION org.f8_fail_single_audit()');
     const roles = (await pool.query('SELECT r.name FROM org.roles r JOIN org.user_roles ur ON ur.role_id=r.id WHERE ur.user_id=$1', [users[0].id])).rows;
     assert.deepEqual(roles.map(r => r.name), ['F8_EXISTING_ROLE']);
+    assert.deepEqual(failures, Array.from({ length: 4 }, () => ({ phase: 'query', pg_code: 'P0001', kind: 'driver-error' })));
+    console.log(JSON.stringify({ NATIVE_INJECTED_SQL_FAILURES: failures }));
     console.log(JSON.stringify({ GREEN_NATIVE_HTTP: true, managerAndAssignments: 3, atomicEvents: committed.events.length, statuses: { stale: 409, crossCompanyRead: 403, assignmentFailure: 500, auditFailure: 500, concurrent: competing.map(r => r.status).sort() }, rolesPreserved: roles }));
   }
+} catch (error) {
+  console.error(JSON.stringify({ NATIVE_AUDIT_FAILURE: { timeoutConfig, failures, raceDiagnostic } }));
+  throw error;
 } finally {
   if (server) { await (await import('../src/config/pg.js')).closePgPool(); await server.close(); }
   await database?.close();

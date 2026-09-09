@@ -26,6 +26,7 @@ test('isolated child cannot inherit database, provider, dotenv or Node injection
   const child = JSON.parse(result.stdout.trim().split('\n').find(line => line.startsWith('{')));
   for (const [key, value] of Object.entries(poison)) assert.notEqual(child[key], value, key);
   assert.equal(child.PG_HOST, '127.0.0.1'); assert.equal(child.PG_PORT, '1'); assert.equal(child.DATABASE_URL, '');
+  assert.equal(child.PG_CONNECTION_TIMEOUT_MS, '100', 'Unavailable dependencies retain the fail-fast deadline');
   assert.ok(child.DOTENV_CONFIG_PATH.endsWith('empty.env')); assert.equal(child.DEADLINE_ISOLATED, '1');
   assert.equal(existsSync(child.DEADLINE_TEMP_ROOT), false);
   assert.equal(receipt(result).temporaryRemoved, true);
