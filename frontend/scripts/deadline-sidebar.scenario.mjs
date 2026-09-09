@@ -216,6 +216,35 @@ export async function sidebar({ surface, api, fixture, result, attempt, evidence
       }
       await pressAndWait(page, '업무 메뉴 펼치기', '#nav-section-work', { attribute: 'hidden', value: null });
       assert.equal(await page.locator('#nav-section-work a[href="/projects"]').isVisible(), true);
+      const pin = page.locator('#nav-section-work .nav-entry').filter({ has: page.locator('a[href="/calendar"]') }).locator('.nav-pin');
+      const originalUrl = page.url(), originalHistory = await page.evaluate(() => history.length);
+      // 같은 버튼의 직접 클릭과 기본 키보드 동작은 탐색 없이 즐겨찾기만 바꾼다.
+      for (const [action, pressed] of [['click', false], ['click', true], ['click', false], ['Space', true], ['Enter', false], ['Enter', true]]) {
+        const order = pressed ? 'AST-001,PRJ-001,CAL-001' : 'AST-001,PRJ-001';
+        await armDom(page, '[data-testid="nav-favorites"]', { attribute: 'data-order', value: order });
+        if (action === 'click') await pin.click();
+        else { await pin.focus(); await page.keyboard.press(action); }
+        await sidebarSignal(page);
+        assert.equal(await pin.getAttribute('aria-pressed'), String(pressed));
+        assert.equal(page.url(), originalUrl);
+        assert.equal(await page.evaluate(() => history.length), originalHistory);
+        if (width < 1100) assert.equal(await page.locator('.sidebar.sidebar--open').count(), 1);
+      }
+      await pin.hover();
+      const focusedScreenshot = path.join(attempt, `sidebar-favorite-action-${width}.png`);
+      await page.screenshot({ path: focusedScreenshot, animations: 'disabled' });
+      result.surfaces.push({ name: 'sidebar-favorite-action', width, screenshot: path.relative(evidence, focusedScreenshot) });
+      const accessResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/settings/access');
+      const identityResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/auth/me');
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      assert.equal((await accessResponse).status(), 200); assert.equal((await identityResponse).status(), 200);
+      await waitForDom(page, '[data-testid="nav-favorites"]', { attribute: 'data-order', value: 'AST-001,PRJ-001,CAL-001' });
+      if (width < 1100) {
+        await pressAndWait(page, '메뉴 열기', '.sidebar.sidebar--open');
+        await sidebarAnimations(page);
+      }
+      assert.equal(await pin.getAttribute('aria-pressed'), 'true');
+      (result.sidebarFavoriteActions ??= []).push({ width, clickAppend: true, secondClickRemove: true, space: true, enter: true, reloadPersists: true, navigationUnchanged: true });
       await page.locator('[aria-controls="nav-section-work"]').focus();
       await page.keyboard.press('Tab');
       assert.equal(await page.evaluate(() => document.activeElement.matches('#nav-section-work a[href="/projects"]')), true, 'expanded links are keyboard reachable');

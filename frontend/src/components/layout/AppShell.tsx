@@ -209,9 +209,9 @@ export function AppShell() {
               <NavLink to={screen.path} end={screen.path !== activePath} data-screen-id={screen.id} onClick={() => setSidebarOpen(false)} className={({ isActive }) => isActive ? "active" : ""}>
                 <span className="nav-mark" aria-hidden="true">{screen.label.slice(0, 1)}</span><span className="nav-label">{screen.label}</span>{screen.ai && <span className="nav-ai">AI</span>}
               </NavLink>
-              <button type="button" className="nav-pref-control" onClick={() => moveFavorite(screen.id, -1)} disabled={!prefReady || index === 0} aria-label={`${screen.label} 위로 이동`}>위</button>
-              <button type="button" className="nav-pref-control" onClick={() => moveFavorite(screen.id, 1)} disabled={!prefReady || index === favorites.length - 1} aria-label={`${screen.label} 아래로 이동`}>아래</button>
-              <button type="button" className="nav-pref-control" onClick={() => toggleFavorite(screen.id)} disabled={!prefReady} aria-label={`${screen.label} 즐겨찾기에서 제거`}>해제</button>
+              <button type="button" className="nav-pref-control" onClick={() => moveFavorite(screen.id, -1)} disabled={!prefReady || index === 0} aria-label={`${screen.label} 위로 이동`} title={`${screen.label} 위로 이동`}><span aria-hidden="true">↑</span></button>
+              <button type="button" className="nav-pref-control" onClick={() => moveFavorite(screen.id, 1)} disabled={!prefReady || index === favorites.length - 1} aria-label={`${screen.label} 아래로 이동`} title={`${screen.label} 아래로 이동`}><span aria-hidden="true">↓</span></button>
+              <button type="button" className="nav-pref-control" onClick={() => toggleFavorite(screen.id)} disabled={!prefReady} aria-label={`${screen.label} 즐겨찾기에서 제거`} title={`${screen.label} 즐겨찾기에서 제거`}><span aria-hidden="true">×</span></button>
             </div>)}
           </section>}
           <div className="nav-personalization" data-testid="nav-personalization" data-pref-status={prefStatus}>
@@ -232,7 +232,7 @@ export function AppShell() {
                   <NavLink to={screen.path} end={screen.path !== activePath} data-screen-id={screen.id} onClick={() => setSidebarOpen(false)} className={({ isActive }) => isActive ? "active" : ""}>
                     <span className="nav-mark" aria-hidden="true">{screen.label.slice(0, 1)}</span><span className="nav-label">{screen.label}</span>{screen.ai && <span className="nav-ai">AI</span>}
                   </NavLink>
-                  <button type="button" className="nav-pref-control nav-pin" aria-pressed={pref.favoriteScreenIds.includes(screen.id)} disabled={!prefReady} onClick={() => toggleFavorite(screen.id)} aria-label={`${screen.label} 즐겨찾기${pref.favoriteScreenIds.includes(screen.id) ? '에서 제거' : '에 추가'}`}>{pref.favoriteScreenIds.includes(screen.id) ? '해제' : '고정'}</button>
+                  <button type="button" className="nav-pref-control nav-pin" aria-pressed={pref.favoriteScreenIds.includes(screen.id)} disabled={!prefReady} onClick={() => toggleFavorite(screen.id)} aria-label={`${screen.label} 즐겨찾기${pref.favoriteScreenIds.includes(screen.id) ? '에서 제거' : '에 추가'}`} title={`${screen.label} 즐겨찾기${pref.favoriteScreenIds.includes(screen.id) ? '에서 제거' : '에 추가'}`}><span aria-hidden="true">…</span></button>
                 </div>)}
               </div>
             </div>;
