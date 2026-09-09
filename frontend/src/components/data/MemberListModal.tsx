@@ -6,6 +6,7 @@ import { apiRequest, userMessageOf, type ApiSession } from "../../services/api";
 import { useModalFocus } from "../../hooks/useModalFocus";
 import { Badge } from "../ui/Badge";
 import { Button } from "../ui/Button";
+import "./member-pagination.css";
 
 export const memberSchema = z.object({
   membership_id: z.string(),
@@ -27,10 +28,15 @@ type Props = Readonly<{
 }>;
 
 export function MemberListModal({ session, onClose }: Props) {
+  return <MemberListContents key={`${session?.orgId}:${session?.token}`} session={session} onClose={onClose} />;
+}
+
+function MemberListContents({ session, onClose }: Props) {
   const navigate = useNavigate();
   const searchRef = useRef<HTMLInputElement>(null);
   const dialogRef = useModalFocus<HTMLDivElement>(onClose);
   const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
   const [members, setMembers] = useState<readonly Member[]>([]);
   const [loading, setLoading] = useState(Boolean(session));
   const [error, setError] = useState<string | null>(null);
@@ -47,7 +53,8 @@ export function MemberListModal({ session, onClose }: Props) {
   useEffect(() => {
     if (!session) return;
     const controller = new AbortController();
-    apiRequest(session.orgId?.startsWith("pg:") ? "/pg/members?limit=500" : "/members?limit=500", { session, signal: controller.signal })
+    setLoading(true); setError(null); setMembers([]);
+    apiRequest(session.orgId?.startsWith("pg:") ? "/pg/members" : "/members?limit=-1", { session, signal: controller.signal })
       .then((payload) => {
         if (!controller.signal.aborted) setMembers(membersSchema.parse(payload).items);
       })
@@ -69,6 +76,12 @@ export function MemberListModal({ session, onClose }: Props) {
         .some((value) => value.toLocaleLowerCase("ko-KR").includes(needle)),
     );
   }, [members, query]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / 10));
+  const currentPage = Math.min(page, pageCount);
+  const offset = (currentPage - 1) * 10;
+  const visible = filtered.slice(offset, offset + 10);
+  useEffect(() => { setPage(value => Math.min(value, pageCount)); }, [pageCount]);
 
   return (
     <div className="modal-scrim" role="presentation" onMouseDown={onClose}>
@@ -98,7 +111,7 @@ export function MemberListModal({ session, onClose }: Props) {
               type="search"
               value={query}
               placeholder="이름, 이메일, 역할 검색"
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => { setQuery(event.target.value); setPage(1); }}
             />
           </label>
           <strong aria-live="polite">{query ? `검색 결과 ${filtered.length}명` : `전체 ${filtered.length}명`}</strong>
@@ -114,14 +127,14 @@ export function MemberListModal({ session, onClose }: Props) {
           </div>
         ) : (
           <ul className="member-modal__list" aria-label="구성원">
-            {filtered.map((member) => (
+            {visible.map((member) => (
               <li key={member.membership_id}>
                 <button
                   type="button"
                   className="member-modal__item member-modal__item--button"
                   onClick={() => {
                     onClose();
-                    navigate(`/hr/members/${member.user_id}`);
+                    navigate(`/hr/members/${encodeURIComponent(member.user_id)}`);
                   }}
                 >
                   <span className="member-modal__avatar" aria-hidden="true">{member.name.slice(0, 1)}</span>
@@ -139,6 +152,11 @@ export function MemberListModal({ session, onClose }: Props) {
             ))}
           </ul>
         )}
+        {!loading && !error && <nav className="member-pagination" aria-label="구성원 페이지" data-page={currentPage}>
+          <span role="status">{filtered.length === 0 ? 0 : offset + 1}–{Math.min(offset + 10, filtered.length)} / {filtered.length}명 · {currentPage}/{pageCount} 페이지</span>
+          <Button tone="neutral" size="small" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}>이전</Button>
+          <Button tone="neutral" size="small" disabled={currentPage === pageCount} onClick={() => setPage(currentPage + 1)}>다음</Button>
+        </nav>}
       </div>
     </div>
   );

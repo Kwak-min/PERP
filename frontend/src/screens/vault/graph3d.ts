@@ -2,32 +2,110 @@ import { z } from "zod";
 
 /** Vault 그래프 3D 배치·투영 엔진. React 와 canvas 에 의존하지 않는 순수 수학. */
 
+export const versionTokenSchema = z.union([
+  z.number().int().nonnegative(),
+  z.string().regex(/^\d+$/),
+]);
+
+export const graphIdentitySchema = z.object({
+  store: z.enum(["legacy", "pg"]),
+  company: z.string().min(1).nullable(),
+  owner: z.string().min(1).nullable(),
+  kind: z.enum(["note", "document", "space"]),
+  opaque_id: z.string().min(1),
+}).strict().superRefine((identity, context) => {
+  if (identity.kind === "note" && identity.owner === null) {
+    context.addIssue({ code: "custom", message: "note owner is required", path: ["owner"] });
+  }
+  if (identity.kind !== "note" && identity.company === null) {
+    context.addIssue({ code: "custom", message: "company scope is required", path: ["company"] });
+  }
+  if (identity.store === "pg" && identity.kind === "note" && identity.company !== null) {
+    context.addIssue({ code: "custom", message: "PG personal identity is company-independent", path: ["company"] });
+  }
+});
+export type GraphIdentity = z.infer<typeof graphIdentitySchema>;
+
+export function graphRendererId(identity: GraphIdentity): string {
+  return JSON.stringify([identity.store, identity.company, identity.owner, identity.kind, identity.opaque_id]);
+}
+
+const graphEndpointBaseSchema = z.object({
+  source: z.string(),
+  target_id: z.string().nullable(),
+  source_renderer_id: z.string().min(1),
+  target_renderer_id: z.string().min(1).nullable(),
+  target_title: z.string().catch(""),
+  binding: z.enum(["explicit", "title", "membership", "inference"]),
+  resolution: z.enum(["resolved", "unresolved", "unavailable"]),
+  resolution_reason: z.string().optional(),
+  score: z.number().min(-1).max(1).optional(),
+  provenance: z.object({
+    provider: z.string(), model: z.string(), method: z.string(),
+    source_version: versionTokenSchema, target_version: versionTokenSchema, analyzed_at: z.string(),
+  }).passthrough().optional(),
+}).passthrough();
+
+function validateGraphEndpoint(
+  edge: z.infer<typeof graphEndpointBaseSchema>,
+  context: z.RefinementCtx,
+): void {
+  if (edge.resolution === "resolved" && (edge.target_id === null || edge.target_renderer_id === null)) {
+    context.addIssue({ code: "custom", message: "resolved edge requires a server-authorized target" });
+  }
+  if (edge.resolution !== "resolved" && (edge.target_id !== null || edge.target_renderer_id !== null)) {
+    context.addIssue({ code: "custom", message: "unresolved edge cannot expose a render target" });
+  }
+}
+
+export const graphEndpointSchema = graphEndpointBaseSchema.superRefine(validateGraphEndpoint);
+export const graphEdgeSchema = graphEndpointBaseSchema.extend({
+  kind: z.enum(["manual", "ai_similarity"]).optional(),
+}).superRefine(validateGraphEndpoint);
+
+// The renderer ID and API ID must name the same node in this authorized graph.
+export function validateGraphBindings(
+  graph: { nodes: readonly { id: string; renderer_id: string; identity: GraphIdentity }[]; edges: readonly z.infer<typeof graphEndpointSchema>[] },
+  context: z.RefinementCtx,
+): void {
+  const nodes = new Map(graph.nodes.map((node) => [node.renderer_id, node]));
+  if (nodes.size !== graph.nodes.length) context.addIssue({ code: "custom", message: "duplicate renderer identity", path: ["nodes"] });
+  if (new Set(graph.nodes.map((node) => node.id)).size !== graph.nodes.length) {
+    context.addIssue({ code: "custom", message: "ambiguous API identity", path: ["nodes"] });
+  }
+  graph.edges.forEach((edge, index) => {
+    const source = nodes.get(edge.source_renderer_id);
+    const target = edge.target_renderer_id === null ? undefined : nodes.get(edge.target_renderer_id);
+    if (!source || source.id !== edge.source) {
+      context.addIssue({ code: "custom", message: "source identity mismatch", path: ["edges", index, "source_renderer_id"] });
+    }
+    if (edge.resolution === "resolved" && (!target || target.id !== edge.target_id)) {
+      context.addIssue({ code: "custom", message: "target identity mismatch", path: ["edges", index, "target_renderer_id"] });
+    }
+    if (source && target && (source.identity.store !== target.identity.store || source.identity.company !== target.identity.company || source.identity.owner !== target.identity.owner)) {
+      context.addIssue({ code: "custom", message: "endpoint scope mismatch", path: ["edges", index] });
+    }
+  });
+}
+
 export const graphSchema = z.object({
   nodes: z.array(
     z.object({
       id: z.string(),
+      renderer_id: z.string().min(1),
+      identity: graphIdentitySchema,
       title: z.string().catch(""),
       folder: z.string().catch("/"),
+    }).passthrough().superRefine((node, context) => {
+      if (node.identity.kind !== "note") context.addIssue({ code: "custom", message: "Vault node must be a note" });
+      if (node.id !== node.identity.opaque_id) context.addIssue({ code: "custom", message: "node API ID mismatch" });
+      if (node.renderer_id !== graphRendererId(node.identity)) context.addIssue({ code: "custom", message: "renderer identity mismatch" });
     }),
   ),
-  edges: z
-    .array(
-      z.object({
-        source: z.string(),
-        target_id: z.string().nullable().catch(null),
-        target_title: z.string().catch(""),
-        kind: z.enum(["manual", "ai_similarity"]).optional(),
-        score: z.number().min(-1).max(1).optional(),
-        provenance: z.object({
-          provider: z.string(), model: z.string(), method: z.string(),
-          source_version: z.number().int(), target_version: z.number().int(), analyzed_at: z.string(),
-        }).optional(),
-      }),
-    )
-    .default([]),
+  edges: z.array(graphEdgeSchema).default([]),
   analysis: z.array(z.object({ id: z.string(), state: z.string() })).optional(),
   orphans: z.array(z.string()).catch([]),
-});
+}).superRefine(validateGraphBindings);
 
 export type VaultGraph = z.infer<typeof graphSchema>;
 export type GraphNode = VaultGraph["nodes"][number];
@@ -41,12 +119,14 @@ export type Scene = {
   readonly links: Int32Array; // [a,b] 쌍
   readonly linkCount: number;
   readonly linkKinds: readonly ("manual" | "ai_similarity")[];
+  readonly linkEdges: readonly VaultGraph["edges"][number][];
   readonly degree: Int32Array;
   readonly proj: Float32Array; // sx,sy,depth,scale
   readonly order: Int32Array;
   readonly k: number;
   alpha: number;
   unresolved: number;
+  unavailable: number;
   width: number;
   height: number;
 };
@@ -86,31 +166,31 @@ export function lighten(hex: string, amount: number): string {
 export function buildScene(graph: VaultGraph): Scene {
   const count = graph.nodes.length;
   const index = new Map<string, number>();
-  const byTitle = new Map<string, number | undefined>();
   graph.nodes.forEach((node, i) => {
-    index.set(node.id, i);
-    const title = node.title.trim().toLowerCase();
-    byTitle.set(title, byTitle.has(title) ? undefined : i);
+    index.set(node.renderer_id, i);
   });
 
   const pairs: number[] = [];
   const linkKinds: ("manual" | "ai_similarity")[] = [];
-  const seen = new Set<string>();
+  const linkEdges: VaultGraph["edges"][number][] = [];
   let unresolved = 0;
+  let unavailable = 0;
   for (const edge of graph.edges) {
-    const a = index.get(edge.source);
-    const b = edge.target_id === null && edge.kind !== "ai_similarity" ? byTitle.get(edge.target_title.trim().toLowerCase()) : index.get(edge.target_id ?? "");
-    if (a === undefined || b === undefined) {
-      unresolved += 1;
+    if (edge.resolution !== "resolved") {
+      if (edge.resolution === "unavailable") unavailable += 1;
+      else unresolved += 1;
       continue;
     }
-    if (a === b) continue;
-    const kind = edge.kind ?? "manual";
-    const key = `${a < b ? `${a}:${b}` : `${b}:${a}`}:${kind}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const a = index.get(edge.source_renderer_id);
+    const b = index.get(edge.target_renderer_id ?? "");
+    if (a === undefined || b === undefined) {
+      unavailable += 1;
+      continue;
+    }
+    // Each directed declaration has its own identity/provenance, even at equal endpoints.
     pairs.push(a, b);
-    linkKinds.push(kind);
+    linkKinds.push(edge.kind ?? "manual");
+    linkEdges.push(structuredClone(edge));
   }
 
   const degree = new Int32Array(count);
@@ -141,12 +221,14 @@ export function buildScene(graph: VaultGraph): Scene {
     links: Int32Array.from(pairs),
     linkCount: pairs.length / 2,
     linkKinds,
+    linkEdges,
     degree,
     proj: new Float32Array(count * 4),
     order: Int32Array.from({ length: count }, (_, i) => i),
     k,
     alpha: 1,
     unresolved,
+    unavailable,
     width: 900,
     height: 600,
   };

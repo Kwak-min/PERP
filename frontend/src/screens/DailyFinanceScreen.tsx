@@ -99,7 +99,7 @@ function FinanceWorkspace({ session, screen }: Readonly<{ session: ApiSession; s
       {(approvals ? approvalRows.length : duesRows.length) === 0 && <p>표시할 기록이 없습니다.</p>}</>}
     {selected && <PaymentPanel key={selected} id={selected} session={session} canWrite={canWrite} refresh={refresh} close={() => setSelected(null)} />}
     {create && screen.create && <CreateFormModal entityLabel={screen.label} config={screen.create} session={session} onClose={() => setCreate(false)} onCreated={refresh} />}
-    {editing && screen.create && <CreateFormModal entityLabel={screen.label} config={{ endpoint: `/pg/records/dues/${editing.id}`, fields: screen.create.fields.filter(field => field.type !== 'select') }} method="PATCH" initialValues={editing.values} session={session} onClose={() => setEditing(null)} onCreated={() => { setSelected(null); refresh(); }} />}
+    {editing && screen.create && <CreateFormModal entityLabel={screen.label} config={{ endpoint: `/pg/records/dues/${editing.id}`, fields: screen.create.fields.filter(field => field.type !== 'select') }} method="PATCH" initialValues={editing.values} versionField="expected_version" session={session} onClose={() => setEditing(null)} onCreated={() => { setSelected(null); refresh(); }} />}
   </div>;
 }
 

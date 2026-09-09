@@ -103,20 +103,27 @@ export async function startPgDocumentFixture() {
     if (text.startsWith("UPDATE project.documents t")) {
       const document = data.documents.find((row) => row.id === String(values[0]));
       const project = document && projectOf(data, document);
-      if (!document || project?.company_id !== String(values[1])) return { rows: [], rowCount: 0 };
-      for (let index = 2; index < values.length; index += 1) {
+      const expectedVersion = Number(values.at(-1));
+      if (!document || project?.company_id !== String(values[1]) || document.version !== expectedVersion) return { rows: [], rowCount: 0 };
+      for (let index = 2; index < values.length - 1; index += 1) {
         if (text.includes(`title = $${index + 1}`)) document.title = values[index];
         if (text.includes(`content_md = $${index + 1}`)) document.content_md = values[index];
       }
       if (text.includes("version = t.version + 1")) document.version += 1;
       document.updated_at = new Date().toISOString();
-      return { rows: [], rowCount: 1 };
+      return { rows: [{ id: document.id, version: document.version }], rowCount: 1 };
     }
     if (text.startsWith("DELETE FROM project.documents")) {
       const index = data.documents.findIndex((row) => row.id === String(values[0]) && projectOf(data, row)?.company_id === String(values[1]));
       if (index < 0) return { rows: [], rowCount: 0 };
       data.documents.splice(index, 1);
       return { rows: [], rowCount: 1 };
+    }
+    if (text.includes("FROM project.documents t")) {
+      const document = data.documents.find((row) => row.id === String(values[0]));
+      const project = document && projectOf(data, document);
+      if (!document || project?.company_id !== String(values[1])) return { rows: [], rowCount: 0 };
+      return { rows: [{ ...(text.includes("SELECT t.id") ? { id: document.id } : {}), title: document.title, content_md: document.content_md, version: document.version }], rowCount: 1 };
     }
     if (text.includes("FROM project.documents d") && text.includes("JOIN project.projects p")) {
       const companyId = String(text.includes("d.id = $1") ? values[1] : values[0]);

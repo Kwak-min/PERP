@@ -1,3 +1,10 @@
+import { migrateReceipts } from './receipt-migration.js';
+import { migrateExpenses } from './expense-migration.js';
+import { migrateApprovalWorkflow, migrateApprovalSnapshotBoundary } from './approval-migration.js';
+import { migrateExpenseImports } from './expense-import-migration.js';
+import { knowledgeDDL } from './knowledge-schema.js';
+import { knowledgeInvalidationDDL } from './knowledge-invalidation-schema.js';
+
 function columnsOf(conn, table) {
   return new Set(conn.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
 }
@@ -226,7 +233,33 @@ const MIGRATIONS = [
       `);
     },
   },
+  {
+    version: 9,
+    up(conn) {
+      // 일반 membership version과 독립적인 역할 교체 CAS.
+      addColumn(conn, 'membership', 'roles_version INTEGER NOT NULL DEFAULT 1');
+    },
+  },
 ];
+
+MIGRATIONS.push({
+  version: 10,
+  up(conn) {
+    migrateReceipts(conn);
+    migrateExpenses(conn);
+  },
+});
+MIGRATIONS.push({
+  version: 11,
+  up(conn) {
+    migrateApprovalWorkflow(conn);
+    migrateApprovalSnapshotBoundary(conn);
+  },
+});
+
+MIGRATIONS.push({ version: 12, up(conn) { conn.exec(knowledgeDDL('sqlite')); } });
+MIGRATIONS.push({ version: 13, up: migrateExpenseImports });
+MIGRATIONS.push({ version: 14, up(conn) { conn.exec(knowledgeInvalidationDDL('sqlite')); } });
 
 export function applyMigrations(conn) {
   conn.exec(`

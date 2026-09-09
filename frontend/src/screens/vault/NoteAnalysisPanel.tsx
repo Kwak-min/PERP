@@ -17,7 +17,7 @@ const reasons: Record<string, string> = {
   cache_empty: "분석 캐시는 서버 재시작 시 초기화됩니다. 이 노트만 다시 분석할 수 있습니다.",
 };
 export function NoteAnalysisPanel({ noteId, version, base, session, onSettled }: Readonly<{
-  noteId: string; version: number; base: string; session: ApiSession;
+  noteId: string; version: string | number; base: string; session: ApiSession;
   onSettled?: () => Promise<void>;
 }>) {
   const [analysis, setAnalysis] = useState<NoteAnalysis | null>(null);

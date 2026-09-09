@@ -4,7 +4,7 @@ import { apiRequest, userMessageOf, type ApiSession } from '../services/api';
 import type { ScreenDefinition } from '../routes/catalog';
 
 const accessSchema = z.object({ org_id: z.string(), permissions: z.array(z.string()), modules: z.array(z.string()),
-  features: z.array(z.string()), menus: z.array(z.string()), scope: z.string() });
+  features: z.array(z.string()), menus: z.array(z.string()), scope: z.string(), is_company_administrator: z.boolean().optional() });
 export type WorkspaceAccess = z.infer<typeof accessSchema>;
 export const AccessContext = createContext<WorkspaceAccess | null>(null);
 export const useAccess = () => useContext(AccessContext);

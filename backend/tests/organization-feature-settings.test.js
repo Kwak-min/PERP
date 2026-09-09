@@ -141,8 +141,9 @@ for (const nativePg of [false, true]) {
       assert.equal(signup.status, 201);
       actor = { token: signup.body.access_token, orgId: owner.orgId };
       setPermissions = async permissions => {
-        const changed = await api(server.baseUrl, `/settings/roles/${role.body.key}`, { ...owner, method: 'PATCH', body: { name: 'Settings only QA', permissions } });
+        const changed = await api(server.baseUrl, `/settings/roles/${role.body.key}`, { ...owner, method: 'PATCH', body: { name: 'Settings only QA', permissions, expected_version: role.body.version } });
         assert.equal(changed.status, 200, JSON.stringify(changed.body));
+        role.body.version = changed.body.version;
       };
     }
     for (const permissions of [['role.assign', 'menu.organization'], ['organization.settings']]) {

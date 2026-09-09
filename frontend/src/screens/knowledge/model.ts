@@ -1,44 +1,48 @@
 import { z } from "zod";
 
+import {
+  graphEndpointSchema,
+  graphIdentitySchema,
+  graphRendererId,
+  validateGraphBindings,
+} from "../vault/graph3d.ts";
+
 /** 조직 지식(RAG) 그래프 응답. 백엔드 GET /documents/graph 와 짝을 이룬다. */
 export const knowledgeNodeSchema = z.object({
   id: z.string(),
-  kind: z.enum(["space", "document"]).catch("document"),
+  renderer_id: z.string().min(1),
+  identity: graphIdentitySchema,
+  kind: z.enum(["space", "document"]),
   title: z.string().catch(""),
   folder: z.string().catch("미분류"),
   sensitivity: z.string().catch("internal"),
   chunks: z.number().catch(0),
   tags: z.array(z.string()).catch([]),
   updated_at: z.string().catch(""),
+}).passthrough().superRefine((node, context) => {
+  if (node.identity.kind !== node.kind) context.addIssue({ code: "custom", message: "node kind mismatch" });
+  const apiId = node.identity.store === "pg" && node.kind === "space"
+    ? `project:${node.identity.opaque_id}`
+    : node.identity.opaque_id;
+  if (node.id !== apiId) context.addIssue({ code: "custom", message: "node API ID mismatch" });
+  if (node.renderer_id !== graphRendererId(node.identity)) context.addIssue({ code: "custom", message: "renderer identity mismatch" });
 });
 
 export const documentAnalysisSchema = z.object({
   state: z.enum(["pending", "ready", "error", "unavailable", "not_analyzed"]),
   reason: z.string().optional(),
-  version: z.number().int(),
+  version: z.number().int().positive(),
   model: z.string().nullable(),
   local_only: z.literal(true),
 });
 
-export const knowledgeEdgeSchema = z.object({
-  source: z.string(),
-  target_id: z.string().nullable().catch(null),
-  target_title: z.string().catch(""),
-  kind: z.enum(["space", "link", "ai_similarity"]).catch("link"),
-  score: z.number().min(-1).max(1).optional(),
-  provenance: z.object({
-    provider: z.literal("ollama-local"),
-    model: z.string(),
-    method: z.literal("embedding_cosine"),
-    source_version: z.number().int(),
-    target_version: z.number().int(),
-    analyzed_at: z.string(),
-  }).optional(),
-});
+export const knowledgeEdgeSchema = graphEndpointSchema.and(z.object({
+  kind: z.enum(["space", "link", "ai_similarity"]),
+}));
 
 export const knowledgeGraphSchema = z.object({
   nodes: z.array(knowledgeNodeSchema),
-  edges: z.array(knowledgeEdgeSchema).catch([]),
+  edges: z.array(knowledgeEdgeSchema),
   analysis: z.array(z.object({ id: z.string() }).and(documentAnalysisSchema)).catch([]),
   orphans: z.array(z.string()).catch([]),
   stats: z
@@ -49,15 +53,29 @@ export const knowledgeGraphSchema = z.object({
       restricted: z.number().catch(0),
     })
     .catch({ documents: 0, spaces: 0, chunks: 0, restricted: 0 }),
-});
+}).superRefine(validateGraphBindings);
 
 export const documentDetailSchema = z.object({
   id: z.string(),
   title: z.string().catch(""),
-  content: z.string().catch(""),
-  version: z.number().catch(1),
+  content: z.string(),
+  version: z.number().int().positive(),
   versions: z.array(z.unknown()).catch([]),
 });
+
+export function parseDocumentDetail(targetId: string, input: unknown): z.infer<typeof documentDetailSchema> {
+  const detail = documentDetailSchema.parse(input);
+  if (detail.id !== targetId) throw new Error("DETAIL_ID_MISMATCH");
+  return detail;
+}
+
+const documentWriteResultSchema = z.object({ id: z.string(), version: z.number().int().positive() });
+
+export function parseDocumentWriteResult(targetId: string, input: unknown): z.infer<typeof documentWriteResultSchema> {
+  const result = documentWriteResultSchema.parse(input);
+  if (result.id !== targetId) throw new Error("DETAIL_ID_MISMATCH");
+  return result;
+}
 
 export const uploadedDocumentSchema = z.object({
   id: z.string(),
@@ -69,6 +87,17 @@ export const uploadedDocumentSchema = z.object({
 export type KnowledgeNode = z.infer<typeof knowledgeNodeSchema>;
 export type KnowledgeEdge = z.infer<typeof knowledgeEdgeSchema>;
 export type KnowledgeGraph = z.infer<typeof knowledgeGraphSchema>;
+
+export function membersOfKnowledgeHub(
+  nodes: readonly KnowledgeNode[],
+  edges: readonly KnowledgeEdge[],
+  hubRendererId: string,
+): readonly KnowledgeNode[] {
+  const memberRendererIds = new Set(edges
+    .filter((edge) => edge.kind === "space" && edge.resolution === "resolved" && edge.target_renderer_id === hubRendererId)
+    .map((edge) => edge.source_renderer_id));
+  return nodes.filter((node) => node.kind === "document" && memberRendererIds.has(node.renderer_id));
+}
 
 export const SENSITIVITY_LABEL: Readonly<Record<string, string>> = {
   public: "공개",

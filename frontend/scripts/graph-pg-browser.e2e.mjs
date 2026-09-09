@@ -7,6 +7,7 @@ import { createServer } from "vite";
 import react from "@vitejs/plugin-react";
 import { api } from "../../backend/tests/http.js";
 import { startPgGraphFixture } from "./graph-pg-fixture.mjs";
+import { graphResponseBody } from "./graph-response.mjs";
 
 const frontend=fileURLToPath(new URL("../",import.meta.url));
 const component=process.env.GRAPH_QA_COMPONENT==="1";
@@ -40,10 +41,10 @@ try{
   await check("PG note creation returns full detail and appears in the same graph store",async()=>{
     await page.getByRole("button",{name:"새 노트",exact:true}).click();await title.fill("PG Alpha");await body.fill("# Alpha\n[[PG Beta|alias]] [[PG Gamma#section]] [[Missing]]");
     const created=responseFor("/notes","POST");await page.getByRole("button",{name:"노트 만들기",exact:true}).click();const response=await created;assert.equal(response.status(),201,await response.text());
-    const note=await response.json();assert.equal(note.title,"PG Alpha");assert.ok(Number.isInteger(note.version));
+    const note=await response.json();assert.equal(note.title,"PG Alpha");assert.match(note.version,/^\d+$/);
   });
   await check("PG graph and list are the same owner-only source with wiki links",async()=>{
-    const loaded=responseFor("/graph");await page.goto(`${origin}/vault/graph`);const response=await loaded;assert.equal(response.status(),200);const graph=await response.json();
+    const loaded=graphResponseBody(page,r=>r.url().endsWith("/api/v1/pg/vault/graph"));await page.goto(`${origin}/vault/graph`);const response=await loaded;assert.equal(response.status,200);const graph=response.body;
     assert.equal(graph.nodes.length,4);assert.ok(!graph.nodes.some(n=>n.id==="4"));assert.equal(graph.edges.filter(e=>e.target_id!==null).length,3);assert.equal(graph.edges.filter(e=>e.target_id===null).length,1);
     await page.getByRole("application",{name:"개인 노트 3D 그래프"}).waitFor();await capture("pg-graph-linked.png");
     const list=await api(fixture.baseUrl,"/pg/vault/notes",fixture);assert.deepEqual(graph.nodes.map(n=>n.id).sort(),list.body.items.map(n=>n.id).sort());
@@ -52,7 +53,7 @@ try{
     const detail=responseFor("/notes/1");await page.getByLabel("그래프 노트 선택").selectOption("1");await detail;await body.waitFor();
     assert.equal(await page.getByLabel("태그 (쉼표로 구분)").isVisible(),false);
     await title.fill("PG Beta Renamed");await body.fill("# GRAPH_PG_SAVED\n[[PG Gamma]]");const saved=responseFor("/notes/1","PATCH");await page.getByRole("button",{name:"변경 저장",exact:true}).click();const response=await saved;assert.equal(response.status(),200,await response.text());
-    const note=await response.json();assert.equal(note.title,"PG Beta Renamed");assert.equal(note.content,"# GRAPH_PG_SAVED\n[[PG Gamma]]");assert.ok(note.version>41);
+    const note=await response.json();assert.equal(note.title,"PG Beta Renamed");assert.equal(note.content,"# GRAPH_PG_SAVED\n[[PG Gamma]]");assert.match(note.version,/^\d+$/);assert.ok(Number(note.version)>41);
     await page.reload();await page.getByRole("application",{name:"개인 노트 3D 그래프"}).waitFor();await page.getByLabel("그래프 노트 선택").selectOption("1");await body.waitFor();assert.equal(await body.inputValue(),note.content);await capture("pg-graph-reloaded.png");
   });
   await check("PG stale save is rejected without losing local draft",async()=>{

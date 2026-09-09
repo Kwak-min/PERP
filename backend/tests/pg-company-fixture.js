@@ -13,8 +13,8 @@ export async function installCompanyFixture() {
   let state = {
     users,
     companies: [{ id: '77', name: 'QA_PG_COMPANY', is_active: true }],
-    memberships: [{ company_id: '77', user_id: '101', department_id: null, position_id: null, status: 'active' }],
-    roles: [{ id: '1', company_id: '77', name: 'member' }],
+    memberships: [{ company_id: '77', user_id: '101', department_id: null, position_id: null, status: 'active', roles_version: 1 }],
+    roles: [{ id: '1', company_id: '77', name: 'member', scope: 'all', version: 1 }],
     grants: [{ user_id: '101', role_id: '1' }],
     permissions: [{ role_id: '1', code: 'task.read' }],
     modules: [{ company_id: '77', module_key: 'tasks' }],
@@ -98,12 +98,12 @@ export async function installCompanyFixture() {
     }
     if (text.includes('INSERT INTO org.company_memberships')) {
       if (failMembership) throw new Error('injected membership failure');
-      const membership = { company_id: values[0], user_id: values[1], department_id: values[2] ?? null, position_id: values[3] ?? null, status: 'active' };
+      const membership = { company_id: values[0], user_id: values[1], department_id: values[2] ?? null, position_id: values[3] ?? null, status: 'active', roles_version: 1 };
       data.memberships.push(membership); bumpOrg(data, values[0]); return { rows: [membership], rowCount: 1 };
     }
     if (text.includes('INSERT INTO org.permissions')) return { rows: [], rowCount: values[0].length };
     if (text.includes('INSERT INTO org.roles')) {
-      const role = { id: String(data.roles.length + 1), company_id: values[0], name: values[1] ?? 'company_creator', is_system: text.includes('true'), scope: values[2] ?? 'all' };
+      const role = { id: String(data.roles.length + 1), company_id: values[0], name: values[1] ?? 'company_creator', is_system: text.includes('true'), scope: values[2] ?? 'all', version: 1 };
       data.roles.push(role); return { rows: [role], rowCount: 1 };
     }
     if (text.startsWith('DELETE FROM org.role_permissions')) {
@@ -131,10 +131,10 @@ export async function installCompanyFixture() {
       return { rows: data.roles.filter(r => r.company_id === values[0]).map(r => ({ ...r,
         permissions: data.permissions.filter(p => p.role_id === r.id).map(p => p.code) })) };
     }
-    if (text.startsWith('SELECT m.user_id, u.name')) {
+    if (text.startsWith('SELECT m.user_id, m.roles_version, u.name')) {
       return { rows: data.memberships.filter(m => m.company_id === values[0] && m.status === 'active')
         .filter(m => data.users.some(u => u.id === m.user_id && u.account_status === 'active' && u.approval_status === 'approved'))
-        .map(m => ({ ...data.users.find(u => u.id === m.user_id), user_id: m.user_id,
+        .map(m => ({ ...data.users.find(u => u.id === m.user_id), user_id: m.user_id, roles_version: m.roles_version,
           roles: data.roles.filter(r => r.company_id === m.company_id && data.grants.some(g => g.user_id === m.user_id && g.role_id === r.id)).map(r => r.id) })) };
     }
     if (text.startsWith('SELECT DISTINCT p.code')) {
@@ -159,6 +159,11 @@ export async function installCompanyFixture() {
       return { rows: data.memberships.filter(m => m.company_id === values[values.length - 1] && (values.length === 1 || m.user_id === values[0]) && m.status === 'active')
         .filter(m => !text.includes("AND u.account_status = 'active'") || data.users.some(u => u.id === m.user_id && u.account_status === 'active' && u.approval_status === 'approved'))
         .map(m => ({ ...data.users.find(user => user.id === m.user_id), ...m, id: m.user_id, account_status: m.status, position_name: null, roles: data.roles.filter(r => r.company_id === m.company_id && data.grants.some(g => g.user_id === m.user_id && g.role_id === r.id)).map(r => r.name) })) };
+    }
+    if (text.startsWith('UPDATE org.company_memberships SET roles_version')) {
+      const member = data.memberships.find(m => m.company_id === values[0] && m.user_id === values[1]);
+      if (member) member.roles_version += 1;
+      return { rows: [], rowCount: member ? 1 : 0 };
     }
     if (text.startsWith('UPDATE org.company_memberships')) {
       const membership = data.memberships.find(m => m.user_id === values[0] && m.company_id === values[1]);

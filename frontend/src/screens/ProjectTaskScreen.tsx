@@ -6,11 +6,12 @@ import { apiRequest, ApiError, userMessageOf, type ApiSession } from "../service
 import { isPgWorkspace } from "../services/workspace";
 import { useSession } from "../store/session";
 import { useBranch } from "../store/branch";
+import { useAccess } from '../hooks/useWorkspaceAccess';
 import { StateBoundary } from "../components/common/StateBoundary";
 import { Button } from "../components/ui/Button";
-import { AssigneeSelect } from '../components/common/AssigneeSelect';
+import { TaskDetail } from './projects/TaskDetail';
 import { ProjectTaskCreateModal } from "./projects/ProjectTaskCreateModal";
-import { ProjectAssignmentModal, type ProjectAssignmentTarget } from './projects/ProjectAssignmentModal';
+import { ProjectAssignmentModal, type AssignmentResult, type ProjectAssignmentTarget } from './projects/ProjectAssignmentModal';
 import { parseProjects, parseTasks, projectProgress, statusLabel, tasksForProject, taskStatuses, type Project, type Task } from "./projects/model";
 import "./projects/project-tasks.css";
 
@@ -37,7 +38,7 @@ function useRows<T>(endpoint: string, session: ApiSession, revision: number, par
 export function ProjectTaskScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const stored = useSession();
   const session = useMemo<ApiSession | null>(() => stored ? { token: stored.token, orgId: stored.orgId } : null, [stored]);
-  return session ? <ProjectTaskWorkspace key={`${session.orgId}:${screen.id}`} screen={screen} session={session} /> : null;
+  return session ? <ProjectTaskWorkspace key={`${session.token}:${session.orgId}:${screen.id}`} screen={screen} session={session} /> : null;
 }
 
 function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefinition; session: ApiSession }>) {
@@ -50,6 +51,7 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
   const [query, setQuery] = useState("");
   const [permissions, setPermissions] = useState<readonly string[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  const [memberResult, setMemberResult] = useState<AssignmentResult | null>(null);
   const [modal, setModal] = useState<{ kind: "project" | "task"; projectId?: string } | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
@@ -67,6 +69,7 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
     return () => controller.abort();
   }, [pg, session]);
   const can = (permission: string) => permissions.includes(permission) || (!pg && permissions.includes("*"));
+  const administrator = useAccess()?.is_company_administrator === true;
   const refresh = () => setRevision(value => value + 1);
   async function updateTask(task: Task, patch: { status: string; title?: string; due_at?: string; assignee_id?: string | null }): Promise<void> {
     setSaving(task.id); setNotice(null);
@@ -99,7 +102,7 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
       <div className="screen-header__actions"><Link className="button button--neutral" to={projectView ? "/tasks" : "/projects"}>{projectView ? "전체 업무" : "프로젝트로"}</Link>
         <Button tone="neutral" onClick={refresh}>새로고침</Button>
         {!taskId && <Button disabled={projectView ? !can("project.write") : !can("task.write") || projects.status !== "ready" || projects.items.length === 0} onClick={() => setModal({ kind: projectView ? "project" : "task" })}>{projectView ? "프로젝트 만들기" : "업무 만들기"}</Button>}</div></header>
-    {notice && <div className="screen-notice" role="status"><span>{notice}</span><Button tone="ghost" size="small" onClick={() => setNotice(null)}>닫기</Button></div>}
+    {notice && <div className="screen-notice" role="status" data-member-result={memberResult}><span>{notice}</span><Button tone="ghost" size="small" onClick={() => setNotice(null)}>닫기</Button></div>}
     {!taskId && <label className="project-tasks__search">{projectView ? "프로젝트 검색" : "업무 검색"}<input type="search" value={query} onChange={event => setQuery(event.target.value)} /></label>}
     {projectView ? <StateBoundary status={projects.status} error={projects.error}>
       {!filteredProjects.length && <p className="project-tasks__empty" role="status">{projectId ? "프로젝트를 찾을 수 없습니다." : query ? "검색 결과가 없습니다." : "등록된 프로젝트가 없습니다."}</p>}
@@ -112,30 +115,29 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
           </div>
           <div id={`project-tasks-${project.id}`} hidden={!open} className="project-tasks__expanded">
             <div className="project-tasks__project-meta"><span>{project.start_date?.slice(0, 10) ?? "시작 미정"} ~ {project.end_date?.slice(0, 10) ?? "종료 미정"}</span><Button size="small" tone="neutral" disabled={!can('project.write')} onClick={() => setAssignmentTarget({ mode: 'member', project })}>구성원 추가</Button><Button size="small" disabled={!can('project.write') || project.version === undefined} onClick={() => setEditingProject(project)}>프로젝트 수정</Button><Button size="small" disabled={!can("task.write")} onClick={() => setModal({ kind: "task", projectId: project.id })}>업무 만들기</Button></div>
+            {open && <ProjectRoster key={`${project.id}:${revision}`} projectId={project.id} session={session} />}
             <StateBoundary status={tasks.status} error={tasks.error}>{taskList(related)}</StateBoundary>
           </div>
         </section>;
       })}
     </StateBoundary> : <StateBoundary status={tasks.status} error={tasks.error}>{taskId ? detail
-      ? <TaskDetail key={`${detail.id}:${revision}`} task={detail} session={session} project={projects.items.find(project => project.id === detail.project_id)} disabled={!can("task.write") || saving !== null} onSave={patch => void updateTask(detail, patch)} />
+      ? <TaskDetail key={`${detail.id}:${revision}`} task={detail} session={session} project={projects.items.find(project => project.id === detail.project_id)} disabled={!can("task.write") || saving !== null} administrator={administrator} onSaved={() => { refresh(); setNotice('업무를 저장했습니다.'); }} />
       : <p role="status">업무를 찾을 수 없습니다.</p> : taskList(filteredTasks)}</StateBoundary>}
-    {assignmentTarget && <ProjectAssignmentModal target={assignmentTarget} session={session} onClose={() => setAssignmentTarget(null)} onSaved={() => { refresh(); setNotice(assignmentTarget.mode === 'member' ? '프로젝트 구성원을 추가했습니다.' : '업무 배정을 저장했습니다.'); }} />}
+    {assignmentTarget && <ProjectAssignmentModal target={assignmentTarget} session={session} administrator={administrator} onClose={() => setAssignmentTarget(null)} onSaved={result => { refresh(); setMemberResult(result); setNotice(result === 'existing' ? '이미 소속된 구성원입니다. 현재 명단을 다시 확인했습니다.' : result === 'created' ? '프로젝트 구성원을 추가했습니다.' : '업무 배정을 저장했습니다.'); }} />}
     {editingProject && <ProjectTaskCreateModal kind="project" projects={projects.items} initialProject={editingProject} departmentId={null} session={session} onClose={() => setEditingProject(null)} onSaved={() => { setEditingProject(null); refresh(); setNotice('프로젝트를 저장했습니다.'); }} />}
     {modal && <ProjectTaskCreateModal {...modal} projects={projects.items} departmentId={pg ? null : branch} session={session} onClose={() => setModal(null)} onSaved={() => { const id = modal.projectId; if (id) setExpanded(current => new Set([...current, id])); setModal(null); refresh(); setNotice("서버에 저장했습니다."); }} />}
   </div>;
 }
 
-function TaskDetail({ task, project, session, disabled, onSave }: Readonly<{ task: Task; project: Project | undefined; session: ApiSession; disabled: boolean; onSave: (patch: { title: string; status: string; due_at: string; assignee_id?: string | null }) => void }>) {
-  const [title, setTitle] = useState(task.title), [status, setStatus] = useState(task.status), [due, setDue] = useState(task.due_at?.slice(0, 10) ?? "");
-  const [assignee, setAssignee] = useState(task.assignee_id ?? '');
-  return <form className="project-tasks__detail form-stack" onSubmit={event => { event.preventDefault(); if (title.trim()) onSave({ title: title.trim(), status, due_at: due, ...(assignee !== (task.assignee_id ?? '') ? { assignee_id: assignee || null } : {}) }); }}>
-    <h2>{task.title}</h2><p>{task.project_id ? <Link to={`/projects/${encodeURIComponent(task.project_id)}`}>{project?.name ?? task.project_name ?? "프로젝트 보기"}</Link> : "프로젝트 미배정"}</p>
-    {task.description && <p>{task.description}</p>}
-    <label>제목<input required maxLength={300} disabled={disabled} value={title} onChange={event => setTitle(event.target.value)} /></label>
-    <label>상태<select value={status} disabled={disabled} onChange={event => setStatus(event.target.value)}>{!taskStatuses.some(item => item.value === status) && <option value={status}>{statusLabel(status)}</option>}{taskStatuses.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-    <AssigneeSelect session={session} projectId={task.project_id} value={assignee} onChange={setAssignee} disabled={disabled} />
-    <label>기한<input type="date" value={due} disabled={disabled} onChange={event => setDue(event.target.value)} /></label>
-    <progress aria-label={`${task.title} 진행률`} max={100} value={task.status === "done" ? 100 : 0} />
-    <Button type="submit" disabled={disabled}>변경 저장</Button>
-  </form>;
+const rosterSchema = z.object({ items: z.array(z.object({ value: z.string(), label: z.string() })) });
+const parseRoster = (payload: unknown) => rosterSchema.parse(payload).items;
+function ProjectRoster({ projectId, session }: Readonly<{ projectId: string; session: ApiSession }>) {
+  const [revision, setRevision] = useState(0);
+  const roster = useRows(`${isPgWorkspace(session.orgId) ? '/pg' : ''}/projects/${encodeURIComponent(projectId)}/members`, session, revision, parseRoster);
+  return <section data-project-roster aria-label="프로젝트 구성원">
+    <h3>프로젝트 구성원{roster.status === 'ready' ? ` (${roster.items.length})` : ''}</h3>
+    {roster.status === 'ready' ? roster.items.length ? <ul>{roster.items.map(member => <li key={member.value} data-member-id={member.value}>{member.label}</li>)}</ul> : <p role="status">등록된 구성원이 없습니다.</p>
+      : roster.status === 'loading' ? <p role="status">구성원을 불러오는 중입니다.</p> : <p role="alert">구성원 명단: {userMessageOf(roster.error)}</p>}
+    <Button type="button" size="small" tone="neutral" disabled={roster.status === 'loading'} onClick={() => setRevision(value => value + 1)}>명단 다시 불러오기</Button>
+  </section>;
 }

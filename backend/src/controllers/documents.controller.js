@@ -23,6 +23,7 @@ import {
   persistUploadedSource,
 } from "../services/document-ingestion.service.js";
 import { canReadDocument } from "../services/rag.service.js";
+import { graphEdge, graphIdentity, graphNode } from "../services/graph-identity.service.js";
 import { ApiError, notFound } from "../utils/errors.js";
 
 const spaceSchema = z.object({
@@ -46,7 +47,7 @@ const patchSchema = z.object({
   content: z.string().optional(),
   visibility: z.enum(["org", "private", "public"]).optional(),
   review_status: z.string().optional(),
-  version: z.number().int().optional(),
+  version: z.number().int().positive(),
 });
 
 const uploadSchema = z.object({
@@ -328,11 +329,11 @@ export async function documentAnalysis(req, res) {
 export function patchDocument(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("document.write");
-  const payload = patchSchema.parse(req.body);
   const document = getScoped("document", principal, req.params.documentId, "document");
   if (!canReadDocument(principal, document)) throw notFound("document");
+  const payload = patchSchema.parse(req.body);
 
-  if (payload.version !== undefined && payload.version !== document.version) {
+  if (payload.version !== document.version) {
     throw new ApiError("VERSION_CONFLICT", "document was modified by someone else");
   }
 
@@ -588,6 +589,12 @@ export async function graph(req, res) {
     canReadDocument(principal, document),
   );
   const readableIds = new Set(documents.map((document) => document.id));
+  const spaceIdentities = new Map(spaces.map((space) => [space.id, graphIdentity({
+    store: "legacy", company: principal.orgId, kind: "space", opaqueId: space.id,
+  })]));
+  const documentIdentities = new Map(documents.map((document) => [document.id, graphIdentity({
+    store: "legacy", company: principal.orgId, kind: "document", opaqueId: document.id,
+  })]));
 
   const chunkCount = new Map();
   for (const chunk of listScoped("document_chunk", principal, [], { limit: 5000 })) {
@@ -597,11 +604,13 @@ export async function graph(req, res) {
 
   const byTitle = new Map();
   for (const document of documents) {
-    if (!byTitle.has(document.title)) byTitle.set(document.title, document.id);
+    const ids = byTitle.get(document.title) ?? [];
+    ids.push(document.id);
+    byTitle.set(document.title, ids);
   }
 
   const nodes = [
-    ...spaces.map((space) => ({
+    ...spaces.map((space) => graphNode({
       id: space.id,
       kind: "space",
       title: space.name,
@@ -610,8 +619,8 @@ export async function graph(req, res) {
       chunks: 0,
       tags: [],
       updated_at: space.updated_at,
-    })),
-    ...documents.map((document) => ({
+    }, spaceIdentities.get(space.id))),
+    ...documents.map((document) => graphNode({
       id: document.id,
       kind: "document",
       title: document.title,
@@ -620,39 +629,49 @@ export async function graph(req, res) {
       chunks: chunkCount.get(document.id) ?? 0,
       tags: (document.tags ?? "").split(",").filter(Boolean),
       updated_at: document.updated_at,
-    })),
+    }, documentIdentities.get(document.id))),
   ];
 
   const edges = [];
   for (const document of documents) {
+    const sourceIdentity = documentIdentities.get(document.id);
     if (document.space_id && spaceName.has(document.space_id)) {
-      edges.push({
+      const targetIdentity = spaceIdentities.get(document.space_id);
+      edges.push(graphEdge({
         source: document.id,
         target_id: document.space_id,
         target_title: spaceName.get(document.space_id),
         kind: "space",
-      });
+      }, sourceIdentity, targetIdentity, { binding: "membership", resolution: "resolved" }));
     }
     const seen = new Set();
     for (const match of (document.content ?? "").matchAll(/\[\[([^\]]+)\]\]/g)) {
       const title = match[1].trim();
       if (!title || seen.has(title)) continue;
       seen.add(title);
-      const targetId = byTitle.get(title) ?? null;
+      const ids = byTitle.get(title) ?? [];
+      const targetId = ids.length === 1 ? ids[0] : null;
       if (targetId === document.id) continue;
-      edges.push({
+      const targetIdentity = targetId ? documentIdentities.get(targetId) : null;
+      edges.push(graphEdge({
         source: document.id,
         target_id: targetId,
         target_title: targetId ? title : "",
         kind: "link",
-      });
+      }, sourceIdentity, targetIdentity, targetIdentity
+        ? { binding: "title", resolution: "resolved" }
+        : { binding: "title", resolution: "unresolved", reason: ids.length > 1 ? "duplicate_title" : "title_not_found" }));
     }
   }
 
   const semantic = documentSemantic.graph(scope, documents);
-  edges.push(...semantic.edges);
+  for (const edge of semantic.edges) {
+    const sourceIdentity = documentIdentities.get(edge.source);
+    const targetIdentity = documentIdentities.get(edge.target_id);
+    if (sourceIdentity && targetIdentity) edges.push(graphEdge(edge, sourceIdentity, targetIdentity, { binding: "inference", resolution: "resolved" }));
+  }
   const linked = new Set();
-  for (const edge of edges) {
+  for (const edge of edges.filter((item) => item.resolution === "resolved")) {
     linked.add(edge.source);
     if (edge.target_id) linked.add(edge.target_id);
   }

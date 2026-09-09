@@ -45,6 +45,20 @@ export function isPgToken(token: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token);
 }
 
+/** 메뉴 개인화에는 인증 저장소가 반환한 불변 사용자 ID만 사용한다. */
+export async function authenticatedUserId(token: string, signal: AbortSignal): Promise<string> {
+  const session = { token, orgId: null };
+  if (isPgToken(token)) {
+    const payload = z.object({ user: z.object({ id: z.string().min(1) }) }).parse(
+      await apiRequest('/pg/auth/me', { session, signal }),
+    );
+    return payload.user.id;
+  }
+  return z.object({ id: z.string().min(1) }).parse(
+    await apiRequest('/auth/me', { session, signal }),
+  ).id;
+}
+
 /** 검증된 계정의 운영 조직 소속만 조회한다. 조회 실패는 빈 소속과 구분한다. */
 export async function organizationsOf(token: string): Promise<readonly Organization[]> {
   // UUID PG 토큰은 perp_db 워크스페이스가 유일한 권위 소스다.

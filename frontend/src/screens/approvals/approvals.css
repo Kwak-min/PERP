@@ -1,0 +1,23 @@
+.approvals-screen { min-width: 0; }
+.approvals-tabs, .approvals-actions { display: flex; flex-wrap: wrap; gap: .65rem; align-items: center; margin: 1rem 0; }
+.approvals-tabs button { border: 1px solid var(--border, #cbd5e1); background: var(--surface, #fff); color: inherit; border-radius: .5rem; padding: .75rem 1rem; cursor: pointer; }
+.approvals-tabs button[aria-current] { border-color: var(--primary, #2563eb); font-weight: 700; }
+.approvals-screen :focus-visible { outline: 3px solid #2563eb; outline-offset: 3px; }
+.approvals-list { list-style: none; padding: 0; }
+.approvals-list li { display: grid; grid-template-columns: 1fr auto; gap: .5rem; border-bottom: 1px solid var(--border, #cbd5e1); padding: 1rem 0; }
+.approvals-list small { grid-column: 1 / -1; }
+.approval-record { max-width: 960px; }
+.approval-record, .approvals-list { overflow-wrap: anywhere; }
+.approval-record fieldset { min-width: 0; border: 1px solid var(--border, #cbd5e1); border-radius: .75rem; padding: 1rem; margin: 1.2rem 0; }
+.approval-record label { display: flex; flex-direction: column; gap: .4rem; margin: .9rem 0; min-width: 0; }
+.approval-record input, .approval-record select, .approval-record textarea { width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; padding: .7rem; border: 1px solid var(--border, #94a3b8); border-radius: .4rem; background: var(--surface, #fff); color: inherit; font: inherit; }
+.approval-record textarea { min-height: 100px; resize: vertical; }
+.approval-record .approval-confirm { flex-direction: row; align-items: center; }
+.approval-confirm input { width: auto; }
+.approval-record small { display: block; overflow-wrap: anywhere; }
+.approval-record pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; }
+.approval-record dd { margin: .3rem 0 1rem; white-space: pre-wrap; }
+.approval-record ol { padding-left: 1.4rem; }
+.approval-record li { margin: .8rem 0; }
+.approval-step-edit { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto; gap: .7rem; align-items: center; }
+@media (max-width: 600px) { .approval-step-edit { grid-template-columns: minmax(0,1fr); } .approvals-tabs button { flex: 1 1 40%; } .approval-record fieldset { padding: .75rem; } }

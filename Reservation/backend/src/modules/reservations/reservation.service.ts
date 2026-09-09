@@ -1,29 +1,34 @@
 import { prisma } from '../../lib/prisma';
-import { ConflictError, ForbiddenError, NotFoundError } from '../../common/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '../../common/errors';
+import type { Reservation } from '@prisma/client';
 import type { Principal } from '../../auth/principal';
-import { CreateReservationDto, UpdateReservationDto } from './reservation.schema';
+import type { CreateReservationDto, UpdateReservationDto, ListReservationQuery } from './reservation.schema';
 import { emailService } from '../../notification/email.service';
-import { addDays, calcRecurrenceDates, format } from './reservation.utils';
+import { addDays, startOfBusinessDay } from './reservation.utils';
+import { checkConflict, createRecurring } from './reservation.booking';
 import { waitlistService } from '../waitlist/waitlist.service';
 
 export const reservationService = {
   // ── 목록 조회 ─────────────────────────────────────────────────────────────
-  findMany: (principal: Principal, spaceId?: number, from?: Date, to?: Date, mine = false) => {
-    const fromDate = from ?? new Date(new Date().setHours(0, 0, 0, 0));
-    const toDate = to ?? addDays(fromDate, 30);
+  findMany: async (principal: Principal, query: ListReservationQuery) => {
+    const { spaceId, from, to, mine, status } = query;
+    const fromDate = from ?? (status === 'CONFIRMED' && !to ? startOfBusinessDay(new Date()) : undefined);
+    const toDate = to ?? (fromDate ? addDays(fromDate, 30) : undefined);
 
-    return prisma.reservation.findMany({
+    const rows = await prisma.reservation.findMany({
       where: {
         tenantId: principal.tenantId,
         orgId: principal.orgId,
-        status: 'CONFIRMED',
+        ...(status !== 'ALL' && { status }),
         ...(spaceId && { spaceId }),
-        ...(mine && { ownerId: principal.userId }),
-        startTime: { gte: fromDate, lt: toDate },
+        ...(mine === 'true' && { ownerId: principal.userId }),
+        ...(toDate && { startTime: { lt: toDate } }),
+        ...(fromDate && { endTime: { gt: fromDate } }),
       },
       include: { space: true },
       orderBy: { startTime: 'asc' },
     });
+    return rows.map(row => readableReservation(row, principal));
   },
 
   // ── 단건 조회 ─────────────────────────────────────────────────────────────
@@ -38,8 +43,8 @@ export const reservationService = {
 
   // ── 타임테이블 조회 (n분 단위 슬롯) ───────────────────────────────────
   getTimetable: async (principal: Principal, spaceId: number, date: string, slotMinutes: number = 60) => {
-    const dayStart = new Date(`${date}T08:00:00`);
-    const dayEnd = new Date(`${date}T22:00:00`);
+    const dayStart = new Date(`${date}T00:00:00+09:00`);
+    const dayEnd = addDays(dayStart, 1);
 
     const reservations = await prisma.reservation.findMany({
       where: {
@@ -66,12 +71,12 @@ export const reservationService = {
 
       slots.push(
         matched
-          ? { startTime: cursor.toISOString(), endTime: slotEnd.toISOString(), available: false, isMine: matched.ownerId === principal.userId, reservation: matched }
+          ? { startTime: cursor.toISOString(), endTime: slotEnd.toISOString(), available: false, isMine: matched.ownerId === principal.userId, reservation: readableReservation(matched, principal) }
           : { startTime: cursor.toISOString(), endTime: slotEnd.toISOString(), available: true, isMine: false, reservation: null },
       );
       cursor = slotEnd;
     }
-    return { spaceId, date, slots };
+    return { spaceId, date, slots, reservations: reservations.map(row => readableReservation(row, principal)) };
   },
 
   // ── 예약 생성 (단일 / 반복) ───────────────────────────────────────────────
@@ -82,35 +87,28 @@ export const reservationService = {
 
     if (!dto.recurrence) {
       // 단일 예약
-      await checkConflict(principal, dto.spaceId, dto.startTime, dto.endTime);
+      await checkConflict(principal, dto);
       const reservation = await prisma.reservation.create({
         data: {
           ...scope, ownerId: principal.userId, spaceId: dto.spaceId,
           title: dto.title, description: dto.description,
           startTime: dto.startTime, endTime: dto.endTime,
+          attendees: dto.attendees?.length ? { create: dto.attendees } : undefined,
         },
-        include: { space: true },
+        include: { space: true, attendees: true },
       });
-      if (dto.attendees && dto.attendees.length > 0) {
-        for (const a of dto.attendees) {
-          const attendee = await prisma.attendee.create({
-            data: {
-              reservationId: reservation.id,
-              name: a.name,
-              email: a.email,
-              department: a.department,
-            },
-            include: { reservation: { include: { space: true } } },
-          });
-          emailService.sendAttendeeInvite(attendee).catch(console.error);
+      // Prisma nested write가 예약/참석자를 함께 commit한 뒤에만 초대를 발송한다.
+      if (dto.attendees?.length) {
+        for (const attendee of reservation.attendees) {
+          emailService.sendAttendeeInvite({ ...attendee, reservation }).catch(console.error);
         }
       }
-
-      return [reservation];
+      const { attendees: _attendees, ...view } = reservation;
+      return [view];
     }
 
     // 반복 예약
-    return createRecurring(dto, space, principal);
+    return createRecurring(dto, principal, dto.recurrence);
   },
 
   // ── 수정 ──────────────────────────────────────────────────────────────────
@@ -120,8 +118,9 @@ export const reservationService = {
 
     const newStart = dto.startTime ?? reservation.startTime;
     const newEnd = dto.endTime ?? reservation.endTime;
+    if (newStart >= newEnd) throw new BadRequestError('종료 시간은 시작 시간 이후여야 합니다.');
     if (dto.startTime || dto.endTime) {
-      await checkConflict(principal, reservation.spaceId, newStart, newEnd, id);
+      await checkConflict(principal, { spaceId: reservation.spaceId, startTime: newStart, endTime: newEnd, excludeId: id });
     }
 
     return prisma.reservation.update({
@@ -189,66 +188,13 @@ export const reservationService = {
   },
 };
 
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-async function checkConflict(principal: Principal, spaceId: number, startTime: Date, endTime: Date, excludeId?: number) {
-  const conflict = await prisma.reservation.findFirst({
-    where: {
-      tenantId: principal.tenantId,
-      orgId: principal.orgId,
-      spaceId,
-      status: 'CONFIRMED',
-      startTime: { lt: endTime },
-      endTime: { gt: startTime },
-      ...(excludeId && { id: { not: excludeId } }),
-    },
-  });
-  if (conflict) {
-    throw new ConflictError(
-      `해당 시간대(${format(startTime)} ~ ${format(endTime)})에 이미 예약이 존재합니다.`,
-    );
-  }
-}
-async function createRecurring(dto: CreateReservationDto, space: { id: number; name: string }, principal: Principal) {
-  const rec = dto.recurrence!;
-  const rule = await prisma.recurrenceRule.create({
-    data: {
-      tenantId: principal.tenantId,
-      orgId: principal.orgId,
-      frequency: rec.frequency,
-      interval: rec.interval,
-      daysOfWeek: rec.daysOfWeek ?? [],
-      endDate: rec.endDate,
-      maxOccurrences: rec.maxOccurrences,
-    },
-  });
-
-  const dates = calcRecurrenceDates(dto.startTime, rec);
-  const durationMs = dto.endTime.getTime() - dto.startTime.getTime();
-  const created = [];
-  const skipped = [];
-
-  for (const date of dates) {
-    const start = new Date(date);
-    start.setHours(dto.startTime.getHours(), dto.startTime.getMinutes(), 0, 0);
-    const end = new Date(start.getTime() + durationMs);
-    try {
-      await checkConflict(principal, dto.spaceId, start, end);
-      const r = await prisma.reservation.create({
-        data: {
-          tenantId: principal.tenantId, orgId: principal.orgId, ownerId: principal.userId, spaceId: dto.spaceId,
-          title: dto.title, description: dto.description,
-          startTime: start, endTime: end,
-          recurrenceRuleId: rule.id,
-        },
-        include: { space: true },
-      });
-      created.push(r);
-    } catch {
-      skipped.push(format(start));
-    }
-  }
-
-  if (skipped.length > 0) console.warn('[반복예약] 중복 스킵된 날짜:', skipped);
-  return created;
+// 현재 모델에는 공개 여부 필드가 없으므로 타인의 모든 예약은 busy 정보로 취급한다.
+export function readableReservation<T extends Reservation>(row: T, principal: Principal) {
+  if (row.ownerId === principal.userId) return { ...row, isMine: true };
+  return {
+    id: row.id, spaceId: row.spaceId, startTime: row.startTime, endTime: row.endTime,
+    status: row.status, isMine: false, title: '예약됨', description: null,
+    userId: null, ownerId: null, recurrenceRuleId: null, recurrenceRule: null,
+    createdAt: row.createdAt, updatedAt: row.updatedAt,
+  };
 }

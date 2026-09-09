@@ -37,7 +37,10 @@ export async function startOrgPostgres({ audit = true } = {}) {
     process.env.DATABASE_URL = '';
     process.env.PG_HOST = '127.0.0.1'; process.env.PG_PORT = String(port);
     process.env.PG_DATABASE = 'postgres'; process.env.PG_USER = 'org_test'; process.env.PG_PASSWORD = '';
-    pool = new pg.Pool({ host: '127.0.0.1', port, database: 'postgres', user: 'org_test' });
+    // The isolated runner's 100 ms deadline is for an unavailable dependency,
+    // not connection acquisition against this owned, live native database.
+    process.env.PG_CONNECTION_TIMEOUT_MS = '5000';
+    pool = new pg.Pool({ host: '127.0.0.1', port, database: 'postgres', user: 'org_test', connectionTimeoutMillis: 5000 });
     for (const file of ['perp_schema.sql', ...[2, 3, 4, 5, 6, 7].map(v => `perp_additions_v${v}.sql`), ...(audit ? ['perp_additions_v10_org_audit.sql'] : [])]) {
       await pool.query(await readFile(new URL(`../../db/${file}`, import.meta.url), 'utf8'));
     }

@@ -10,6 +10,59 @@ import * as audit from '../services/audit.service.js';
 import { ApiError } from '../utils/errors.js';
 const pgId = z.string().regex(/^[1-9]\d*$/);
 
+// 후보 조회는 개인정보 디렉터리가 아니라 해당 프로젝트/업무의 쓰기 권한을 따른다.
+function legacyCandidates(principal, projectId, membersOnly = false) {
+  return db().prepare(`SELECT DISTINCT u.id, u.name, d.name AS department_name,
+      EXISTS (SELECT 1 FROM project_member pm WHERE pm.tenant_id = m.tenant_id
+        AND pm.project_id = ? AND pm.user_id = u.id AND pm.deleted_at IS NULL) AS already_member
+    FROM membership m JOIN app_user u ON u.id = m.user_id
+    LEFT JOIN department d ON d.id = m.department_id AND d.tenant_id = m.tenant_id
+      AND d.org_id = m.org_id AND d.deleted_at IS NULL
+    WHERE m.tenant_id = ? AND m.org_id = ? AND m.status = 'active'
+      AND m.deleted_at IS NULL AND u.auth_status = 'active'
+      AND (? = 0 OR already_member = 1) ORDER BY u.name, u.id`)
+    .all(projectId, principal.tenantId, principal.orgId, Number(membersOnly))
+    .map(row => ({ ...row, already_member: Boolean(row.already_member) }));
+}
+export function listLegacyProjectCandidates(req, res) {
+  const principal = resolvePrincipal(req); principal.require('project.write');
+  const project = getScoped('project', principal, z.string().uuid().parse(req.params.projectId), 'project');
+  res.json({ items: legacyCandidates(principal, project.id) });
+}
+export function listLegacyTaskAssignees(req, res) {
+  const principal = resolvePrincipal(req); principal.require('task.write');
+  const task = getScoped('task', principal, z.string().uuid().parse(req.params.taskId), 'task');
+  if (!task.project_id) return res.json({ items: [] });
+  const project = getScoped('project', principal, task.project_id, 'project');
+  res.json({ items: legacyCandidates(principal, project.id, true) });
+}
+async function pgCandidates(companyId, projectId, membersOnly = false) {
+  const { rows } = await pgQuery(`SELECT u.id, u.name, d.name AS department_name,
+      (pm.user_id IS NOT NULL OR p.lead_id = u.id) IS TRUE AS already_member
+    FROM project.projects p JOIN org.company_memberships m ON m.company_id = p.company_id
+    JOIN auth.users u ON u.id = m.user_id
+    LEFT JOIN org.departments d ON d.id = m.department_id AND d.company_id = m.company_id
+    LEFT JOIN project.project_members pm ON pm.project_id = p.id AND pm.user_id = u.id
+    WHERE p.id = $1 AND p.company_id = $2 AND m.status = 'active'
+      AND u.account_status = 'active' AND u.approval_status = 'approved'
+      AND (NOT $3::boolean OR pm.user_id IS NOT NULL OR p.lead_id = u.id)
+    ORDER BY u.name, u.id`, [projectId, companyId, membersOnly]);
+  return rows.map(row => ({ ...row, id: String(row.id) }));
+}
+export async function listPgProjectCandidates(req, res) {
+  const { companyId } = pgIdentity(req), id = pgId.parse(req.params.id);
+  const project = (await pgQuery('SELECT id FROM project.projects WHERE id = $1 AND company_id = $2', [id, companyId])).rows[0];
+  if (!project) throw new ApiError('NOT_FOUND', '프로젝트를 찾을 수 없습니다');
+  res.json({ items: await pgCandidates(companyId, id) });
+}
+export async function listPgTaskAssignees(req, res) {
+  const { companyId } = pgIdentity(req), id = pgId.parse(req.params.id);
+  const task = (await pgQuery(`SELECT t.project_id FROM project.tasks t JOIN project.projects p ON p.id = t.project_id
+    WHERE t.id = $1 AND p.company_id = $2`, [id, companyId])).rows[0];
+  if (!task) throw new ApiError('NOT_FOUND', '업무를 찾을 수 없습니다');
+  res.json({ items: await pgCandidates(companyId, task.project_id, true) });
+}
+
 export function listLegacyProjectMembers(req, res) {
   const principal = resolvePrincipal(req); principal.require('project.read');
   const project = getScoped('project', principal, req.params.projectId, 'project');
@@ -22,9 +75,9 @@ export function listLegacyProjectMembers(req, res) {
 export function addLegacyProjectMember(req, res) {
   const principal = resolvePrincipal(req); principal.require('project.write');
   const payload = z.object({ user_id: z.string().min(1), role: z.string().default('member') }).strict().parse(req.body);
-  const project = getScoped('project', principal, req.params.projectId, 'project');
-  assertCorrectionMember(principal, payload.user_id);
   const result = transaction(() => {
+    const project = getScoped('project', principal, req.params.projectId, 'project');
+    assertCorrectionMember(principal, payload.user_id);
     const existing = db().prepare('SELECT id FROM project_member WHERE tenant_id = ? AND project_id = ? AND user_id = ? AND deleted_at IS NULL').get(principal.tenantId, project.id, payload.user_id);
     if (existing) return { created: false };
     insert('project_member', { tenant_id: principal.tenantId, project_id: project.id, user_id: payload.user_id, role: payload.role, created_by: principal.userId });
@@ -32,7 +85,7 @@ export function addLegacyProjectMember(req, res) {
       actorId: principal.userId, before: { user_id: payload.user_id, member: false }, after: { user_id: payload.user_id, member: true }, requestId: req.requestId });
     return { created: true };
   })();
-  res.status(result.created ? 201 : 200).json({ project_id: project.id, user_id: payload.user_id, ...result });
+  res.status(result.created ? 201 : 200).json({ project_id: req.params.projectId, user_id: payload.user_id, ...result });
 }
 export async function listPgProjectMembers(req, res) {
   const { companyId } = pgIdentity(req), id = pgId.parse(req.params.id);

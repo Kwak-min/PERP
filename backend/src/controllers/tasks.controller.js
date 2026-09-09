@@ -143,8 +143,13 @@ export function detail(req, res) {
     [{ sql: "task_id = ?", params: [task.id] }],
     { limit: 200, orderBy: "created_at ASC" },
   );
+  // Display only this task's assignee, never the write-only candidate directory.
+  const assignee = db().prepare(`SELECT u.name FROM membership m JOIN app_user u ON u.id = m.user_id
+    WHERE m.user_id = ? AND m.tenant_id = ? AND m.org_id = ? AND m.status = 'active'
+      AND m.deleted_at IS NULL AND u.auth_status = 'active'`).get(task.assignee_id, principal.tenantId, principal.orgId);
   res.json({
     ...view(task),
+    assignee_name: assignee?.name ?? null,
     checklist: checklist.map((c) => ({
       id: c.id,
       label: c.label,

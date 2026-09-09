@@ -44,7 +44,7 @@
 
 .rsv-space-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
   gap: 1rem;
 }
 
@@ -266,7 +266,6 @@
 }
 
 .rsv-reservation-card.cancelled {
-  opacity: 0.6;
   background: var(--of-surface-muted, #f1f5f9);
 }
 
@@ -277,9 +276,7 @@
   font-weight: 700;
   color: var(--of-text, #0f172a);
   margin: 0 0 0.25rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 
 .rsv-card-meta {
@@ -354,6 +351,33 @@
 }
 
 .rsv-modal-wide { max-width: 640px; }
+dialog.rsv-modal { margin: auto; max-width: min(480px, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); color: var(--of-text); }
+dialog.rsv-modal-wide { max-width: min(640px, calc(100vw - 2rem)); }
+dialog.rsv-modal::backdrop { background: rgba(15, 23, 42, 0.5); backdrop-filter: blur(3px); }
+.rsv-modal, .rsv-card-meta, .rsv-success-banner, .rsv-error-banner { overflow-wrap: anywhere; word-break: keep-all; }
+.rsv-modal input[type="checkbox"], .rsv-modal input[type="radio"] { width: 1rem; height: 1rem; min-height: 1rem; padding: 0; flex: 0 0 auto; accent-color: var(--of-primary); }
+.rsv-modal .rsv-time-fields { grid-template-columns: minmax(0, 1fr); }
+.rsv-form-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
+.rsv-form-group { min-width: 0; }
+.rsv-attendee-inputs { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .5rem; }
+.rsv-attendee-inputs input { min-width: 0; padding: .5rem; border: 1px solid var(--of-border-strong); border-radius: var(--r-md); }
+.rsv-modal .btn, .rsv-modal-close, .rsv-screen .btn { min-height: 44px; padding: .5rem .75rem; border: 1px solid var(--of-border-strong); border-radius: var(--r-md); background: var(--of-card); color: var(--of-text); cursor: pointer; }
+.rsv-modal .btn-primary { background: var(--of-primary); color: var(--of-card); border-color: var(--of-primary); }
+.rsv-modal .btn-danger { background: var(--of-danger); color: var(--of-card); }
+.rsv-modal button:disabled { opacity: .6; cursor: wait; }
+.rsv-modal :focus-visible, .rsv-screen :focus-visible { outline: 2px solid var(--of-primary); outline-offset: 2px; }
+.rsv-modal-footer, .rsv-tabs { flex-wrap: wrap; }
+.rsv-now-badge { display: inline-block; margin-left: .5rem; padding: .25rem .5rem; border-radius: var(--r-md); color: var(--of-success); background: var(--of-success-soft); font-size: .75rem; }
+.rsv-table-scroll { max-width: 100%; overflow-x: auto; }
+.rsv-table-scroll .rsv-admin-table { min-width: 760px; }
+.rsv-screen .rsv-admin-toolbar { flex-wrap: wrap; gap: .75rem; }
+@media (max-width: 600px) {
+  .rsv-modal .rsv-form-row { grid-template-columns: minmax(0, 1fr); }
+  .rsv-attendee-inputs { flex-direction: column; }
+  dialog.rsv-modal { padding: 1rem; }
+  .rsv-reservation-card { flex-direction: column; }
+  .rsv-card-actions { flex-direction: row; flex-wrap: wrap; align-items: center; }
+}
 
 .rsv-modal-header {
   display: flex;
@@ -571,6 +595,45 @@
 
 .rsv-empty-icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
 .rsv-empty-text { font-size: 0.875rem; }
+
+/* 공간 월 달력과 실제 예약 구간: 슬롯 크기로 점유 정보를 축약하지 않는다. */
+.rsv-screen { padding: 1.5rem; min-width: 0; }
+.rsv-selected-space-header { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; margin-bottom: 1rem; }
+.rsv-space-calendar { display: grid; gap: 1.5rem; min-width: 0; }
+.rsv-month-calendar, .rsv-day-occupancy { padding: 1rem; border: 1px solid var(--of-border); border-radius: var(--r-lg); background: var(--of-card); min-width: 0; }
+.rsv-calendar-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; }
+.rsv-calendar-toolbar h2, .rsv-calendar-toolbar h3 { margin: 0; font-size: 1rem; }
+.rsv-calendar-toolbar p, .rsv-calendar-hint, .rsv-occupancy-summary { color: var(--of-text-muted); font-size: .875rem; margin: .5rem 0 1rem; }
+.rsv-space-calendar .btn, .rsv-selected-space-header .btn { min-height: 44px; min-width: 44px; padding: .5rem .75rem; border: 1px solid var(--of-border-strong); border-radius: var(--r-md); background: var(--of-card); color: var(--of-primary-strong); cursor: pointer; font-size: .875rem; }
+.rsv-space-calendar .btn:hover, .rsv-selected-space-header .btn:hover { background: var(--of-primary-soft); }
+.rsv-month-nav { display: flex; gap: .25rem; align-items: center; min-width: 0; }
+.rsv-month-nav input { min-width: 0; width: 10rem; min-height: 44px; padding: .5rem; }
+.rsv-calendar-label { display: block; font-size: .75rem; color: var(--of-text-muted); }
+.rsv-month-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .25rem; }
+.rsv-weekday { text-align: center; padding: .5rem 0; font-size: .75rem; color: var(--of-text-muted); }
+.rsv-month-day { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .25rem; min-height: 64px; min-width: 0; padding: .5rem .25rem; border: 1px solid var(--of-border); border-radius: var(--r-md); background: var(--of-card); color: var(--of-text); cursor: pointer; font-variant-numeric: tabular-nums; }
+.rsv-month-day small { font-size: .75rem; color: var(--of-text-muted); }
+.rsv-month-day:hover { background: var(--of-surface-muted); }
+.rsv-month-day[aria-current="date"] { border-color: var(--of-primary); }
+.rsv-month-day[aria-pressed="true"] { background: var(--of-primary-soft); border-color: var(--of-primary); color: var(--of-primary-strong); font-weight: 700; }
+.rsv-intervals { list-style: none; padding: 0; margin: 0; display: grid; gap: .5rem; }
+.rsv-interval { width: 100%; min-height: 44px; display: grid; grid-template-columns: minmax(10rem, auto) 1fr; align-items: center; gap: .75rem; text-align: left; padding: .75rem; border: 1px solid var(--of-border); border-radius: var(--r-md); cursor: pointer; font-size: .875rem; color: var(--of-text); overflow-wrap: anywhere; }
+.rsv-interval-time { font-variant-numeric: tabular-nums; font-weight: 600; }
+.rsv-interval-free { background: var(--of-card); border-style: dashed; color: var(--of-text-muted); }
+.rsv-interval-mine { background: var(--of-primary-soft); border-color: var(--of-primary); color: var(--of-primary-strong); }
+.rsv-interval-busy { background: var(--of-surface-muted); }
+.rsv-interval:hover { border-color: var(--of-primary); }
+.rsv-space-calendar button:focus-visible, .rsv-space-card:focus-visible { outline: 2px solid var(--of-primary); outline-offset: 2px; }
+@media (max-width: 600px) {
+  .rsv-screen { padding: 1rem; }
+  .rsv-interval { grid-template-columns: 1fr; gap: .25rem; }
+  .rsv-month-calendar, .rsv-day-occupancy { padding: .75rem; }
+  .rsv-month-day { min-height: 56px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rsv-space-card { transition: none; }
+  .rsv-space-card:hover { transform: none; }
+}
 
 /* ── 에러/로딩 메시지 ───────────────────────────────────────────────────── */
 .rsv-error-banner {

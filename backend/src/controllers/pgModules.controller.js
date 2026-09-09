@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 import { pgIdentity, resolvePgCompanyPrincipal } from "../middleware/pgAccess.js";
 import { money, idempotentMutation, MONEY_TABLES, mutateFinancialRecord } from '../services/pg-finance.service.js';
+import { pgExpenseMutation, postPgTransaction } from '../services/pg-expenses.service.js';
 import { pgQuery, pgTransaction } from "../config/pg.js";
 import { MODULE_CATALOG } from "../config/modules.js";
 import { enabledFeatures, FEATURE_CATALOG, modulesForFeatures, validateFeatureSelection } from "../config/features.js";
@@ -10,6 +11,7 @@ import { pgEnabledFeatures } from "../middleware/features.js";
 import { validateSelection } from "../middleware/modules.js";
 import { hashPassword } from "../utils/crypto.js";
 import { isCompanyMember } from "../services/pg-company.service.js";
+import { mutatePgRoles } from '../services/pg-company-roles.service.js';
 import { readOrgActivity } from "../services/pg-org-audit.service.js";
 import { ApiError } from "../utils/errors.js";
 import { CANDIDATE_LIMIT, pgVaultScope, vaultSemantic } from "../services/vault-semantic.service.js";
@@ -19,6 +21,8 @@ import {
   pgDocumentSemanticScope,
 } from "../services/document-semantic.service.js";
 import { extractSupportedTextUpload, persistUploadedSource } from "../services/document-ingestion.service.js";
+import { graphEdge, graphIdentity, graphNode } from "../services/graph-identity.service.js";
+import { canReadPgApproval } from '../services/pg-approval-read-policy.service.js';
 
 // perp_db(PostgreSQL) 모듈 read 슬라이스.
 // strangler-fig 1단계: 홈/프로젝트/캘린더/재무/HR 화면을 실데이터로 전환.
@@ -162,7 +166,7 @@ export async function financeSummary(req, res) {
        FROM accounting.journal_lines l
        JOIN accounting.journal_entries e ON e.id = l.entry_id
        JOIN accounting.accounts a ON a.id = l.account_id
-      WHERE e.company_id = $1`,
+      WHERE e.company_id = $1 AND e.posted=true`,
     [companyId],
   );
   // Keep aggregate NUMERIC precision, including totals larger than a single entry.
@@ -185,6 +189,7 @@ export async function financeAccounts(req, res) {
   const items = rows.map((r) => ({
     value: String(r.id),
     label: `[${typeLabel[r.account_type] ?? r.account_type}] ${r.code} ${r.name}`,
+    account_type: r.account_type,
   }));
   res.json({ items });
 }
@@ -197,60 +202,18 @@ export async function createTransaction(req, res) {
     throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 거래를 만들 수 있습니다");
   }
   const body = req.body ?? {};
+  // Keep old value normalization, but never silently discard strict expense fields.
+  if (Object.keys(body).some(field => !['account_id', 'amount', 'entry_date', 'memo'].includes(field))) {
+    throw new ApiError('VALIDATION_ERROR', 'Use /pg/finance/expenses for expense fields.');
+  }
   const accountId = body.account_id;
   const amount = money(body.amount);
   const entryDate = body.entry_date || null;
   if (entryDate) z.string().date().parse(entryDate);
   const memo = String(body.memo ?? "").trim() || null;
   if (!accountId) throw new ApiError("VALIDATION_ERROR", "계정을 선택하세요");
-  const result = await idempotentMutation(req, 'transaction.create', { account_id: String(accountId), amount, entry_date: entryDate, memo }, async client => {
-  // 계정 조회부터 게시까지 같은 트랜잭션이다.
-  const { rows: accRows } = await client.query(
-    `SELECT id, account_type FROM accounting.accounts
-      WHERE id = $1 AND company_id = $2 AND is_active = true AND account_type IN ('revenue','expense') FOR SHARE`,
-    [accountId, companyId],
-  );
-  const account = accRows[0];
-  if (!account) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 계정입니다");
-
-  // 상대 계정 = 회사의 자산(현금) 계정 중 코드 최소값
-  const { rows: cashRows } = await client.query(
-    `SELECT id FROM accounting.accounts
-      WHERE company_id = $1 AND account_type = 'asset' AND is_active = true
-      ORDER BY code LIMIT 1 FOR SHARE`,
-    [companyId],
-  );
-  const cash = cashRows[0];
-  if (!cash) throw new ApiError("VALIDATION_ERROR", "현금(자산) 계정이 없어 거래를 만들 수 없습니다");
-
-  const { rows: entryRows } = await client.query(
-    `INSERT INTO accounting.journal_entries (company_id, entry_date, memo, created_by, posted)
-     VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3, $4, false) RETURNING id`,
-    [companyId, entryDate, memo, userId],
-  );
-  const entryId = entryRows[0].id;
-
-  // 수입: 현금 차변 / 수입 대변 · 지출: 지출 차변 / 현금 대변
-  const lines =
-    account.account_type === "revenue"
-      ? [
-          { accountId: cash.id, debit: amount, credit: 0 },
-          { accountId: account.id, debit: 0, credit: amount },
-        ]
-      : [
-          { accountId: account.id, debit: amount, credit: 0 },
-          { accountId: cash.id, debit: 0, credit: amount },
-        ];
-  for (const l of lines) {
-    await client.query(
-      `INSERT INTO accounting.journal_lines (entry_id, account_id, debit, credit)
-       VALUES ($1, $2, $3, $4)`,
-      [entryId, l.accountId, l.debit, l.credit],
-    );
-  }
-  await client.query('UPDATE accounting.journal_entries SET posted=true WHERE id=$1', [entryId]);
-  return { id: String(entryId), version: 1 };
-  });
+  const payload = { account_id: String(accountId), amount, entry_date: entryDate, memo };
+  const result = await pgExpenseMutation(req, 'transaction.create', payload, client => postPgTransaction(client, req, payload));
   res.status(201).json(result);
 }
 
@@ -259,7 +222,8 @@ export async function financeTransactions(req, res) {
   const companyId = await resolveCompanyId(req);
   if (!companyId) return res.json({ items: [] });
   const { rows } = await pgQuery(
-    `SELECT e.id AS __id, e.entry_date AS 일자, e.memo AS 내용,
+    `SELECT e.id AS __id, to_char(e.entry_date, 'YYYY-MM-DD') AS 일자, e.memo AS 내용,
+            e.counterparty,e.occurred_at,e.input_currency,e.no_receipt_reason,e.budget_id,
             COALESCE(SUM(l.debit), 0) AS 차변,
             COALESCE(SUM(l.credit), 0) AS 대변,
             CASE WHEN e.posted THEN 'confirmed' ELSE 'pending' END AS status, e.version AS __version
@@ -276,20 +240,22 @@ export async function financeTransactions(req, res) {
 // GET /api/v1/pg/approvals — 결재(승인요청)
 export async function approvals(req, res) {
   const principal = await resolvePgCompanyPrincipal(req);
-  const { companyId, userId } = principal;
+  const { companyId } = principal;
   if (!principal.has('approval.decide')) principal.require('approval.request');
   const canDecide = principal.has('approval.decide');
   const { rows } = await pgQuery(
-    `SELECT ar.id AS __id, ar.request_type AS 유형, r.name AS 신청자, t.name AS 대상,
+    `SELECT ar.id AS __id, ar.requester_id, to_jsonb(ar)->>'title' AS title, ar.request_type AS 유형, r.name AS 신청자, t.name AS 대상,
             ar.status AS status, ar.created_at AS 신청일, ar.payload, ar.decision_note, ar.decided_at
        FROM org.approval_requests ar
        LEFT JOIN auth.users r ON r.id = ar.requester_id
        LEFT JOIN auth.users t ON t.id = ar.target_user_id
-      WHERE ar.company_id = $1 AND ($2::boolean OR ar.requester_id = $3)
+      WHERE ar.company_id = $1
       ORDER BY ar.created_at DESC, ar.id DESC`,
-    [companyId, canDecide, userId],
+    [companyId],
   );
-  res.json({ items: rows, can_decide: canDecide, can_request: principal.has('approval.request') });
+  // 같은 읽기 predicate를 통과한 행에만 인증 ID 기반 내 요청 분류용 ID를 투영한다.
+  const items = rows.filter(row => canReadPgApproval(principal, row));
+  res.json({ items, can_decide: canDecide, can_request: principal.has('approval.request') });
 }
 
 // GET /api/v1/pg/tasks — 업무 (project.tasks)
@@ -409,6 +375,12 @@ export async function pgDocumentsGraph(req, res) {
     pgDocumentsFor(identity.companyId),
   ]);
   const projectName = new Map(projectRows.map((project) => [String(project.id), project.name]));
+  const projectIdentities = new Map(projectRows.map((project) => [String(project.id), graphIdentity({
+    store: "pg", company: identity.companyId, kind: "space", opaqueId: project.id,
+  })]));
+  const documentIdentities = new Map(documents.map((document) => [document.id, graphIdentity({
+    store: "pg", company: identity.companyId, kind: "document", opaqueId: document.id,
+  })]));
   const titleIds = new Map();
   for (const document of documents) {
     const ids = titleIds.get(document.title) ?? [];
@@ -418,19 +390,25 @@ export async function pgDocumentsGraph(req, res) {
   const chunks = new Map(documents.map((document) => [document.id,
     Math.max(1, document.content.split("\n\n").map((part) => part.trim()).filter(Boolean).length)]));
   const nodes = [
-    ...projectRows.map((project) => ({
+    ...projectRows.map((project) => graphNode({
       id: `project:${project.id}`, kind: "space", title: project.name, folder: project.name,
       sensitivity: "org", chunks: 0, tags: [], updated_at: project.updated_at instanceof Date ? project.updated_at.toISOString() : String(project.updated_at ?? ""),
-    })),
-    ...documents.map((document) => ({
+    }, projectIdentities.get(String(project.id)))),
+    ...documents.map((document) => graphNode({
       id: document.id, kind: "document", title: document.title, folder: document.project_name,
       sensitivity: "internal", chunks: chunks.get(document.id), tags: [], updated_at: document.updated_at,
-    })),
+    }, documentIdentities.get(document.id))),
   ];
   const edges = [];
   for (const document of documents) {
+    const sourceIdentity = documentIdentities.get(document.id);
     if (projectName.has(document.project_id)) {
-      edges.push({ source: document.id, target_id: `project:${document.project_id}`, target_title: document.project_name, kind: "space" });
+      edges.push(graphEdge(
+        { source: document.id, target_id: `project:${document.project_id}`, target_title: document.project_name, kind: "space" },
+        sourceIdentity,
+        projectIdentities.get(document.project_id),
+        { binding: "membership", resolution: "resolved" },
+      ));
     }
     const seen = new Set();
     for (const match of document.content.matchAll(/\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g)) {
@@ -440,12 +418,25 @@ export async function pgDocumentsGraph(req, res) {
       const ids = titleIds.get(title) ?? [];
       const targetId = ids.length === 1 ? ids[0] : null;
       if (targetId === document.id) continue;
-      edges.push({ source: document.id, target_id: targetId, target_title: targetId ? title : "", kind: "link" });
+      const targetIdentity = targetId ? documentIdentities.get(targetId) : null;
+      edges.push(graphEdge(
+        { source: document.id, target_id: targetId, target_title: targetId ? title : "", kind: "link" },
+        sourceIdentity,
+        targetIdentity,
+        targetIdentity
+          ? { binding: "title", resolution: "resolved" }
+          : { binding: "title", resolution: "unresolved", reason: ids.length > 1 ? "duplicate_title" : "title_not_found" },
+      ));
     }
   }
   const semantic = documentSemantic.graph(scope, documents);
-  edges.push(...semantic.edges);
-  const linked = new Set(edges.flatMap((edge) => [edge.source, edge.target_id]).filter(Boolean));
+  for (const edge of semantic.edges) {
+    const sourceIdentity = documentIdentities.get(edge.source);
+    const targetIdentity = documentIdentities.get(edge.target_id);
+    if (sourceIdentity && targetIdentity) edges.push(graphEdge(edge, sourceIdentity, targetIdentity, { binding: "inference", resolution: "resolved" }));
+  }
+  const linked = new Set(edges.filter((edge) => edge.resolution === "resolved")
+    .flatMap((edge) => [edge.source, edge.target_id]).filter(Boolean));
   res.json({
     nodes,
     edges,
@@ -672,7 +663,7 @@ export async function getRecord(req, res) {
     : `t.${col} AS ${col}`,
   ).join(", ");
   const { rows } = await pgQuery(
-    `SELECT ${selects}${Object.hasOwn(MONEY_TABLES, resource) ? ', t.version' : ''} FROM ${def.table} t WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")}`,
+    `SELECT t.id::text AS id, ${selects}${Object.hasOwn(MONEY_TABLES, resource) || resource === "documents" ? ', t.version' : ''} FROM ${def.table} t WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")}`,
     [id, companyId],
   );
   if (!rows[0]) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
@@ -688,7 +679,17 @@ export async function updateRecord(req, res) {
   const def = EDITABLE[resource];
   if (!def) throw new ApiError("VALIDATION_ERROR", "수정할 수 없는 항목입니다");
   if (!/^\d+$/.test(String(id))) throw new ApiError("VALIDATION_ERROR", "잘못된 id");
+  if (resource === "documents") {
+    const visible = await pgQuery(
+      `SELECT t.id FROM ${def.table} t WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")}`,
+      [id, companyId],
+    );
+    if (visible.rowCount === 0) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
+  }
   const body = req.body ?? {};
+  const documentVersion = resource === "documents"
+    ? z.object({ version: z.number().int().positive() }).passthrough().parse(body).version
+    : null;
   const sets = [];
   const params = [id, companyId];
   for (const [col, type] of def.fields) {
@@ -706,13 +707,31 @@ export async function updateRecord(req, res) {
   }
   if (sets.length === 0) throw new ApiError("VALIDATION_ERROR", "변경할 내용이 없습니다");
   if (Object.hasOwn(MONEY_TABLES, resource)) return res.json(await mutateFinancialRecord(req, resource, id, sets, params));
-  if (resource === "documents") sets.push("version = t.version + 1");
+  if (resource === "documents") {
+    params.push(documentVersion);
+    sets.push("version = t.version + 1");
+    const result = await pgQuery(
+      `UPDATE ${def.table} t SET ${sets.join(", ")}
+        WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")} AND t.version = $${params.length}
+        RETURNING t.id, t.version`,
+      params,
+    );
+    if (result.rowCount === 0) {
+      const visible = await pgQuery(
+        `SELECT t.id FROM ${def.table} t WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")}`,
+        [id, companyId],
+      );
+      if (visible.rowCount === 0) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
+      throw new ApiError("VERSION_CONFLICT", "문서가 다른 곳에서 수정되었습니다");
+    }
+    documentSemantic.invalidate(pgDocumentSemanticScope(identity), String(id), Number(result.rows[0].version));
+    return res.json({ id: String(result.rows[0].id), version: Number(result.rows[0].version) });
+  }
   const result = await pgQuery(
     `UPDATE ${def.table} t SET ${sets.join(", ")} WHERE t.id = $1 AND ${ownershipClause(def.scope, "t")}`,
     params,
   );
   if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "대상을 찾을 수 없습니다");
-  if (resource === "documents") documentSemantic.invalidate(pgDocumentSemanticScope(identity), String(id));
   res.json({ ok: true });
 }
 
@@ -824,13 +843,14 @@ const toNote = (r) => ({
   tags: [],
   pinned: false,
   agent_enabled: false,
-  version: Number(r.version),
+  // PostgreSQL xmin is an opaque concurrency token, not an application sequence.
+  version: z.string().regex(/^\d+$/).parse(r.version),
 });
 const noteFields = "n.id, n.title, n.content_md, n.folder_path, n.xmin::text AS version";
 const noteInput = z.object({
   title: z.string().trim().min(1), content: z.string().default(""), folder: z.string().min(1).default("/"),
 }).strict();
-const notePatch = noteInput.partial().extend({ version: z.number().int().nonnegative() }).strict();
+const notePatch = noteInput.partial().extend({ version: z.string().regex(/^\d+$/) }).strict();
 const noteId = z.string().regex(/^\d+$/);
 async function ownedNotes(userId, bounded = false) {
   const { rows } = await pgQuery(
@@ -865,6 +885,9 @@ export async function vaultGraph(req, res) {
   const scope = pgVaultScope(identity);
   if (req.query.wait === "1") await vaultSemantic.wait(scope);
   const items = await ownedNotes(identity.userId);
+  const identities = new Map(items.map((note) => [note.id, graphIdentity({
+    store: "pg", owner: identity.userId, kind: "note", opaqueId: note.id,
+  })]));
   const byTitle = new Map();
   for (const note of items) {
     const key = note.title.trim().toLowerCase();
@@ -880,15 +903,33 @@ export async function vaultGraph(req, res) {
       if (!title || seen.has(key)) continue;
       seen.add(key);
       const target = byTitle.get(key) ?? null;
-      edges.push({ source: note.id, target_id: target, target_title: title });
+      const targetIdentity = target ? identities.get(target) : null;
+      edges.push(graphEdge(
+        { source: note.id, target_id: target, target_title: title },
+        identities.get(note.id),
+        targetIdentity,
+        targetIdentity
+          ? { binding: "title", resolution: "resolved" }
+          : { binding: "title", resolution: "unresolved", reason: byTitle.has(key) ? "duplicate_title" : "title_not_found" },
+      ));
       if (target) { connected.add(note.id); connected.add(target); }
     }
   }
   const semantic = vaultSemantic.graph(scope, items);
-  edges.push(...semantic.edges);
-  for (const edge of semantic.edges) { connected.add(edge.source); connected.add(edge.target_id); }
-  res.json({ nodes: items.map(({ id, title, folder }) => ({ id, title, folder })), edges, analysis: semantic.analysis,
-    orphans: items.filter(note => !connected.has(note.id)).map(note => note.id) });
+  for (const edge of semantic.edges) {
+    const sourceIdentity = identities.get(edge.source);
+    const targetIdentity = identities.get(edge.target_id);
+    if (sourceIdentity && targetIdentity) {
+      edges.push(graphEdge(edge, sourceIdentity, targetIdentity, { binding: "inference", resolution: "resolved" }));
+      connected.add(edge.source); connected.add(edge.target_id);
+    }
+  }
+  res.json({
+    nodes: items.map(({ id, title, folder }) => graphNode({ id, title, folder }, identities.get(id))),
+    edges,
+    analysis: semantic.analysis,
+    orphans: items.filter(note => !connected.has(note.id)).map(note => note.id),
+  });
 }
 
 // GET /api/v1/pg/vault/notes/:id
@@ -933,7 +974,7 @@ export async function vaultUpdateNote(req, res) {
        FROM notes.vaults v
       WHERE n.id = $1 AND n.vault_id = v.id AND v.owner_id = $2 AND n.xmin::text = $6
       RETURNING ${noteFields}`,
-    [id, userId, body.title ?? null, body.content ?? null, body.folder ?? null, String(body.version)],
+    [id, userId, body.title ?? null, body.content ?? null, body.folder ?? null, body.version],
   );
   if (result.rowCount === 0) {
     const owned = await pgQuery(`SELECT n.id FROM notes.notes n JOIN notes.vaults v ON v.id = n.vault_id
@@ -1045,7 +1086,8 @@ export async function positionOptions(req, res) {
 
 // POST /api/v1/pg/members — 구성원 추가(회사에 사용자 생성)
 export async function createMember(req, res) {
-  const { companyId } = await resolveUser(req);
+  const principal = await resolvePgCompanyPrincipal(req);
+  const { companyId } = principal;
   if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 구성원을 추가할 수 있습니다");
   const body = req.body ?? {};
   const email = String(body.email ?? "").trim();
@@ -1053,6 +1095,7 @@ export async function createMember(req, res) {
   const password = String(body.password ?? "");
   const departmentId = body.department_id || null;
   const positionId = body.position_id || null;
+  if (Object.hasOwn(body, 'roles')) throw new ApiError('VALIDATION_ERROR', '역할 배정은 현재 역할 버전으로 역할 설정에서 요청하세요');
   if (!email || !email.includes("@")) throw new ApiError("VALIDATION_ERROR", "올바른 이메일을 입력하세요");
   if (!name) throw new ApiError("VALIDATION_ERROR", "이름은 필수입니다");
   if (password.length < 8) throw new ApiError("VALIDATION_ERROR", "초기 비밀번호는 8자 이상이어야 합니다");
@@ -1067,17 +1110,19 @@ export async function createMember(req, res) {
     const { rows } = await pgQuery(`SELECT 1 FROM org.positions WHERE id=$1 AND company_id=$2`, [positionId, companyId]);
     if (!rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 직급입니다");
   }
-  const { rows } = await pgTransaction(async client => {
-    const created = await client.query(
+  const value = await mutatePgRoles(principal, req.requestId, async ({ query, authority }) => {
+    authority.require('member.write');
+    const created = await query(
       `INSERT INTO auth.users (company_id, department_id, position_id, email, name, password_hash, approval_status, approved_at)
        VALUES ($1, $2, $3, $4, $5, $6, 'approved', now()) RETURNING id`,
       [companyId, departmentId, positionId, email, name, hashPassword(password)],
     );
-    await client.query(`INSERT INTO org.company_memberships (company_id, user_id, department_id, position_id, created_by)
-      VALUES ($1, $2, $3, $4, $5)`, [companyId, created.rows[0].id, departmentId, positionId, resolveUser(req).userId]);
-    return created;
-  });
-  res.status(201).json({ id: String(rows[0].id) });
+    await query(`INSERT INTO org.company_memberships (company_id, user_id, department_id, position_id, created_by)
+      VALUES ($1, $2, $3, $4, $5)`, [companyId, created.rows[0].id, departmentId, positionId, principal.userId]);
+    const value = { id: String(created.rows[0].id) };
+    return { action: 'member.provisioned', resourceId: value.id, after: { roles: [] }, value };
+  }, 'menu.members');
+  res.status(201).json(value);
 }
 
 // POST /api/v1/pg/tasks — 업무 생성 (project.tasks)

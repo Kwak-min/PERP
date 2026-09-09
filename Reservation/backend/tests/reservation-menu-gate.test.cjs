@@ -71,7 +71,10 @@ after(async () => {
   if (databaseRoot) await assert.rejects(access(databaseRoot), { code: 'ENOENT' });
 });
 async function assign(actor, kind) {
-  const changed = await api(erp.baseUrl, `/settings/members/${actor.memberId}/roles`, { ...actor.owner, method: 'PUT', body: { roles: [actor.roles[kind]] } });
+  const members = await api(erp.baseUrl, '/settings/members', actor.owner);
+  assert.equal(members.status, 200);
+  const current = members.body.items.find(row => row.membership_id === actor.memberId);
+  const changed = await api(erp.baseUrl, `/settings/members/${actor.memberId}/roles`, { ...actor.owner, method: 'PUT', body: { roles: [actor.roles[kind]], expected_roles_version: current.roles_version } });
   assert.equal(changed.status, 200);
 }
 async function request(actor, method, route, body, headers = {}) {

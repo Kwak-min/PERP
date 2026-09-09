@@ -12,6 +12,8 @@
     "dev:backend": "npm run dev --workspace backend",
     "build": "npm run build --workspace frontend",
     "test": "npm run test --workspace backend && npm run test --workspace frontend",
+    "test:deadline": "node scripts/run_deadline_gate.mjs",
+    "test:deadline:gate": "node scripts/run_deadline_isolated.mjs node --test scripts/deadline-gate.test.mjs",
     "start": "npm run start --workspace backend"
   }
 }

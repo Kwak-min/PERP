@@ -1,10 +1,11 @@
 import { NextFunction, Request, Response } from 'express';
-import { reservationService } from './reservation.service';
+import { readableReservation, reservationService } from './reservation.service';
 import {
   createReservationSchema,
   updateReservationSchema,
   timetableQuerySchema,
   listQuerySchema,
+  cancelQuerySchema,
 } from './reservation.schema';
 import { sendSuccess } from '../../common/response';
 import { principalOf, requireReservationWrite } from '../../auth/principal';
@@ -20,7 +21,7 @@ export const reservationController = {
   getReservations: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const q = listQuerySchema.parse(req.query);
-      const data = await reservationService.findMany(principalOf(req), q.spaceId, q.from, q.to, q.mine === 'true');
+      const data = await reservationService.findMany(principalOf(req), q);
       sendSuccess(res, data);
     } catch (err) { next(err); }
   },
@@ -49,8 +50,9 @@ export const reservationController = {
    */
   getReservationById: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const data = await reservationService.findById(Number(req.params.id), principalOf(req));
-      sendSuccess(res, data);
+      const principal = principalOf(req);
+      const data = await reservationService.findById(Number(req.params.id), principal);
+      sendSuccess(res, readableReservation(data, principal));
     } catch (err) { next(err); }
   },
 
@@ -99,11 +101,7 @@ export const reservationController = {
     try {
       const principal = principalOf(req);
       requireReservationWrite(principal);
-      const rawScope = req.query.cancelScope as string | undefined;
-      const validScopes = ['THIS', 'THIS_AND_FOLLOWING', 'ALL'] as const;
-      const cancelScope = validScopes.includes(rawScope as typeof validScopes[number])
-        ? (rawScope as typeof validScopes[number])
-        : 'THIS';
+      const { cancelScope } = cancelQuerySchema.parse(req.query);
 
       const data = await reservationService.cancel(Number(req.params.id), principal, cancelScope);
       sendSuccess(res, data, 200, '예약이 취소되었습니다.');

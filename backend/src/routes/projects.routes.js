@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { listLegacyProjectMembers } from '../controllers/projectMembers.controller.js';
+import { listLegacyProjectCandidates, listLegacyProjectMembers } from '../controllers/projectMembers.controller.js';
 
 import * as controller from "../controllers/projects.controller.js";
 import { asyncRoute } from "../middleware/error.js";
@@ -12,5 +12,6 @@ projectsRouter.get("/:projectId", asyncRoute(controller.detail));
 projectsRouter.patch("/:projectId", asyncRoute(controller.patch));
 projectsRouter.delete("/:projectId", asyncRoute(controller.archive));
 projectsRouter.post("/:projectId/milestones", asyncRoute(controller.addMilestone));
+projectsRouter.get('/:projectId/candidates', asyncRoute(listLegacyProjectCandidates));
 projectsRouter.get('/:projectId/members', asyncRoute(listLegacyProjectMembers));
 projectsRouter.post("/:projectId/members", asyncRoute(controller.addMember));

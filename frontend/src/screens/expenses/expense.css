@@ -1,0 +1,45 @@
+.expense-screen { min-width: 0; word-break: keep-all; overflow-wrap: anywhere; }
+.expense-screen h2 { font-size: 18px; margin: 0 0 8px; }
+.expense-screen h3 { font-size: 15px; margin: 4px 0; }
+.expense-screen p { color: var(--of-text-muted); }
+.expense-panel { padding: 16px; margin: 16px 0; border: 1px solid var(--of-border); border-radius: var(--r-lg); background: var(--of-card); min-width: 0; }
+.expense-panel > header { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+.expense-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.expense-screen label { display: grid; gap: 8px; min-width: 0; }
+.expense-screen input, .expense-screen textarea, .expense-screen select { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; border: 1px solid var(--of-border-strong); border-radius: var(--r-md); padding: 8px 12px; background: var(--of-card); color: var(--of-text); font: inherit; }
+.expense-screen textarea { min-height: 80px; resize: vertical; }
+.expense-screen input:focus-visible, .expense-screen textarea:focus-visible, .expense-screen select:focus-visible { outline: 2px solid var(--of-primary); outline-offset: 2px; }
+.expense-screen fieldset { border: 0; margin: 0 0 16px; padding: 0; min-width: 0; }
+.expense-screen legend { font-weight: 700; margin-bottom: 12px; }
+.expense-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.expense-screen .expense-confirm { display: flex; align-items: center; gap: 12px; margin: 16px 0; }
+.expense-confirm input { width: 20px; flex-shrink: 0; }
+.expense-screen [role="alert"] { color: var(--of-danger); }
+.expense-receipts { margin-top: 16px !important; }
+.expense-receipts ul, .expense-files { padding: 0; list-style: none; }
+.expense-receipts li, .expense-files li { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 0; border-bottom: 1px solid var(--of-border); }
+.expense-receipts li > span:first-child, .expense-files li > span { flex: 1 1 200px; min-width: 0; }
+.expense-ledger { padding: 0; margin: 16px 0; list-style: none; }
+.expense-ledger > li { display: flex; justify-content: space-between; gap: 16px; padding: 16px 0; border-top: 1px solid var(--of-border); }
+.expense-ledger > li > div { min-width: 0; }
+.expense-kicker { color: var(--of-text-muted); font-size: 12px; }
+.expense-ledger-amount { display: grid; gap: 8px; text-align: right; justify-items: end; font-variant-numeric: tabular-nums; }
+.expense-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.expense-facts dt { color: var(--of-text-muted); margin-bottom: 4px; }
+.expense-facts dd { margin: 0; white-space: pre-wrap; }
+.expense-table-wrap { overflow-x: auto; max-width: 100%; }
+.expense-table-wrap table { width: 100%; border-collapse: collapse; text-align: left; font-variant-numeric: tabular-nums; }
+.expense-table-wrap td, .expense-table-wrap th { padding: 8px; border-bottom: 1px solid var(--of-border); }
+.expense-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px; }
+.expense-summary dd { margin: 8px 0 0; font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.expense-import-mapping { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 12px; margin-bottom: 16px; }
+.expense-import small { color: var(--of-text-muted); }
+.expense-import table label { display: flex; align-items: center; gap: 6px; white-space: nowrap; margin-top: 6px; }
+.expense-import table input[type="checkbox"] { width: 20px; min-height: 20px; }
+@media (max-width: 600px) {
+  .expense-screen .screen-header { flex-direction: column; align-items: stretch; }
+  .expense-fields, .expense-facts, .expense-summary { grid-template-columns: minmax(0, 1fr); }
+  .expense-ledger > li { flex-direction: column; }
+  .expense-ledger-amount { text-align: left; justify-items: start; }
+  .expense-screen button { min-height: 44px; }
+}

@@ -1,21 +1,47 @@
 import { Router } from "express";
+import { expenseImportsRouter } from './expenseImports.routes.js';
 
 import * as controller from "../controllers/pgAuth.controller.js";
 import { createCompany } from "../controllers/pgCompanies.controller.js";
 import * as members from "../controllers/pgMembers.controller.js";
 import * as mod from "../controllers/pgModules.controller.js";
+import * as expenses from '../controllers/pgExpenses.controller.js';
+import * as analytics from '../controllers/pgAnalytics.controller.js';
 import * as corrections from '../controllers/pgDailyCorrections.controller.js';
 import * as projectMembers from '../controllers/projectMembers.controller.js';
 import { pgRoute, pgRecordRoute } from "../middleware/pgAccess.js";
 import { asyncRoute } from "../middleware/error.js";
 import { withPgFeature } from "../middleware/features.js";
 import { pgAgentKeyRouter } from "./pg-agent-key.routes.js";
-import { decidePgApproval } from '../controllers/pgApprovalDecision.controller.js';
+import { decidePgApproval as decideLegacyPgApproval } from '../controllers/pgApprovalDecision.controller.js';
+import { createPgDraft, patchPgDraft, submitPgDraft, getPgApproval, pgApprovalHistory, decidePgApproval,
+  withdrawPgApproval, resubmitPgApproval, listPgForms, savePgForm } from '../controllers/pgApprovals.controller.js';
 import { duesPaymentHistory, recordDuesPayment } from '../controllers/pgDuesPayments.controller.js';
 
 // perp_db (PostgreSQL) 슬라이스 라우터. strangler-fig: 기존 SQLite 라우트와 분리.
 // 마운트 지점: /api/v1/pg
+import { receiptRaw, uploadReceipt, downloadReceipt } from '../controllers/receiptFiles.controller.js';
+import { knowledgeWikiRouter } from './knowledge-wiki.routes.js';
+import { knowledgeWikiPublicationRouter } from './knowledge-wiki-publication.routes.js';
+
 export const pgRouter = Router();
+pgRouter.use('/finance/transactions/imports', expenseImportsRouter('perp_db'));
+pgRouter.get('/analytics/kpis', asyncRoute(pgRoute(analytics.kpis, 'analytics.read', 'analytics')));
+pgRouter.get('/analytics/reports/:reportKey', asyncRoute(pgRoute(analytics.report, 'analytics.read', 'analytics')));
+pgRouter.post('/analytics/exports', asyncRoute(pgRoute(analytics.createExport, 'analytics.read', 'analytics')));
+pgRouter.get('/analytics/exports', asyncRoute(pgRoute(analytics.listExports, 'analytics.read', 'analytics')));
+pgRouter.get('/analytics/exports/:exportId/download', asyncRoute(pgRoute(analytics.downloadExport, 'analytics.read', 'analytics')));
+pgRouter.post('/finance/expenses', asyncRoute(pgRoute(expenses.createExpense, 'transaction.write', 'finance')));
+pgRouter.post('/finance/transactions/:id/receipts', asyncRoute(pgRoute(expenses.appendReceipts, 'transaction.write', 'finance')));
+pgRouter.get('/finance/transactions/:id', asyncRoute(pgRoute(expenses.transactionDetail, 'transaction.read', 'finance')));
+pgRouter.post('/finance/transactions/receipt-uploads', (req, res, next) => asyncRoute(pgRoute(() => next(), 'transaction.write', 'finance'))(req, res, next), receiptRaw, asyncRoute(uploadReceipt('perp_db', 'transaction')));
+pgRouter.get('/finance/transactions/:id/receipts/:fileId', asyncRoute(pgRoute(downloadReceipt('perp_db', 'transaction'), 'transaction.read', 'finance')));
+pgRouter.post('/approvals/receipt-uploads', (req, res, next) => asyncRoute(pgRoute(withPgFeature('approvals', () => next()), 'approval.request', null))(req, res, next), receiptRaw, asyncRoute(uploadReceipt('perp_db', 'approval')));
+pgRouter.get('/approvals/:id/receipts/:fileId', asyncRoute(pgRoute(withPgFeature('approvals', downloadReceipt('perp_db', 'approval')))));
+pgRouter.use('/vault/wiki', knowledgeWikiPublicationRouter('pg', 'personal'));
+pgRouter.use('/vault/wiki', knowledgeWikiRouter('pg', 'personal'));
+pgRouter.use('/documents/wiki', knowledgeWikiPublicationRouter('pg', 'company'));
+pgRouter.use('/documents/wiki', knowledgeWikiRouter('pg', 'company'));
 
 pgRouter.use("/agent/api-key", pgAgentKeyRouter);
 pgRouter.get("/health", asyncRoute(controller.health));
@@ -66,11 +92,23 @@ pgRouter.get('/assets/:id/custody', asyncRoute(pgRoute(corrections.getAssetCusto
 pgRouter.patch('/assets/:id/custody', asyncRoute(pgRoute(corrections.patchAssetCustody, 'asset.write', 'assets')));
 pgRouter.get("/tasks", asyncRoute(pgRoute(mod.tasks, "task.read", "tasks")));
 pgRouter.post("/tasks", asyncRoute(pgRoute(projectMembers.createPgProjectTask, "task.write", "tasks")));
+pgRouter.get('/projects/:id/candidates', asyncRoute(pgRoute(projectMembers.listPgProjectCandidates, 'project.write', 'projects')));
+pgRouter.get('/tasks/:id/assignees', asyncRoute(pgRoute(projectMembers.listPgTaskAssignees, 'task.write', 'tasks')));
 pgRouter.get('/projects/:id/members', asyncRoute(pgRoute(projectMembers.listPgProjectMembers, 'project.read', 'projects')));
 pgRouter.post('/projects/:id/members', asyncRoute(pgRoute(projectMembers.addPgProjectMember, 'project.write', 'projects')));
-pgRouter.get("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.approvals))));
-pgRouter.post("/approvals", asyncRoute(pgRoute(withPgFeature("approvals", mod.createApproval), "approval.request", null)));
-pgRouter.post('/approvals/:id/decide', asyncRoute(pgRoute(withPgFeature('approvals', decidePgApproval), 'approval.decide', null)));
+pgRouter.get('/approvals/forms', asyncRoute(pgRoute(withPgFeature('approvals', listPgForms))));
+pgRouter.post('/approvals/forms', asyncRoute(pgRoute(withPgFeature('approvals', savePgForm))));
+pgRouter.post('/approvals/drafts', asyncRoute(pgRoute(withPgFeature('approvals', createPgDraft))));
+pgRouter.get('/approvals', asyncRoute(pgRoute(withPgFeature('approvals', mod.approvals))));
+pgRouter.post('/approvals', asyncRoute(pgRoute(withPgFeature('approvals', mod.createApproval), 'approval.request', null)));
+pgRouter.patch('/approvals/:id/draft', asyncRoute(pgRoute(withPgFeature('approvals', patchPgDraft))));
+pgRouter.post('/approvals/:id/submit', asyncRoute(pgRoute(withPgFeature('approvals', submitPgDraft))));
+pgRouter.get('/approvals/:id/history', asyncRoute(pgRoute(withPgFeature('approvals', pgApprovalHistory))));
+pgRouter.post('/approvals/:id/resubmit', asyncRoute(pgRoute(withPgFeature('approvals', resubmitPgApproval))));
+pgRouter.post('/approvals/:id/withdraw', asyncRoute(pgRoute(withPgFeature('approvals', withdrawPgApproval))));
+pgRouter.post('/approvals/:id/actions', asyncRoute(pgRoute(withPgFeature('approvals', decidePgApproval))));
+pgRouter.post('/approvals/:id/decide', asyncRoute(pgRoute(withPgFeature('approvals', decideLegacyPgApproval), 'approval.decide', null)));
+pgRouter.get('/approvals/:id', asyncRoute(pgRoute(withPgFeature('approvals', getPgApproval))));
 pgRouter.get("/documents/graph", asyncRoute(pgRoute(mod.pgDocumentsGraph, "document.read", "documents")));
 pgRouter.post("/documents/upload", asyncRoute(pgRoute(mod.pgUploadDocument, "document.write", "documents")));
 pgRouter.get("/documents/:id/analysis", asyncRoute(pgRoute(mod.pgDocumentAnalysis, "document.read", "documents")));

@@ -24,9 +24,40 @@ secret을 공유하지 않습니다. ERP는 SQLite와 `perp_db`를 동시에 사
 
 | 저장소 | 현재 적용 경로 | 배포 주의 |
 |---|---|---|
-| ERP SQLite | `npm run migrate --workspace backend`; ERP 시작 전 자동 실행 | PG bearer 허용 전에 v5 `auth_identity` 적용 필수 |
-| `perp_db` | `db/perp_schema.sql`, `db/perp_additions_v2.sql` 수동 관리 | 앱 시작이 적용하지 않음; PG expiry는 기존 `login_at`+TTL이라 추가 migration 없음 |
+| ERP SQLite | `npm run migrate --workspace backend`; ERP 시작 전 자동 실행 | PG bearer 허용 전에 v5 `auth_identity` 적용 필수. 이번 기능군은 9(역할) → 10(원증빙·실지출) → 11(결재) → 12(Wiki) → 13(CSV 가져오기) → 14(Wiki 무효화). 번호 Set 적용이므로 비연속 허용 |
+| `perp_db` | `db/perp_schema.sql`, `db/perp_additions_v2.sql`~`v10` 기존 + 아래 v11~v18 수동 관리 | 앱 시작이 적용하지 않음; PG expiry는 기존 `login_at`+TTL이라 추가 migration 없음 |
 | 예약 DB | Prisma schema + local `init.sql` + `prisma/migrations/` | baseline부터 현재까지의 완전한 이력과 실제 적용 증거 필요 |
+
+`perp_db` 신규 additive DDL은 다음 순서로 적용합니다. 실제 적용 결과(파일, 시각,
+적용 계정, backup ID)를 기록하며, 이 저장소의 검증은 격리된 PostgreSQL 18에서만 수행됐고
+운영 DB에는 적용하지 않았습니다. ERP 시작은 PG DDL을 실행하지 않습니다.
+
+| 순서 | 파일 | 주의 |
+|---|---|---|
+| v11 | `db/perp_additions_v11_deadline_roles.sql` | `roles_version` 추가만; 역할/관리자 데이터 변경 없음 |
+| v12 | `db/perp_additions_v12_deadline_expenses.sql` 다음 `db/perp_additions_v12_deadline_expense_writer.sql` | 두 파일 순서 고정; 금액은 기존 전표/lines만 소유 |
+| v13 | `db/perp_additions_v13_approval_states.sql` | `ALTER TYPE ... ADD VALUE`는 **독립 commit**이어야 하며 v14와 같은 transaction에 넣지 않음 |
+| v14 | `db/perp_additions_v14_approval_details.sql` | v13 commit 뒤에만 적용 |
+| v15 | `db/perp_additions_v15_knowledge_wiki.sql` | `knowledge` schema 생성; v18보다 먼저 |
+| v16 | `db/perp_additions_v16_deadline_expense_imports.sql` | CSV 가져오기; v15와 번호 분리 |
+| v17 | `db/perp_additions_v17_analytics_exports.sql` | export 요청 metadata만; 데이터/파일 복제 없음 |
+| v18 | `db/perp_additions_v18_knowledge_invalidation.sql` | v15 뒤에 적용; `pg_notify('orbitflow_wiki_invalidated')` trigger. 통합본만 사용, Task33 단독 초안 사용 금지 |
+
+enum 값(v13)은 PostgreSQL에서 제거할 수 없으므로 rollback matrix에 "additive, 되돌리지
+않음"으로 기록합니다. Wiki v15/v18의 SQLite 대응은 12/14이며, 두 저장소를 한쪽만 적용한
+상태로 traffic을 열면 해당 저장소의 Wiki 요청만 503이 됩니다.
+
+Wiki 파일 v15/v18은 `backend/src/config/knowledge-schema.js`의 `knowledgeDDL('pg')`와
+`backend/src/config/knowledge-invalidation-schema.js`의 `knowledgeInvalidationDDL('pg')` 출력과
+byte 단위로 같아야 합니다. `IF NOT EXISTS`와 `CREATE OR REPLACE`만 쓰므로 재적용이 가능하며,
+`backend/tests/deadline-wiki-ddl-replay.js`가 파일과 generator의 일치, 그리고 데이터가 있는 DB에
+두 파일을 다시 적용해도 행·hash·constraint·trigger identity가 바뀌지 않음을 검증합니다. 그래서
+"한 번만"이 아니라 "순서대로, 같은 결과를 내는 재적용 허용"이 정확한 규칙입니다. 이전 Task33 단독
+초안이 이미 적용된 DB라면 통합 v18 파일 적용이 forward upgrade가 되지만, 그 결정과 결과는 별도
+검토 항목으로 기록하고 초안 파일을 다시 적용하지 않습니다. 통합 SQLite 14/PG v18의 권한
+trigger는 `generation`을 올려 재인가만 깨우고, 아직 인가된 reader query를 취소하지 않습니다.
+원본(source) 변경은 여전히 job을 fence하여 `unavailable`/`SOURCE_REVOKED`로 보냅니다. 이 문서는
+이 migration들이 어떤 운영 DB에도 적용되지 않았다고 가정합니다.
 
 예약의 `npm run db:migrate`는 `prisma migrate dev`, `db:push`는 migration 이력을
 만들지 않는 개발 명령입니다. 둘 다 production migration 대체로 사용하지 않습니다.
@@ -56,6 +87,27 @@ baseline으로 reconcile해야 합니다. `init.sql`도 새 local compose volume
    네트워크 구성이 필요합니다. SPA에서 ERP/예약 API의 CORS와 URL을 확인합니다.
 6. staging/production의 안전한 테스트 principal과 tenant/org, smoke 대상 데이터를
    준비합니다. Health endpoint만으로 traffic을 전환하지 않습니다.
+7. `ORBITFLOW_UPLOAD_DIR`를 영속·백업 대상 volume으로 지정합니다. 원증빙 원본은 이
+   경로에 저장되며 DB link와 같은 backup ID로 묶어야 합니다.
+8. LLM Wiki를 켤 환경에는 `WIKI_LOCAL_MODEL_CONFIG`(numeric loopback origin, 실제 loaded
+   model ID, context/output token, timeout)를 준비합니다. 값이 없으면 새 모델 의존 Wiki job은
+   `unavailable`로 끝나고 읽기/원본 등록/`no_evidence` 조사는 동작합니다. 빈 값은 scheduler
+   disable이 아닙니다. worker는 `legacy`/`pg`를 조회하고 기존 job의 저장된 모델 설정으로
+   재개할 수 있으며, job이 없으면 idle입니다. Wiki 운영 store 선택/disable env는 없습니다.
+   범용 `ORBITFLOW_AI_PROVIDER`/OpenRouter/Echo 설정은 Wiki에 적용되지 않습니다.
+9. CSV 가져오기 원본(24시간)과 원증빙 staging(24시간) 정리는 ERP 내장 timer를 **각각 env로
+   활성화**합니다. `ORBITFLOW_IMPORT_CLEANUP_STORES`(CSV)와 `ORBITFLOW_RECEIPT_CLEANUP_STORES`
+   (원증빙)는 서로 독립이며 둘 다 기본 비활성입니다. cadence `ORBITFLOW_IMPORT_CLEANUP_INTERVAL_MS`
+   (기본 1시간)와 `ORBITFLOW_IMPORT_CLEANUP_TIMEOUT_MS`(기본 30초)는 두 종류가 공유합니다. 원증빙을
+   켤 때는 API와 같은 절대 경로의 기존 `ORBITFLOW_UPLOAD_DIR`가 필수입니다. multi-process에서는 한
+   프로세스만 켭니다. stdout `expense_import_cleanup` 이벤트(종류·store별 건수, `shared>0` 검토)를
+   수집·알림하는 collector와 보존은 배포 대상이 준비합니다. `backend/.env.example`에는 두 opt-in의
+   빈 기본값과 주석 예시가 있으며 백엔드 단위가 관리합니다. 실제 `.env` 값은 Secret Manager에서
+   주입합니다. 상세는 `docs/20-operations-manual.md`의 정기 정리 절을 따릅니다. 현재 tree에는
+   timer·전용 worker thread와 `backend/src/server.js`의 Wiki/정리 공동 lifecycle 배선이
+   포함되어 있습니다. 격리 검증 범위는 `docs/runtime-integration-task29.md`를 참조합니다.
+   어느 환경에서도 timer가 운영 중이라고 주장하지 않으며, 활성화 증거는 배포 대상의 실제
+   기동 이벤트로만 인정합니다.
 
 ### Remote 배포 차단 조건
 
@@ -73,6 +125,14 @@ baseline으로 reconcile해야 합니다. `init.sql`도 새 local compose volume
 - SQLite/두 PostgreSQL/실제 업로드를 모두 포함하는 암호화 backup과 복구 권한
 - 최근 격리 restore rehearsal 및 RPO 24시간/RTO 4시간 **목표** 측정 결과
 - 최종 인증/예약 lane 계약에 맞춘 principal, CORS, smoke test 승인
+- `perp_db` v11~v18과 SQLite 9~14의 실제 적용 순서·결과 기록(v13 독립 commit 포함)
+- `ORBITFLOW_UPLOAD_DIR` 영속 volume과 backup 포함 증거
+- 정리 timer의 활성화 증거(기동 이벤트의 `stores`와 `receipt_stores` 선택값), 종류·store별
+  `succeeded` 이벤트를 수집하는 collector·알림 전송 증거, 원증빙 upload root의 영속 volume 증거
+  (소스 배선 존재만으로는 미충족; 활성화 전 코드·설정·종료 검증이 필요)
+- Wiki 모델을 사용할 경우 `WIKI_LOCAL_MODEL_CONFIG`와 로컬 모델 서버의 loaded 상태 확인;
+  모델 미설정이면 새 모델 의존 작업의 `unavailable` 공지. scheduler는 꺼지지 않으며 기존
+  durable job과 저장된 설정을 별도로 점검 (`docs/20-operations-manual.md`)
 
 저장소 검증이나 local compose 성공은 이 조건을 대체하지 않습니다.
 
@@ -104,6 +164,37 @@ npm audit
 `.omo/src-과업지시서.txt`와 `.omo/src-요구사항정의서.txt`가 있을 때만 실행합니다.
 원본이나 추출물이 없으면 실패를 보고하고 문서 coverage를 통과로 대체하지 않습니다.
 
+격리 실행이 필요한 검증(node/npm/python)은 `node scripts/run_deadline_isolated.mjs <명령>
+<인자>`로 감쌉니다. runner는 `DATABASE_URL`/`PG_*`/provider key/`NODE_OPTIONS`를 비우고
+fixture가 정한 임시값만 넘기므로 실제 사용자 서비스(8000/5174/8080/55432)나 private
+`.env`에 닿지 않습니다.
+
+### 고정 의존성 버전과 라이선스 고지
+
+아래 exact pin은 보안 advisory 대응으로 확정된 값이며 lockfile과 함께 배포합니다. `npm audit
+fix --force`나 범위 지정으로 바꾸지 않습니다. 새 advisory가 나오면 해당 패키지만 최소 수정판으로
+다시 고정하고 fresh audit를 다시 받습니다.
+
+| 패키지 | 버전 | 위치 | 라이선스 / 고지 |
+|---|---|---|---|
+| `csv-parse` | 7.0.2 | `backend/package.json` | MIT. GHSA-8cw4-87c7-c6xx(<7.0.2) 대응. parser provenance `expense-csv-v1:csv-parse@7.0.2` |
+| `file-type` | 21.3.2 | backend | MIT. GHSA-5v7r-6r5c-r473, GHSA-j47w-4g3g-c36v 대응 |
+| `pdf-lib` | 1.17.1 | backend | MIT |
+| `sharp` | 0.35.4 | backend | Apache-2.0. GHSA-f88m-g3jw-g9cj(<0.35.0), GHSA-rgj7-g3m4-5g8c(<0.35.4) 대응 |
+| `@img/sharp-win32-x64` | 0.35.4 | backend (Windows native) | **Apache-2.0 AND LGPL-3.0-or-later**. libvips 등 번들 라이브러리 고지는 `node_modules/@img/sharp-win32-x64/README.md`, `LICENSE`, `versions.json`을 그대로 보존 |
+| `3d-force-graph` | 1.80.0 | `frontend/package.json` | MIT. `frontend/THIRD_PARTY_NOTICES.md` |
+| `three` | 0.185.1 | frontend (lock) | MIT. `frontend/THIRD_PARTY_NOTICES.md`; 임의 latest 전역 업데이트 금지 |
+| `js-yaml` | 4.3.2 | `Reservation/backend/package-lock.json` | MIT. GHSA-2883-xcg3-v3hh(4.3.1) 대응 |
+
+sharp의 Windows native binary는 JS 패키지의 Apache-2.0만으로 표시할 수 없습니다. 번들된
+libvips/glib/libheif/librsvg 등 LGPLv3 구성요소 때문에 재배포 시 해당 소스 제공·교체 가능성
+의무와 설치본의 license/README/NOTICE 원문을 보존해야 합니다. 세부 목록은
+`backend/src/services/receipt-files.contract.md`의 라이선스 표를 따릅니다. 이 표는 법적 충족
+인증이 아니라 보존해야 할 원문의 위치 기록입니다. 배포 artifact에는
+`frontend/THIRD_PARTY_NOTICES.md`, `db/perp_additions_v15_knowledge_wiki.sql`,
+`db/perp_additions_v18_knowledge_invalidation.sql`이 모두 포함되어야 하며, 빠진 상태의 artifact는
+License/Migration gate를 통과하지 못합니다.
+
 ### Staging 배포
 
 1. 쓰기 차단 계획과 rollback 책임자를 확인하고 SQLite, `perp_db`, 예약 DB, 실제
@@ -132,6 +223,15 @@ npm audit
    retry/incident 절차를 검증합니다.
 10. 실제 브라우저 E2E와 오류/overflow/teardown 증거를 보존합니다. Staging에서만
    통과한 뒤 production 승인으로 이동합니다.
+11. 기능별 smoke를 추가로 수행합니다. 역할 저장의 stale 409와 마지막 관리자 보호,
+    원증빙 업로드→소비→`attachment` 다운로드 checksum 일치, CSV upload→preview→`{}`
+    commit→같은 key replay, 분석 KPI의 `unavailable` reason이 예상 범위인지, Wiki
+    root 200과(모델을 켠 경우) query job의 `succeeded` 또는 `no_evidence`. 모델을 끈
+    환경은 `unavailable`이 정상이며 실패로 기록하지 않습니다.
+12. staging에서 CSV와 원증빙 정리를 모두 켠 상태로 한 interval 이상 운영하고 기동 이벤트의
+    `stores`/`receipt_stores`, 종류(`imports`/`receipts`)·store별 `succeeded` 이벤트와 건수,
+    `shared>0`·`unlink_failed` 유무, collector 수집 결과를 기록합니다. 정리 없이 24시간이 지나면
+    CSV job이 410으로 바뀌는 것은 정상 만료(DB 시각 기준)이며 정리 미실행과 구분해 기록합니다.
 
 ### Production 배포
 
@@ -152,18 +252,20 @@ npm audit
 | Source | lockfile 설치, root tests/build, 예약 tests/build | merge/승격 차단 |
 | Contract | structure, deliverables, 실제 source extract 기반 docs coverage | 누락을 기록하고 승격 차단 |
 | Security | root/예약 audit, secret scan, CORS/TLS/Secret Manager 검토 | 통과 영수증까지 배포 차단 |
-| Migration | SQLite v5/auth_identity, `perp_db` login_at+TTL canary, 예약 versioned migration | DB 변경과 배포 차단 |
+| Migration | SQLite v5/auth_identity와 9~14, `perp_db` login_at+TTL canary와 v11~v18 순서(v13 독립 commit), 예약 versioned migration | DB 변경과 배포 차단 |
+| Runtime wiring | `ORBITFLOW_UPLOAD_DIR` 절대 경로 기존 디렉터리·영속 volume(API와 정리 worker가 같은 root 공유), `ORBITFLOW_IMPORT_CLEANUP_STORES`/`ORBITFLOW_RECEIPT_CLEANUP_STORES` 활성화 + stdout 이벤트 collector, (Wiki 사용 시) `WIKI_LOCAL_MODEL_CONFIG` | 해당 기능 traffic 차단 |
+| License | 위 exact pin과 lockfile 일치, `@img/sharp-win32-x64` LGPL 고지와 `frontend/THIRD_PARTY_NOTICES.md` 포함 | 배포 artifact 승격 차단 |
 | Staging | 세 서비스 real surface, 모든 DB readiness, tenant/RBAC/예약 smoke, browser E2E | production 승격 차단 |
 | Production | artifact digest, backup ID, readiness, audit/finance 확인, rollback 책임자 | traffic 전환 차단 |
 
 테스트 개수와 route 수는 고정 성공 문구로 판정하지 않습니다. 명령의 현재 exit code,
-실제 pass/fail, `GET /api/v1/routes`의 현재 19개 고유 그룹을 증거로 남깁니다. 새 route가
+실제 pass/fail, `GET /api/v1/routes`의 현재 21개 고유 그룹을 증거로 남깁니다. 새 route가
 추가되면 registry와 문서를 함께 갱신합니다.
 
-현재 발견된 root/Reservation dependency audit 항목은 `operational-dependencies` lane에
-manifest/lockfile 수정과 재검증으로 배정됐습니다. 영구 수용 또는 해결로 간주하지
-않으며, 해당 lane의 `npm audit` exit 0과 회귀 test/build 영수증이 합쳐질 때까지
-Security gate는 **pending/차단** 상태입니다.
+이전에 발견된 root/Reservation dependency audit 항목은 `csv-parse@7.0.2`, `sharp@0.35.4`,
+`js-yaml@4.3.2` exact pin으로 대응했고, 각 계약 문서가 당시 fresh `npm audit` 0건을
+기록합니다. 그 기록은 그 시점의 증거이며, Security gate는 매 배포마다 현재 lockfile로
+`npm audit`를 다시 실행한 exit code로 판정합니다. 과거 영수증을 재사용하지 않습니다.
 
 ## 5. 롤백
 
@@ -171,6 +273,9 @@ Security gate는 **pending/차단** 상태입니다.
 
 1. 새 traffic을 차단하고 reverse proxy를 직전 ERP/예약/static artifact로 되돌립니다.
 2. 구 revision이 현재 schema와 호환되는지 migration compatibility matrix로 확인합니다.
+   v11~v18과 SQLite 9~14는 모두 additive이므로 구 코드가 새 column을 무시하는 한 DB를
+   되돌리지 않습니다. v13 enum 값은 제거할 수 없습니다. 새 코드로 게시된 Wiki page
+   revision, 소비된 원증빙 link, 완료된 CSV job은 rollback 뒤에도 남으며 삭제하지 않습니다.
 3. 세 liveness와 모든 DB readiness, 로그인, tenant/org/RBAC, 예약 scope,
    audit/finance를 재검증합니다.
 4. 원인, request ID, artifact digest, migration/version, backup ID, 영향 조직과 시간을
