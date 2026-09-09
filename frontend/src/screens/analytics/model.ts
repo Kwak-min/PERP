@@ -88,6 +88,7 @@ export const reportColumns = {
   members: ['id', 'user_id', 'status'], tasks: ['id', 'title', 'status', 'created_at', 'due'], transactions: ['id', 'date', 'revenue', 'expense', 'unit'],
   budgets: ['id', 'amount', 'unit', 'status'], approvals_created: ['id', 'status', 'created_at'], approvals_decided: ['id', 'status', 'decided_at'],
 } as const;
+export const reportColumnLabels = { id: '기록 ID', user_id: '구성원 ID', status: '상태', title: '제목', created_at: '생성 시각', due: '기한', date: '전표 날짜', revenue: '수입', expense: '비용', unit: '단위', amount: '편성액', decided_at: '결정 시각' } as const;
 const text = z.string(), id = text.min(1);
 const rowSchemas = {
   members: z.object({ id, user_id: id, status: text }).strict(), tasks: z.object({ id, title: text, status: text, created_at: text, due: text.nullable() }).strict(),
@@ -108,7 +109,8 @@ export function parseExportJob(payload: unknown, scope: AnalyticsScope, key: Rep
   return job;
 }
 export const stateLabels = { ready: '조회 완료', empty: '데이터 없음', forbidden: '원천 권한 없음', disabled: '기능 꺼짐', unavailable: '사용 불가' } as const;
-export const reasonLabels = { SOURCE_UNSUPPORTED: '이 저장소/범위에서 지원하지 않는 원천', SOURCE_QUERY_FAILED: '원천 조회 실패. 다시 조회해 주세요.', MIXED_CURRENCY: '여러 통화: 환산 없이 합산할 수 없음', CURRENCY_MISMATCH: '예산과 연결 거래의 통화 불일치' } as const;
+export const reasonLabels = { SOURCE_UNSUPPORTED: '선택한 범위에서 지원하지 않는 지표', SOURCE_QUERY_FAILED: '원천 조회 실패. 다시 조회해 주세요.', MIXED_CURRENCY: '여러 통화: 환산 없이 합산할 수 없음', CURRENCY_MISMATCH: '예산과 연결 거래의 통화 불일치' } as const;
+export const basisSummaryLabels = { current_snapshot: '현재 상태', period_flow: '선택 기간', period_flow_current_budget: '선택 기간 / 현재 예산' } as const;
 export const basisLabels = { current_snapshot: '현재 상태 (과거 말일 상태 아님)', period_flow: '선택 기간 흐름 [시작, 종료)', period_flow_current_budget: '선택 기간 흐름 / 현재 활성 예산 (과거 예산 상태 아님)' } as const;
 export const rowScopeLabels = { company: '선택 회사의 인가된 행', self: '본인 범위', department: '본인 부서 범위', project: '참여 프로젝트 범위', own_requester: '본인의 결재 요청만', own_or_assigned_readable: '본인 요청 또는 실제 배정되어 읽을 수 있는 결재', readable_company_pool: '읽기 허용된 회사 결재 풀 (개인 배정함 아님)', tenant_self: '현재 테넌트의 본인 기록만', tenant_all: '테넌트 전체 (회사별 건수 아님)' } as const;
 export function metricValue(metric: AnalyticsMetric): string {
@@ -116,4 +118,4 @@ export function metricValue(metric: AnalyticsMetric): string {
   // Exact money and ratio strings are displayed verbatim. No locale/Number money conversion.
   return String(metric.value);
 }
-export function metricUnit(unit: string): string { return unit === 'ledger_decimal' ? '장부 단위 · ledger_decimal' : unit === 'count' ? '건 · count' : unit === 'percent' ? '% · percent' : unit; }
+export function metricUnit(unit: string): string { return unit === 'ledger_decimal' ? '장부 단위' : unit === 'count' ? '건' : unit === 'percent' ? '%' : unit === 'mixed_currency' ? '여러 통화' : unit; }

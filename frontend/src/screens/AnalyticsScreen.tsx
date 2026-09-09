@@ -3,7 +3,7 @@ import type { ScreenDefinition } from '../routes/catalog';
 import { apiBlob, apiRequest, ApiError, userMessageOf, type ApiSession } from '../services/api';
 import { isPgWorkspace } from '../services/workspace';
 import { sessionStore, useSession } from '../store/session';
-import { basisLabels, filterSchema, metricLabels, metricUnit, metricValue, parseExportJob, parseKpis, parseReport, reasonLabels, reportColumns, reportKeySchema, reportKeys, reportLabels, rowScopeLabels, samePeriod, stateLabels, type AnalyticsExportJob, type AnalyticsMetric, type AnalyticsPeriod, type AnalyticsReport, type AnalyticsScope, type ReportKey } from './analytics/model';
+import { basisLabels, basisSummaryLabels, filterSchema, metricLabels, metricUnit, metricValue, parseExportJob, parseKpis, parseReport, reasonLabels, reportColumnLabels, reportColumns, reportKeySchema, reportKeys, reportLabels, rowScopeLabels, samePeriod, stateLabels, type AnalyticsExportJob, type AnalyticsMetric, type AnalyticsPeriod, type AnalyticsReport, type AnalyticsScope, type ReportKey } from './analytics/model';
 import type { AnalyticsFilter, AnalyticsKpis } from '../../../backend/src/services/analytics.contract';
 import { FinanceSeries } from './analytics/FinanceSeries';
 import './analytics/analytics.css';
@@ -21,13 +21,15 @@ function ErrorNotice({ error }: { error: unknown }) {
 export function AnalyticsScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const stored = useSession();
   if (!stored?.orgId) return <section className="analytics-screen" data-screen-id={screen.id}><h1>분석</h1><p>회사를 선택해 주세요.</p></section>;
-  const name = stored.organizations.find(org => org.org_id === stored.orgId)?.org_name ?? stored.orgId;
+  const name = stored.organizations.find(org => org.org_id === stored.orgId)?.org_name ?? '선택 회사';
   return <AnalyticsWorkspace key={JSON.stringify([stored.token, stored.orgId])} session={{ token: stored.token, orgId: stored.orgId }} companyName={name} screen={screen} />;
 }
 function AnalyticsWorkspace({ session, companyName, screen }: { session: ApiSession; companyName: string; screen: ScreenDefinition }) {
   const [draft, setDraft] = useState({ from: '', to: '', tz: 'Asia/Seoul' });
   const [selection, setSelection] = useState<{ filter: AnalyticsFilter; controller: AbortController; revision: number } | null>(() => ({ filter: { tz: 'Asia/Seoul' }, controller: new AbortController(), revision: 0 }));
   const [validationError, setValidationError] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filterToggle = useRef<HTMLElement>(null);
   const scope: AnalyticsScope = { source: isPgWorkspace(session.orgId) ? 'perp_db' : 'legacy', org_id: session.orgId! };
   useLayoutEffect(() => {
     const unsubscribe = sessionStore.subscribe(() => { if (!currentSession(session)) selection?.controller.abort(); });
@@ -37,13 +39,16 @@ function AnalyticsWorkspace({ session, companyName, screen }: { session: ApiSess
     selection?.controller.abort(); setSelection(null); setValidationError(false); setDraft(old => ({ ...old, [field]: value }));
   }
   return <section className="analytics-screen" data-screen-id={screen.id} data-source={scope.source} data-company={scope.org_id}>
-    <header><h1>분석 · 보고서</h1><p><strong>{companyName}</strong> · {scope.source === 'perp_db' ? 'PostgreSQL' : '기존 조직'} ({scope.source})</p><p className="analytics-identity">회사 ID: {scope.org_id}</p></header>
+    <header className="analytics-heading"><h1>분석 · 보고서</h1><p>{companyName}</p></header>
+    <details className="analytics-filter-panel" open={filtersOpen} onToggle={event => setFiltersOpen(event.currentTarget.open)}>
+    <summary ref={filterToggle}>기간 변경 · 다시 조회</summary>
     <form className="analytics-filters" onSubmit={event => {
       event.preventDefault();
       const parsed = filterSchema.safeParse({ ...(draft.from ? { from: draft.from } : {}), ...(draft.to ? { to: draft.to } : {}), tz: draft.tz });
       selection?.controller.abort();
       if (!parsed.success) { setSelection(null); setValidationError(true); return; }
       setValidationError(false); setSelection({ filter: { ...(parsed.data.from ? { from: parsed.data.from } : {}), ...(parsed.data.to ? { to: parsed.data.to } : {}), tz: parsed.data.tz }, controller: new AbortController(), revision: (selection?.revision ?? 0) + 1 });
+      setFiltersOpen(false); filterToggle.current?.focus();
     }}>
       <label>시작일 (포함)<input aria-label="시작일" type="date" value={draft.from} onChange={event => edit('from', event.target.value)} /></label>
       <label>종료일 (제외)<input aria-label="종료일" type="date" value={draft.to} onChange={event => edit('to', event.target.value)} /></label>
@@ -52,6 +57,7 @@ function AnalyticsWorkspace({ session, companyName, screen }: { session: ApiSess
       <button className="button" type="submit">기간 적용 · 다시 조회</button>
       <p>날짜는 함께 입력하세요. 둘 다 비우면 선택 시간대의 이번 달 첫날부터 다음 달 첫날까지 조회합니다.</p>
     </form>
+    </details>
     {validationError && <p role="alert" data-error-code="VALIDATION_ERROR">실제 날짜, 시작일 &lt; 종료일, 유효한 시간대를 확인하세요.</p>}
     {!selection && <p role="status">필터 변경으로 이전 조회와 다운로드를 해제했습니다. 기간을 적용해 주세요.</p>}
     {selection && <AnalyticsResults key={selection.revision} session={session} scope={scope} filter={selection.filter} signal={selection.controller.signal} />}
@@ -74,11 +80,14 @@ function AnalyticsResults({ session, scope, filter, signal }: { session: ApiSess
     {state.status === 'error' && <ErrorNotice error={state.error} />}
     {state.status === 'ready' && <>
       <div className="analytics-period" data-from={state.data.period.from} data-to={state.data.period.to} data-tz={state.data.period.tz}>
-        <h2>확인된 조회 기간</h2><p><time>{state.data.period.from}</time> (포함) → <time>{state.data.period.to}</time> (제외) · {state.data.period.tz}</p>
-        <p>조회 시작 시각: <time dateTime={state.data.generated_at}>{state.data.generated_at}</time></p>
-        <p>현재 상태 지표는 과거 말일 상태가 아닙니다. 여러 원천의 전역 동시 스냅샷을 보장하지 않습니다.</p>
+        <h2>조회 기간</h2><p><time>{state.data.period.from}</time> (포함) → <time>{state.data.period.to}</time> (제외) · {state.data.period.tz}</p>
+        <p className="analytics-note"><time dateTime={state.data.generated_at}>{new Intl.DateTimeFormat('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: state.data.period.tz }).format(new Date(state.data.generated_at))}</time> 조회 · 현재 상태는 과거 말일 상태가 아닙니다.</p>
       </div>
       <div className="analytics-metrics">{state.data.metrics.map(metric => <MetricCard key={metric.key} metric={metric} />)}</div>
+      <details className="analytics-basis"><summary>집계 기준 · 전체 조회</summary>
+        <p>회사 ID: {scope.org_id} · {scope.source === 'perp_db' ? 'PostgreSQL' : '기존 조직'} ({scope.source})</p>
+        <p>조회 시작 시각: <time dateTime={state.data.generated_at}>{state.data.generated_at}</time>. 여러 원천의 전역 동시 스냅샷을 보장하지 않습니다.</p>
+      </details>
       <FinanceSeries key={state.data.generated_at} series={state.data.series[0]} period={state.data.period} />
       <section className="analytics-reports"><h2>보고서 · CSV 내보내기</h2>
         <label>보고서 선택<select aria-label="보고서 선택" value={reportKey} onChange={event => setReportKey(reportKeySchema.parse(event.target.value))}>{reportKeys.map(key => <option key={key} value={key}>{reportLabels[key]}</option>)}</select></label>
@@ -91,11 +100,16 @@ function AnalyticsResults({ session, scope, filter, signal }: { session: ApiSess
 function MetricCard({ metric }: { metric: AnalyticsMetric }) {
   const reason = 'reason' in metric ? metric.reason : undefined;
   return <article className="analytics-metric" data-metric-key={metric.key} data-state={metric.state} data-reason={reason} data-unit={metric.unit} data-basis={metric.basis}>
-    <h2>{metricLabels[metric.key]}</h2><p className="analytics-state">{stateLabels[metric.state]}</p>
+    <h2>{metricLabels[metric.key]}</h2>
     <p className="analytics-value"><strong data-metric-value>{metricValue(metric)}</strong>{metric.value !== null && <span>{metricUnit(metric.unit)}</span>}</p>
-    {reason && <p>{reasonLabels[reason]} <code>{reason}</code></p>}
-    <dl><dt>기준</dt><dd>{basisLabels[metric.basis]} <code>{metric.basis}</code></dd><dt>단위</dt><dd>{metricUnit(metric.unit)}</dd>
-      <dt>산식</dt><dd>{metric.formula}</dd><dt>원천 범위</dt><dd>{rowScopeLabels[metric.scope.rows]} <code>{metric.scope.rows}</code><br />{metric.scope.source} · {metric.scope.org_id}{metric.scope.tenant_id && <><br />테넌트: {metric.scope.tenant_id}</>}</dd></dl>
+    <p className="analytics-state">{stateLabels[metric.state]} · {basisSummaryLabels[metric.basis]}</p>
+    {metric.scope.rows !== 'company' && <p className="analytics-note">{rowScopeLabels[metric.scope.rows]}</p>}
+    {reason && <p className="analytics-reason">{reasonLabels[reason]}</p>}
+    <details className="analytics-basis"><summary>집계 기준<span className="sr-only"> · {metricLabels[metric.key]}</span></summary>
+      <dl><dt>기준</dt><dd>{basisLabels[metric.basis]} <code>{metric.basis}</code></dd><dt>단위</dt><dd>{metricUnit(metric.unit)} <code>{metric.unit}</code></dd>
+        <dt>산식</dt><dd>{metric.formula}</dd><dt>원천 범위</dt><dd>{rowScopeLabels[metric.scope.rows]} <code>{metric.scope.rows}</code><br />{metric.scope.source} · {metric.scope.org_id}{metric.scope.tenant_id && <><br />테넌트: {metric.scope.tenant_id}</>}</dd>
+        <dt>지표 키</dt><dd><code>{metric.key}</code></dd>{reason && <><dt>상태 코드</dt><dd><code>{reason}</code></dd></>}</dl>
+    </details>
   </article>;
 }
 function ReportPanel({ session, scope, period, reportKey, signal }: { session: ApiSession; scope: AnalyticsScope; period: AnalyticsPeriod; reportKey: ReportKey; signal: AbortSignal }) {
@@ -137,15 +151,19 @@ function ReportPanel({ session, scope, period, reportKey, signal }: { session: A
     finally { if (active()) setBusy(false); }
   }
   return <div data-report-key={reportKey} aria-busy={busy}>
-    <p>다운로드할 때 저장된 필터와 현재 권한으로 원천 데이터를 다시 조회합니다. 생성 시 행 수와 다운로드 행 수는 다를 수 있으며, 저장된 불변 파일이 아닙니다. 최대 100000행이며 초과 시 명시적으로 거부합니다.</p>
+    <p>CSV는 다운로드 시 현재 권한으로 다시 조회합니다. 요청 생성 시점과 행 수가 달라질 수 있습니다.</p>
     <div className="analytics-actions"><button className="button" disabled={busy} onClick={loadReport}>보고서 조회</button><button className="button" disabled={busy} onClick={createExport}>CSV 요청 생성</button></div>
     {error !== null && <ErrorNotice error={error} />}
     {job && <div className="analytics-export" data-export-id={job.id}><p>생성 시 <strong data-created-rows>{job.row_count}</strong>행 · 만료 <time dateTime={job.expires_at}>{job.expires_at}</time></p><button className="button" disabled={busy} onClick={download}>현재 권한으로 CSV 다운로드</button>
-      {downloadRows !== null && <p role="status">다운로드 응답 X-Row-Count: <strong data-download-rows>{downloadRows}</strong>행</p>}</div>}
+      {downloadRows !== null && <p role="status">다운로드 완료: <strong data-download-rows>{downloadRows}</strong>행</p>}</div>}
     {report?.status === 'loading' && <p role="status">보고서를 조회하고 있습니다.</p>}
     {report?.status === 'error' && <ErrorNotice error={report.error} />}
-    {report?.status === 'ready' && <div data-report-rows={report.data.row_count}><p>{report.data.row_count}행 · 조회 시각 <time>{report.data.generated_at}</time> · {report.data.scope.source} · {report.data.scope.org_id}</p>
-      {report.data.row_count === 0 ? <p>인가된 조회 결과가 비어 있습니다.</p> : <div className="analytics-table" role="region" aria-label="보고서 결과" tabIndex={0}><table><thead><tr>{reportColumns[reportKey].map(column => <th key={column}>{column}</th>)}</tr></thead><tbody>{report.data.items.map(row => <tr key={row.id}>{reportColumns[reportKey].map(column => <td key={column}>{row[column] ?? '—'}</td>)}</tr>)}</tbody></table></div>}
+    <details className="analytics-basis"><summary>집계 기준 · 내보내기</summary>
+      <p>다운로드할 때 저장된 필터와 현재 권한으로 원천 데이터를 다시 조회합니다. 저장된 불변 파일이 아닙니다. 최대 100000행이며 초과 시 명시적으로 거부합니다. 다운로드 행 수는 응답의 X-Row-Count 기준입니다.</p>
+    </details>
+    {report?.status === 'ready' && <div data-report-rows={report.data.row_count}><p><strong>{report.data.row_count}행</strong></p>
+      <details className="analytics-basis"><summary>집계 기준 · 보고서</summary><p>조회 시각 <time>{report.data.generated_at}</time> · {report.data.scope.source} · {report.data.scope.org_id}</p></details>
+      {report.data.row_count === 0 ? <p>인가된 조회 결과가 비어 있습니다.</p> : <div className="analytics-table" role="region" aria-label="보고서 결과" tabIndex={0}><table><thead><tr>{reportColumns[reportKey].map(column => <th key={column} scope="col">{reportColumnLabels[column]}</th>)}</tr></thead><tbody>{report.data.items.map(row => <tr key={row.id}>{reportColumns[reportKey].map(column => <td key={column}>{row[column] ?? '—'}</td>)}</tr>)}</tbody></table></div>}
     </div>}
   </div>;
 }
