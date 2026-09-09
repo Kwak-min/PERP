@@ -20,6 +20,7 @@ import { ProjectTaskScreen } from './ProjectTaskScreen';
 import { DailyFinanceScreen } from './DailyFinanceScreen';
 import { ExpenseScreen } from './ExpenseScreen';
 import { ApprovalsScreen } from './ApprovalsScreen';
+import { AnalyticsScreen } from './AnalyticsScreen';
 
 export type ScreenComponent = ComponentType<Readonly<{ screen: ScreenDefinition }>>;
 
@@ -28,6 +29,7 @@ export type ScreenComponent = ComponentType<Readonly<{ screen: ScreenDefinition 
  */
 export const screenOverrides: Readonly<Record<string, ScreenComponent>> = {
   'APR-001': ApprovalsScreen,
+  'ANL-001': AnalyticsScreen,
   'FIN-004': DailyFinanceScreen,
   'FIN-001': ExpenseScreen,
   'FIN-002': ExpenseScreen,

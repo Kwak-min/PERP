@@ -20,6 +20,6 @@ export function workspaceEndpoint(path: string, orgId: string | null | undefined
   const exact = legacyEndpoints[base];
   if (exact) return exact + query;
   // 두 슬라이스가 같은 DTO를 쓰는 조회/전용 화면 계약만 명시적으로 선택한다.
-  if (/^\/pg\/(members|projects|tasks|calendar|documents|assets|hr|agent)(\/|$)/.test(base) || /^\/pg\/finance\/(transactions|budgets|settlements)(\/|$)/.test(base)) return base.slice(3) + query;
+  if (/^\/pg\/(members|projects|tasks|calendar|documents|assets|hr|agent|analytics)(\/|$)/.test(base) || /^\/pg\/finance\/(transactions|budgets|settlements)(\/|$)/.test(base)) return base.slice(3) + query;
   return path;
 }

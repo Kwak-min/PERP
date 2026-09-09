@@ -20,11 +20,11 @@ const sharedScenarioArgs = args[0] === '--scenario'
   && ['baseline', 'recruitment-nav', 'nav-pref', 'members-pagination', 'assets-footer', 'sidebar', 'knowledge-graphs', 'project-members', 'project-members-access'].includes(args[1])
   && (args.length === 2 || (args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])));
 const dedicatedScenarioArgs = args[0] === '--scenario' && (
-  (args.length === 2 && ['month-summary', 'roles', 'role-toggles', 'role-toggles-native', 'disabled-hr-features', 'reservation-conflict-edit', 'reservation-space-calendar', 'expense-receipt', 'expense-csv-import', 'approval-workflow'].includes(args[1]))
+  (args.length === 2 && ['month-summary', 'roles', 'role-toggles', 'role-toggles-native', 'disabled-hr-features', 'reservation-conflict-edit', 'reservation-space-calendar', 'expense-receipt', 'expense-csv-import', 'approval-workflow', 'analytics', 'analytics-pg'].includes(args[1]))
   || (args.length === 3 && args[1] === 'reservation-space-calendar' && args[2] === '--baseline')
 );
 if (!sharedScenarioArgs && !dedicatedScenarioArgs) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar|knowledge-graphs|project-members|project-members-access [--probe error|cancel] | --scenario month-summary|roles|role-toggles|role-toggles-native|disabled-hr-features|reservation-conflict-edit|expense-receipt|expense-csv-import|approval-workflow | --scenario reservation-space-calendar [--baseline]');
+  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar|knowledge-graphs|project-members|project-members-access [--probe error|cancel] | --scenario month-summary|roles|role-toggles|role-toggles-native|disabled-hr-features|reservation-conflict-edit|expense-receipt|expense-csv-import|approval-workflow|analytics|analytics-pg | --scenario reservation-space-calendar [--baseline]');
   process.exitCode = 2;
 } else {
   assertIsolated();
@@ -36,6 +36,7 @@ if (!sharedScenarioArgs && !dedicatedScenarioArgs) {
   else if (args[1] === 'approval-workflow') await (await import('./deadline-approval-workflow.scenario.mjs')).approvalWorkflow();
   else if (args[1] === 'expense-csv-import') await import('./deadline-expense-import.scenario.mjs');
   else if (args[1] === 'expense-receipt') await import('./deadline-expense-receipt.scenario.mjs');
+  else if (args[1] === 'analytics' || args[1] === 'analytics-pg') await (await import('./deadline-analytics.e2e.mjs')).analyticsScenario(args[1] === 'analytics-pg');
   else if (args[1] === 'month-summary') await (await import('./deadline-month-summary.e2e.mjs')).monthSummary();
   else if (args[1] === 'nav-pref') await (await import('./deadline-nav-pref.e2e.mjs')).navPrefScenario(args[3]);
   else await baseline(args[3], args[1]);
@@ -293,7 +294,7 @@ async function baseline(probe, scenario) {
       ['disabled-hr-features', '/settings/organization', '/api/v1/tenants/modules', 'main input[type="checkbox"]'],
       ['finance-transactions', '/finance/transactions', '/api/v1/finance/transactions', 'main [data-transaction-id]'],
       ['approvals-admin-inbox-empty', '/approvals', '/api/v1/approvals/requests', 'main .approvals-list:empty'],
-      ['analytics', '/analytics', '/api/v1/analytics/dashboard', 'main [data-screen-id]'],
+      ['analytics', '/analytics', '/api/v1/analytics/kpis', 'main [data-analytics-kpis][data-state="ready"]'],
       ['company-graph', '/documents/graph', '/api/v1/documents/graph', 'main .graph-stage__canvas'],
       ['personal-graph', '/vault/graph', '/api/v1/vault/graph', 'main .graph-stage__empty:not([role])'],
       ['reservation-unavailable', '/reserve', '/api/v1/spaces', 'main .rsv-error-banner'],

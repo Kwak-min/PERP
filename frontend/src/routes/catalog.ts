@@ -103,7 +103,7 @@ const screenCatalog: readonly ScreenDefinition[] = [
   { id: "AUT-001", path: "/automations/:workflowId/edit", label: "자동화 편집", description: "트리거, 조건과 실행 단계를 안전하게 구성합니다.", section: "operations", endpoint: null, module: "automations" },
   { id: "AUT-002", path: "/automations/runs", label: "자동화 실행 기록", description: "워크플로 실행 결과와 단계별 오류를 확인합니다.", section: "operations", endpoint: "/pg/automation/runs", module: "automations" },
   { id: "INT-001", path: "/settings/integrations", label: "외부 연동", description: "캘린더, 메신저, 웹훅과 API 키를 관리합니다.", section: "admin", endpoint: "/integrations/connections", module: "integrations" },
-  { id: "ANL-001", path: "/analytics", label: "분석", description: "KPI와 운영 보고서를 한 화면에서 비교합니다.", section: "operations", endpoint: "/analytics/dashboard", module: "analytics", nav: true },
+  { id: "ANL-001", path: "/analytics", label: "분석", description: "인가된 원천의 지표와 보고서를 기간·기준별로 조회합니다.", section: "operations", endpoint: "/pg/analytics/kpis", module: "analytics", nav: true },
   { id: "NOT-001", path: "/notifications", label: "알림", description: "업무, 승인과 운영 알림을 한곳에서 확인합니다.", section: "home", endpoint: "/pg/notifications", module: null },
   { id: "SET-001", path: "/settings/approval-forms", label: "결재 양식", description: "결재 입력 항목과 승인 경로를 설정합니다.", section: "admin", endpoint: "/approvals/forms", module: "approvals" },
   { id: "SET-002", path: "/settings/ai-key", label: "AI API 키", description: "개인 OpenRouter 키를 암호화 저장하고 연결을 확인합니다.", section: "admin", endpoint: "/pg/agent/api-key", module: null },
