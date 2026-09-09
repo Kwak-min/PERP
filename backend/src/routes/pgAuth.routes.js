@@ -125,5 +125,6 @@ pgRouter.post("/hr/postings/:id/close", asyncRoute(pgRoute(mod.hrPostingClose, "
 pgRouter.get("/hr/postings/:id/applications", asyncRoute(pgRoute(mod.hrPostingApplications, "recruitment.manage", "hr")));
 pgRouter.post("/hr/applications/:id/stage", asyncRoute(pgRoute(mod.hrApplicationStage, "recruitment.manage", "hr")));
 pgRouter.get("/hr/onboarding", asyncRoute(pgRoute(mod.hrOnboarding, "recruitment.manage", "hr")));
+pgRouter.post("/hr/onboarding", asyncRoute(pgRoute(mod.hrOnboardingCreate, "recruitment.manage", "hr")));
 pgRouter.post("/hr/onboarding/:id/complete", asyncRoute(pgRoute(mod.hrOnboardingComplete, "recruitment.manage", "hr")));
 pgRouter.post("/members/invites", asyncRoute(pgRoute(mod.membersInvite, ["member.write", "role.assign"], null)));

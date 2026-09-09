@@ -721,16 +721,85 @@ export async function updateRecord(req, res) {
 export async function membersActivity(req, res) {
   return readOrgActivity(req, res);
 }
-// PUT /api/v1/pg/members/departments/:id/access — 접근권한은 perp_db 미모델 → no-op
-export async function departmentAccess() {
-  throw new ApiError("NOT_IMPLEMENTED", "PG 부서 접근권한 저장 기능은 아직 지원하지 않습니다", {}, 501);
+// 숫자 ID(자유 입력 포함)를 정수 문자열로 정규화한다. 비숫자/빈값은 NULL.
+function normNumericId(value) {
+  if (value == null) return null;
+  const s = String(value).trim();
+  return /^[1-9]\d*$/.test(s) ? s : null;
 }
-// 홈 레이아웃 — perp_db 테이블 없음 → 빈 블록(저장 no-op)
-export async function homeLayoutGet() {
-  throw new ApiError("NOT_IMPLEMENTED", "PG 홈 레이아웃 저장소가 아직 연결되지 않았습니다", {}, 501);
+
+// PUT /api/v1/pg/members/departments/:id/access — 부서 접근 역할 집합을 통째로 교체한다.
+// body: { access_roles: string[] }. 빈 집합 = 조직 전체 공개.
+export async function departmentAccess(req, res) {
+  const { companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 접근 권한을 바꿀 수 있습니다");
+  const id = String(req.params.id ?? "");
+  if (!/^[1-9]\d*$/.test(id)) throw new ApiError("VALIDATION_ERROR", "잘못된 부서 id");
+  const body = req.body ?? {};
+  const roles = Array.isArray(body.access_roles)
+    ? [...new Set(body.access_roles.map((r) => String(r).trim()).filter(Boolean))]
+    : [];
+  await pgTransaction(async (client) => {
+    const dept = await client.query(
+      `SELECT 1 FROM org.departments WHERE id = $1 AND company_id = $2 FOR UPDATE`,
+      [id, companyId],
+    );
+    if (!dept.rows[0]) throw new ApiError("NOT_FOUND", "부서를 찾을 수 없습니다");
+    await client.query(
+      `DELETE FROM org.department_access_roles WHERE department_id = $1 AND company_id = $2`,
+      [id, companyId],
+    );
+    if (roles.length > 0) {
+      await client.query(
+        `INSERT INTO org.department_access_roles (company_id, department_id, role_key)
+         SELECT $1, $2, k FROM unnest($3::text[]) AS k`,
+        [companyId, id, roles],
+      );
+    }
+  });
+  res.json({ ok: true });
 }
-export async function homeLayoutSave() {
-  throw new ApiError("NOT_IMPLEMENTED", "PG 홈 레이아웃 저장 기능은 아직 지원하지 않습니다", {}, 501);
+
+// GET /api/v1/pg/members/home-layout?department_id=&project_id= — 스코프별 홈 블록 조회
+export async function homeLayoutGet(req, res) {
+  const { companyId } = await resolveUser(req);
+  if (!companyId) return res.json({ blocks: [] });
+  const departmentId = normNumericId(req.query.department_id);
+  const projectId = normNumericId(req.query.project_id);
+  const { rows } = await pgQuery(
+    `SELECT blocks FROM org.home_layouts
+      WHERE company_id = $1
+        AND department_id IS NOT DISTINCT FROM $2
+        AND project_id IS NOT DISTINCT FROM $3`,
+    [companyId, departmentId, projectId],
+  );
+  res.json({ blocks: rows[0]?.blocks ?? [] });
+}
+
+// PUT /api/v1/pg/members/home-layout — 스코프(회사+부서+프로젝트)별 홈 블록 upsert
+export async function homeLayoutSave(req, res) {
+  const { companyId, userId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 홈 구성을 저장할 수 있습니다");
+  const body = req.body ?? {};
+  const departmentId = normNumericId(body.department_id);
+  const projectId = normNumericId(body.project_id);
+  const blocks = Array.isArray(body.blocks) ? body.blocks.map((b) => String(b)) : [];
+  if (departmentId) {
+    const { rows } = await pgQuery(`SELECT 1 FROM org.departments WHERE id = $1 AND company_id = $2`, [departmentId, companyId]);
+    if (!rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 부서입니다");
+  }
+  if (projectId) {
+    const { rows } = await pgQuery(`SELECT 1 FROM project.projects WHERE id = $1 AND company_id = $2`, [projectId, companyId]);
+    if (!rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 프로젝트입니다");
+  }
+  await pgQuery(
+    `INSERT INTO org.home_layouts (company_id, department_id, project_id, blocks, updated_by)
+     VALUES ($1, $2, $3, $4::text[], $5)
+     ON CONFLICT (company_id, department_id, project_id)
+     DO UPDATE SET blocks = EXCLUDED.blocks, updated_by = EXCLUDED.updated_by`,
+    [companyId, departmentId, projectId, blocks, userId],
+  );
+  res.json({ ok: true });
 }
 
 // ── 개인 노트(Vault) : notes.vaults / notes.notes ────────────────
@@ -1370,15 +1439,85 @@ export async function hrCheckOut(req, res) {
   res.json({ ok: true });
 }
 
-// 근태 수정요청(corrections) — perp_db 테이블 미구현. 화면이 깨지지 않게 빈/준비중 처리.
-export async function hrCorrections(_req, res) {
-  res.json({ items: [] });
+// 근태 수정요청(corrections) — hr.attendance_corrections.
+const toIso = (v) => (v instanceof Date ? v.toISOString() : v == null ? null : String(v));
+
+// GET /api/v1/pg/hr/attendance/corrections(/pending)
+// 기본(본인) = 내 신청, /pending = 회사 전체 대기 건.
+export async function hrCorrections(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) return res.json({ items: [] });
+  const pendingScope = req.path.endsWith("/pending");
+  const params = [companyId];
+  let where = "company_id = $1";
+  if (pendingScope) {
+    where += " AND status = 'pending'";
+  } else {
+    params.push(userId);
+    where += " AND user_id = $2";
+  }
+  const { rows } = await pgQuery(
+    `SELECT id, user_id, to_char(work_date, 'YYYY-MM-DD') AS on_date, kind, hours, note,
+            status, comment, created_at, decided_at
+       FROM hr.attendance_corrections
+      WHERE ${where}
+      ORDER BY created_at DESC, id DESC`,
+    params,
+  );
+  const items = rows.map((r) => ({
+    id: String(r.id),
+    member_id: String(r.user_id),
+    on_date: r.on_date,
+    kind: r.kind,
+    hours: Number(r.hours),
+    note: r.note ?? "",
+    status: r.status,
+    comment: r.comment ?? "",
+    created_at: toIso(r.created_at) ?? "",
+    decided_at: toIso(r.decided_at),
+  }));
+  res.json({ items });
 }
-export async function hrCorrectionSubmit(_req, res) {
-  throw new ApiError("VALIDATION_ERROR", "근태 수정요청 기능은 준비 중입니다");
+
+// POST /api/v1/pg/hr/attendance/corrections — 본인 수정요청 신청
+export async function hrCorrectionSubmit(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 수정요청할 수 있습니다");
+  const b = req.body ?? {};
+  const onDate = String(b.on_date ?? "");
+  z.string().date().parse(onDate);
+  const kind = String(b.kind ?? "").trim();
+  if (!kind) throw new ApiError("VALIDATION_ERROR", "종류는 필수입니다");
+  const hours = Number(b.hours);
+  if (!Number.isFinite(hours) || hours < 0 || hours > 24) throw new ApiError("VALIDATION_ERROR", "근무시간은 0~24 사이여야 합니다");
+  const note = String(b.note ?? "").trim() || null;
+  const { rows } = await pgQuery(
+    `INSERT INTO hr.attendance_corrections (company_id, user_id, attendance_id, work_date, kind, hours, note)
+     VALUES ($1, $2,
+             (SELECT id FROM hr.attendances WHERE user_id = $2 AND work_date = $3),
+             $3, $4, $5, $6)
+     RETURNING id`,
+    [companyId, userId, onDate, kind, hours, note],
+  );
+  res.status(201).json({ id: String(rows[0].id) });
 }
-export async function hrCorrectionDecide(_req, res) {
-  throw new ApiError("VALIDATION_ERROR", "근태 수정요청 기능은 준비 중입니다");
+
+// POST /api/v1/pg/hr/attendance/corrections/:id/decide — 승인/반려
+export async function hrCorrectionDecide(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "권한이 없습니다");
+  const decision = (req.body ?? {}).decision;
+  const status = decision === "approve" ? "approved" : decision === "reject" ? "rejected" : null;
+  if (!status) throw new ApiError("VALIDATION_ERROR", "decision 은 approve/reject 여야 합니다");
+  const comment = String((req.body ?? {}).comment ?? "").trim() || null;
+  const result = await pgQuery(
+    `UPDATE hr.attendance_corrections
+        SET status = $3, decided_by = $4, decided_at = now(), comment = $5
+      WHERE id = $1 AND company_id = $2 AND status = 'pending'`,
+    [req.params.id, companyId, status, userId, comment],
+  );
+  if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "대기 중인 수정요청을 찾을 수 없습니다");
+  res.json({ ok: true });
 }
 
 // GET /api/v1/pg/hr/leaves — 휴가 목록 (LeaveScreen 계약; 관리자는 전체)
@@ -1490,18 +1629,89 @@ export async function hrLeaveBalances(req, res) {
   res.json({ items });
 }
 
-// GET /api/v1/pg/hr/leave-policies — perp_db 미구현 → 빈 목록
-export async function hrLeavePolicies(_req, res) {
-  res.json({ items: [] });
+// GET /api/v1/pg/hr/leave-policies — 회사 휴가 정책 목록
+export async function hrLeavePolicies(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT id, kind, default_days, carryover_enabled, carryover_max_days, expiry_note
+       FROM hr.leave_policies WHERE company_id = $1 ORDER BY kind`,
+    [companyId],
+  );
+  const items = rows.map((r) => ({
+    id: String(r.id),
+    kind: r.kind,
+    default_days: Number(r.default_days),
+    carryover_enabled: r.carryover_enabled,
+    carryover_max_days: Number(r.carryover_max_days),
+    expiry_note: r.expiry_note ?? "",
+  }));
+  res.json({ items });
 }
 
-// GET /api/v1/pg/hr/leave-stats — 요약(잔여 기반 최소 집계)
+// GET /api/v1/pg/hr/leave-stats — 조직 휴가 소진율(정책 테이블 없이 집계)
+// 연차 부여/사용은 hr.leave_balances(연도별), 그 밖 종류는 승인된 hr.leave_requests 합계.
 export async function hrLeaveStats(req, res) {
+  const companyId = await resolveCompanyId(req);
+  const generatedAt = new Date().toISOString();
+  const formula = "소진율 = 사용 ÷ 부여 × 100";
+  if (!companyId) {
+    return res.json({ items: [], totals: { granted_days: 0, used_days: 0, usage_rate: 0 }, formula, generated_at: generatedAt });
+  }
+  const year = new Date().getFullYear();
+  const [{ rows: balances }, { rows: usage }] = await Promise.all([
+    pgQuery(
+      `SELECT user_id, total_days, used_days FROM hr.leave_balances
+        WHERE company_id = $1 AND year = $2`,
+      [companyId, year],
+    ),
+    pgQuery(
+      `SELECT user_id, leave_type, SUM(days) AS used
+         FROM hr.leave_requests
+        WHERE company_id = $1 AND status = 'approved'
+        GROUP BY user_id, leave_type`,
+      [companyId],
+    ),
+  ]);
+  const rate = (used, granted) => (granted > 0 ? Math.round((used / granted) * 1000) / 10 : 0);
+  const items = [];
+  // 연차: 잔여 테이블 기준(부여·사용의 권위 소스)
+  for (const b of balances) {
+    const granted = Number(b.total_days);
+    const used = Number(b.used_days);
+    items.push({
+      member_id: String(b.user_id),
+      kind: "annual",
+      granted_days: granted,
+      used_days: used,
+      remaining_days: Math.round((granted - used) * 10) / 10,
+      usage_rate: rate(used, granted),
+    });
+  }
+  // 그 밖 종류: 승인된 신청 합계(부여 소스 없음 → 0)
+  for (const u of usage) {
+    if (u.leave_type === "annual") continue;
+    const used = Number(u.used);
+    items.push({
+      member_id: String(u.user_id),
+      kind: u.leave_type,
+      granted_days: 0,
+      used_days: used,
+      remaining_days: 0,
+      usage_rate: 0,
+    });
+  }
+  const grantedTotal = items.reduce((s, i) => s + i.granted_days, 0);
+  const usedTotal = items.reduce((s, i) => s + i.used_days, 0);
   res.json({
-    items: [],
-    totals: { granted_days: 0, used_days: 0, usage_rate: 0 },
-    formula: "",
-    generated_at: new Date().toISOString(),
+    items,
+    totals: {
+      granted_days: Math.round(grantedTotal * 10) / 10,
+      used_days: Math.round(usedTotal * 10) / 10,
+      usage_rate: rate(usedTotal, grantedTotal),
+    },
+    formula,
+    generated_at: generatedAt,
   });
 }
 
@@ -1582,14 +1792,130 @@ export async function hrApplicationStage(req, res) {
   res.json({ ok: true });
 }
 
-// 온보딩 — perp_db 테이블 미구현 → 빈/준비중
-export async function hrOnboarding(_req, res) {
-  res.json({ items: [], progress: { total: 0, done: 0 } });
+// 온보딩/오프보딩 체크리스트 — hr.onboarding_tasks.
+async function requireCompanyMemberId(companyId, memberId) {
+  if (!/^[1-9]\d*$/.test(String(memberId ?? ""))) throw new ApiError("VALIDATION_ERROR", "구성원을 선택하세요");
+  const { rows } = await pgQuery(
+    `SELECT 1 FROM org.company_memberships WHERE user_id = $1 AND company_id = $2 AND status = 'active'`,
+    [memberId, companyId],
+  );
+  if (!rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 구성원입니다");
 }
-export async function hrOnboardingComplete(_req, res) {
-  throw new ApiError("VALIDATION_ERROR", "온보딩 기능은 준비 중입니다");
+
+// GET /api/v1/pg/hr/onboarding?member_id= — 구성원별 체크리스트
+export async function hrOnboarding(req, res) {
+  const companyId = await resolveCompanyId(req);
+  const empty = { items: [], progress: { total: 0, done: 0 } };
+  if (!companyId) return res.json(empty);
+  const memberId = normNumericId(req.query.member_id);
+  if (!memberId) return res.json(empty);
+  const { rows } = await pgQuery(
+    `SELECT id, user_id, flow, label, done
+       FROM hr.onboarding_tasks
+      WHERE company_id = $1 AND user_id = $2
+      ORDER BY seq, id`,
+    [companyId, memberId],
+  );
+  const items = rows.map((r) => ({
+    id: String(r.id),
+    member_id: String(r.user_id),
+    flow: r.flow,
+    label: r.label,
+    done: r.done,
+  }));
+  const done = items.filter((i) => i.done).length;
+  res.json({ items, progress: { total: items.length, done } });
 }
-// 채용 확정 후 멤버 초대 — perp_db 이관 전 준비중
-export async function membersInvite(_req, res) {
-  throw new ApiError("VALIDATION_ERROR", "구성원 초대 기능은 준비 중입니다");
+
+// POST /api/v1/pg/hr/onboarding — 체크리스트 생성 { member_id, flow, labels[] }
+export async function hrOnboardingCreate(req, res) {
+  const { companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 체크리스트를 만들 수 있습니다");
+  const b = req.body ?? {};
+  const memberId = String(b.member_id ?? "");
+  await requireCompanyMemberId(companyId, memberId);
+  const flow = b.flow === "offboarding" ? "offboarding" : "onboarding";
+  const labels = Array.isArray(b.labels)
+    ? b.labels.map((l) => String(l).trim()).filter(Boolean)
+    : [];
+  if (labels.length === 0) throw new ApiError("VALIDATION_ERROR", "체크리스트 항목을 입력하세요");
+  await pgTransaction(async (client) => {
+    for (let i = 0; i < labels.length; i += 1) {
+      await client.query(
+        `INSERT INTO hr.onboarding_tasks (company_id, user_id, flow, label, seq)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [companyId, memberId, flow, labels[i], i + 1],
+      );
+    }
+  });
+  res.status(201).json({ ok: true, created: labels.length });
+}
+
+// POST /api/v1/pg/hr/onboarding/:id/complete — 항목 완료 처리
+export async function hrOnboardingComplete(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "권한이 없습니다");
+  const result = await pgQuery(
+    `UPDATE hr.onboarding_tasks
+        SET done = true, done_at = now(), done_by = $3
+      WHERE id = $1 AND company_id = $2 AND done = false`,
+    [req.params.id, companyId, userId],
+  );
+  if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "미완료 항목을 찾을 수 없습니다");
+  res.json({ ok: true });
+}
+
+// POST /api/v1/pg/members/invites — 채용 확정 후 계정 초대 { email, roles?, department_id?, position_id? }
+export async function membersInvite(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 초대할 수 있습니다");
+  const b = req.body ?? {};
+  const email = String(b.email ?? "").trim();
+  if (!email || !email.includes("@")) throw new ApiError("VALIDATION_ERROR", "올바른 이메일을 입력하세요");
+  const roles = Array.isArray(b.roles)
+    ? [...new Set(b.roles.map((r) => String(r).trim()).filter(Boolean))]
+    : [];
+  const departmentId = normNumericId(b.department_id);
+  const positionId = normNumericId(b.position_id);
+  if (departmentId) {
+    const { rows } = await pgQuery(`SELECT 1 FROM org.departments WHERE id = $1 AND company_id = $2`, [departmentId, companyId]);
+    if (!rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 부서입니다");
+  }
+  if (positionId) {
+    const { rows } = await pgQuery(`SELECT 1 FROM org.positions WHERE id = $1 AND company_id = $2`, [positionId, companyId]);
+    if (!rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 직급입니다");
+  }
+  const returning = `id, email, roles, status,
+    to_char(expires_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS expires_at, token`;
+  const { rows } = await pgQuery(
+    `INSERT INTO org.member_invites (company_id, email, roles, department_id, position_id, invited_by)
+     VALUES ($1, $2, $3::text[], $4, $5, $6)
+     ON CONFLICT (company_id, lower(email)) WHERE status = 'pending' DO NOTHING
+     RETURNING ${returning}`,
+    [companyId, email, roles, departmentId, positionId, userId],
+  );
+  let row = rows[0];
+  if (!row) {
+    // 이미 대기 중인 초대가 있으면 그 초대를 그대로 돌려준다(멱등).
+    const existing = await pgQuery(
+      `SELECT ${returning} FROM org.member_invites
+        WHERE company_id = $1 AND lower(email) = lower($2) AND status = 'pending'
+        ORDER BY id DESC LIMIT 1`,
+      [companyId, email],
+    );
+    row = existing.rows[0];
+    if (!row) throw new ApiError("CONFLICT", "초대를 생성할 수 없습니다");
+  }
+  const company = await pgQuery(`SELECT name FROM org.companies WHERE id = $1`, [companyId]);
+  res.status(201).json({
+    invitation_id: String(row.id),
+    email: row.email,
+    org_id: `pg:${companyId}`,
+    org_name: company.rows[0]?.name ?? "",
+    org_type: "perp_db",
+    roles: row.roles,
+    status: row.status,
+    expires_at: row.expires_at,
+    token: row.token,
+  });
 }
