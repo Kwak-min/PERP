@@ -1649,6 +1649,74 @@ export async function hrLeavePolicies(req, res) {
   res.json({ items });
 }
 
+// POST /api/v1/pg/hr/leave-policies — 회사 휴가 정책 upsert (company_id, kind)
+export async function hrLeavePolicySave(req, res) {
+  const { userId, companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 휴가 정책을 저장할 수 있습니다");
+  const b = req.body ?? {};
+  const kind = String(b.kind ?? "").trim();
+  if (!kind) throw new ApiError("VALIDATION_ERROR", "휴가 종류는 필수입니다");
+  const nonNeg = (value, label) => {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) throw new ApiError("VALIDATION_ERROR", `${label}는 0 이상이어야 합니다`);
+    return n;
+  };
+  const defaultDays = nonNeg(b.default_days, "기본 부여일수");
+  const carryoverEnabled = Boolean(b.carryover_enabled);
+  const carryoverMax = nonNeg(b.carryover_max_days, "이월 한도");
+  const expiryNote = String(b.expiry_note ?? "");
+  const { rows } = await pgQuery(
+    `INSERT INTO hr.leave_policies
+       (company_id, kind, default_days, carryover_enabled, carryover_max_days, expiry_note, updated_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (company_id, kind) DO UPDATE
+        SET default_days       = EXCLUDED.default_days,
+            carryover_enabled  = EXCLUDED.carryover_enabled,
+            carryover_max_days = EXCLUDED.carryover_max_days,
+            expiry_note        = EXCLUDED.expiry_note,
+            updated_by         = EXCLUDED.updated_by
+     RETURNING id, kind, default_days, carryover_enabled, carryover_max_days, expiry_note`,
+    [companyId, kind, defaultDays, carryoverEnabled, carryoverMax, expiryNote, userId],
+  );
+  const r = rows[0];
+  res.status(201).json({
+    id: String(r.id),
+    kind: r.kind,
+    default_days: Number(r.default_days),
+    carryover_enabled: r.carryover_enabled,
+    carryover_max_days: Number(r.carryover_max_days),
+    expiry_note: r.expiry_note ?? "",
+  });
+}
+
+// POST /api/v1/pg/hr/leave-balances — 관리자 휴가 부여 (연도별 total_days 설정)
+// hr.leave_balances 는 종류(kind) 구분이 없어 연차(연도 단위) 잔여만 관리한다.
+export async function hrLeaveGrant(req, res) {
+  const { companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 휴가를 부여할 수 있습니다");
+  const b = req.body ?? {};
+  const memberId = String(b.member_id ?? "");
+  await requireCompanyMemberId(companyId, memberId);
+  const granted = Number(b.granted_days);
+  if (!Number.isFinite(granted) || granted < 0) throw new ApiError("VALIDATION_ERROR", "부여일수는 0 이상이어야 합니다");
+  const year = new Date().getFullYear();
+  const { rows } = await pgQuery(
+    `INSERT INTO hr.leave_balances (company_id, user_id, year, total_days, used_days)
+     VALUES ($1, $2, $3, $4, 0)
+     ON CONFLICT (user_id, year) DO UPDATE
+        SET total_days = EXCLUDED.total_days, company_id = EXCLUDED.company_id
+     RETURNING total_days, used_days`,
+    [companyId, memberId, year, granted],
+  );
+  const total = Number(rows[0].total_days);
+  const used = Number(rows[0].used_days);
+  res.status(201).json({
+    granted_days: total,
+    used_days: used,
+    remaining_days: Math.round((total - used) * 10) / 10,
+  });
+}
+
 // GET /api/v1/pg/hr/leave-stats — 조직 휴가 소진율(정책 테이블 없이 집계)
 // 연차 부여/사용은 hr.leave_balances(연도별), 그 밖 종류는 승인된 hr.leave_requests 합계.
 export async function hrLeaveStats(req, res) {
@@ -1918,4 +1986,46 @@ export async function membersInvite(req, res) {
     expires_at: row.expires_at,
     token: row.token,
   });
+}
+
+// GET /api/v1/pg/members/invites — 회사가 보낸 초대 목록(회사 스코프). 생성 응답과 같은 item 형태.
+export async function membersInvitesList(req, res) {
+  const companyId = await resolveCompanyId(req);
+  if (!companyId) return res.json({ items: [] });
+  const { rows } = await pgQuery(
+    `SELECT mi.id, mi.email, mi.roles, mi.status,
+            to_char(mi.expires_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS expires_at,
+            c.name AS company_name
+       FROM org.member_invites mi
+       JOIN org.companies c ON c.id = mi.company_id
+      WHERE mi.company_id = $1
+      ORDER BY mi.created_at DESC, mi.id DESC`,
+    [companyId],
+  );
+  const items = rows.map((r) => ({
+    invitation_id: String(r.id),
+    email: r.email,
+    org_id: `pg:${companyId}`,
+    org_name: r.company_name ?? "",
+    org_type: "perp_db",
+    roles: r.roles ?? [],
+    status: r.status,
+    expires_at: r.expires_at,
+  }));
+  res.json({ items });
+}
+
+// POST /api/v1/pg/members/invites/:id/revoke — 대기 중 초대 취소(status='revoked')
+export async function membersInviteRevoke(req, res) {
+  const { companyId } = await resolveUser(req);
+  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 초대를 취소할 수 있습니다");
+  const id = String(req.params.id ?? "");
+  if (!/^[1-9]\d*$/.test(id)) throw new ApiError("VALIDATION_ERROR", "잘못된 초대 id");
+  const result = await pgQuery(
+    `UPDATE org.member_invites SET status = 'revoked'
+      WHERE id = $1 AND company_id = $2 AND status = 'pending'`,
+    [id, companyId],
+  );
+  if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "취소할 대기 중 초대를 찾을 수 없습니다");
+  res.json({ ok: true });
 }

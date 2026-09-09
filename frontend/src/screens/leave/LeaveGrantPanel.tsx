@@ -39,7 +39,7 @@ export function LeaveGrantPanel({ members, policies, apiSession, onGranted }: Pr
     setError(null);
     setResult(null);
     try {
-      const granted = (await apiRequest("/hr/leave-balances", {
+      const granted = (await apiRequest("/pg/hr/leave-balances", {
         method: "POST",
         session: apiSession,
         body: { member_id: memberId, kind, granted_days: toNonNegativeInt(days) },

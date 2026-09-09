@@ -80,7 +80,7 @@ export function OperationalSurface({ screen, session }: Readonly<{ screen: Scree
   useEffect(() => {
     if (kind !== "approval" && kind !== "dues") return;
     const controller = new AbortController();
-    apiRequest("/members?limit=500", { session, signal: controller.signal }).then((payload) => {
+    apiRequest(session.orgId?.startsWith("pg:") ? "/pg/members?limit=500" : "/members?limit=500", { session, signal: controller.signal }).then((payload) => {
       const parsed = membersSchema.parse(payload);
       if (!controller.signal.aborted) setMembers(parsed.items.map((member) => ({ id: member.user_id, label: `${member.name} (${member.email})` })));
     }).catch((caught: unknown) => {
