@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {setupJobs} from './deadline-wiki-jobs-fixture.js';
 
-// Explicit safe fixture argument, never inherited private provider/.env configuration.
-const configuration=JSON.parse(process.argv[2] ?? 'null');
-assert.equal(configuration?.base_url,'http://127.0.0.1:12345');
-assert.equal(configuration?.model,'perp-task32-smoke');
-assert.equal(configuration?.context_tokens,8192);
+import {validateModelConfig} from '../../scripts/deadline-model-config.mjs';
+
+// Explicit opt-in and caller-owned isolated runtime; never discover a default provider.
+assert.equal(process.env.DEADLINE_ISOLATED,'1');
+const {configuration}=validateModelConfig(JSON.parse(process.argv[2] ?? 'null'));
 const f=await setupJobs('legacy'),evidence={kind:'actual-loaded-local-model-synthetic-Korean-only',configuration,results:[],dispatch_manifests:[]};
 try {
   const {createLocalWikiCompiler,compilerRequest}=await import('../src/services/knowledge-wiki-compiler.service.js');
@@ -20,8 +20,8 @@ try {
     const job=await getWikiJob(f.context,admitted.job.id);
     const manifest=await f.tx(f.context,{},function*(tx){return yield* tx.storedManifest(job.id,job.current_attempt_id);});
     evidence.dispatch_manifests.push({job_id:job.id,manifest,request:compilerRequest(manifest,configuration)});
-    assert.equal(job.state,'succeeded');assert.equal(job.attempts[0].model_version,'perp-task32-smoke');
-    assert.equal(job.attempts[0].configuration.loaded_context_tokens,8192);
+    assert.equal(job.state,'succeeded');assert.equal(job.attempts[0].model_version,configuration.model);
+    assert.equal(job.attempts[0].configuration.loaded_context_tokens,configuration.context_tokens);
     assert.equal(result.review_state,'unreviewed');assert.equal(result.citation_validation,'anchors_valid');
     assert.ok(result.provenance.accounting.actual_prompt_tokens>0);
     if(request.operation==='ingest')assert.ok(result.change_set_id);
@@ -37,4 +37,4 @@ finally {
   const dir=new URL('../../.omo/evidence/task-32-deadline-erp-redesign/',import.meta.url);await mkdir(dir,{recursive:true});
   await writeFile(new URL('real-model-smoke.json',dir),JSON.stringify(evidence,null,2));
 }
-console.log(JSON.stringify({real_model:configuration.model,context:8192,operations:evidence.results.map(r=>r.request.operation),published_pages:0}));
+console.log(JSON.stringify({real_model:configuration.model,context:configuration.context_tokens,operations:evidence.results.map(r=>r.request.operation),published_pages:0}));

@@ -203,8 +203,37 @@ export async function personalWikiScenario({ f, mode, open, arm, done, after, ca
     await after(page, `.wiki-revision[data-revision-id="${published.revision_id}"]`, () => page.getByRole('button', { name: `v${v1.version} · ${v1.title} · ${v1.freshness}`, exact: true }).click());
     assert.ok((await page.locator('.wiki-revision').innerText()).includes(durable.result.answer_md));
     assert.ok(!(await page.locator('.wiki-revision').innerText()).includes(edited));
-    await after(page, `.wiki-revision[data-revision-id="${source.current_revision_id}"] mark`, () => page.locator('.wiki-revision .wiki-citations button').first().click());
-    assert.equal(await page.locator('.wiki-revision mark').textContent(), text);
+    // Force reauthorization to overlap the existing history citation click.
+    // Real HTTP responses are held, not replaced; a refresh must not restore
+    // the previously selected page over the newly verified source citation.
+    const citationHeld = Promise.withResolvers(), citationRelease = Promise.withResolvers();
+    const previousHeld = Promise.withResolvers(), previousRelease = Promise.withResolvers();
+    const routeFinished = [];
+    const sourceUrl = url => url.pathname === apiRoot + exactSource;
+    const previousUrl = url => url.pathname === apiRoot + `/pages/${published.id}` && url.searchParams.get('revision') === published.revision_id;
+    const hold = (held, release) => async route => {
+      const finished = Promise.withResolvers(); routeFinished.push(finished.promise);
+      try { const response = await route.fetch(); held.resolve(); await release.promise; await route.fulfill({ response }); finished.resolve(); }
+      catch (error) { held.reject(error); finished.reject(error); }
+    };
+    const bound = promise => { let timer; return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('citation refresh deadline')), 20000); })]).finally(() => clearTimeout(timer)); };
+    await page.context().route(sourceUrl, hold(citationHeld, citationRelease), { times: 1 });
+    await page.context().route(previousUrl, hold(previousHeld, previousRelease), { times: 1 });
+    try {
+      await page.locator('.wiki-revision .wiki-citations button').first().click(); await bound(citationHeld.promise);
+      await after(page, '[data-wiki-workspace][data-loading="true"]', () => page.evaluate(() => window.dispatchEvent(new Event('orbitflow:access-changed'))));
+      await arm(page, '[data-wiki-workspace][data-loading="false"]'); const refreshed = done(page);
+      await bound(Promise.race([previousHeld.promise, refreshed]));
+      await after(page, `.wiki-revision[data-revision-id="${source.current_revision_id}"] mark`, async () => citationRelease.resolve());
+      previousRelease.resolve(); await bound(refreshed);
+      assert.equal(await page.locator('.wiki-revision').getAttribute('data-revision-id'), source.current_revision_id);
+      assert.equal(await page.locator('.wiki-revision mark').textContent(), text);
+      proof.checks.push('reauthorization overlapping history citation cannot restore the old selected page over the exact verified source revision');
+    } finally {
+      citationRelease.resolve(); previousRelease.resolve();
+      await page.context().unroute(sourceUrl); await page.context().unroute(previousUrl);
+      await bound(Promise.all(routeFinished));
+    }
     await selectPublished(manual.revision_id);
     await page.getByRole('button', { name: '위키 수동 편집', exact: true }).click(); await page.getByLabel('위키 편집 본문').fill('TASK28_PERSONAL_REJECTED_NOT_PUBLISHED');
     const rejected = await ui(`/pages/${published.id}/change-sets`, 'POST', () => page.getByRole('button', { name: '수동 변경을 검토 초안으로 저장' }).click(), 201); rejectedId = rejected.id;

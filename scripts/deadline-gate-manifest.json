@@ -1,0 +1,1857 @@
+{
+  "schemaVersion": 1,
+  "base": "9928186cacdc67ce3418ac0346f44fdf7408b8a1",
+  "status": "entry-point-preparation-not-certification",
+  "integrationRequired": {
+    "policy": "mandatory-files-fail-preflight-until-integrated",
+    "nativeTargets": [
+      "native:deadline-cleanup-pg-limits-native",
+      "native:deadline-import-maintenance-native",
+      "native:deadline-receipt-maintenance-native",
+      "native:deadline-runtime-integration-native"
+    ],
+    "rootRequiredTests": [
+      "backend/tests/deadline-import-maintenance-server.test.js",
+      "backend/tests/deadline-import-maintenance.test.js",
+      "backend/tests/deadline-runtime-startup.test.js"
+    ],
+    "browserTargets": [
+      "browser:final-ui-fixes"
+    ]
+  },
+  "mandatoryFinalChecks": [
+    {
+      "id": "final:reservation-build",
+      "mandatory": true,
+      "execution": "separate-from-gate",
+      "invocation": ["node", "scripts/run_deadline_isolated.mjs", "npm", "run", "build", "--prefix", "Reservation/backend"]
+    },
+    {
+      "id": "final:root-audit",
+      "mandatory": true,
+      "execution": "separate-from-gate",
+      "invocation": ["node", "scripts/run_deadline_isolated.mjs", "npm", "audit", "--json"]
+    },
+    {
+      "id": "final:reservation-audit",
+      "mandatory": true,
+      "execution": "separate-from-gate",
+      "invocation": ["node", "scripts/run_deadline_isolated.mjs", "npm", "audit", "--prefix", "Reservation/backend", "--json"]
+    },
+    {
+      "id": "final:structure",
+      "mandatory": true,
+      "execution": "separate-from-gate",
+      "invocation": ["node", "scripts/run_deadline_isolated.mjs", "node", "scripts/check_structure.mjs"]
+    },
+    {
+      "id": "final:docs-coverage",
+      "mandatory": true,
+      "execution": "separate-from-gate",
+      "invocation": ["node", "scripts/run_deadline_isolated.mjs", "python", "scripts/check_docs_coverage.py"]
+    },
+    {
+      "id": "final:deliverables",
+      "mandatory": true,
+      "execution": "separate-from-gate",
+      "invocation": ["node", "scripts/run_deadline_isolated.mjs", "python", "scripts/check_deliverables.py"]
+    }
+  ],
+  "independentFinalReviews": ["F1", "F2", "F3", "F4"],
+  "phaseOrder": [
+    "root",
+    "unit",
+    "build",
+    "native",
+    "reservation",
+    "browser",
+    "model"
+  ],
+  "parallelism": {
+    "targets": 2,
+    "rootTest": "unchanged Node default test-file parallelism",
+    "browserTargets": 1,
+    "browserReason": "delivered leaves share fixed screenshot/evidence paths; internal races remain event-gated"
+  },
+  "requiredScenarioSources": [
+    "frontend/scripts/deadline-analytics.e2e.mjs",
+    "frontend/scripts/deadline-assets-footer.mjs",
+    "frontend/scripts/deadline-disabled-hr-features-qa.mjs",
+    "frontend/scripts/deadline-members-pagination.mjs",
+    "frontend/scripts/deadline-month-summary.e2e.mjs",
+    "frontend/scripts/deadline-nav-pref.e2e.mjs",
+    "frontend/scripts/deadline-role-toggles.e2e.mjs",
+    "frontend/scripts/deadline-roles-qa.mjs",
+    "frontend/scripts/deadline-approval-extended.scenario.mjs",
+    "frontend/scripts/deadline-approval-workflow.scenario.mjs",
+    "frontend/scripts/deadline-expense-import.scenario.mjs",
+    "frontend/scripts/deadline-expense-receipt.scenario.mjs",
+    "frontend/scripts/deadline-graph-engine.scenario.mjs",
+    "frontend/scripts/deadline-project-members-access.scenario.mjs",
+    "frontend/scripts/deadline-project-members-recovery.scenario.mjs",
+    "frontend/scripts/deadline-project-members.scenario.mjs",
+    "frontend/scripts/deadline-receipt-blob.scenario.mjs",
+    "frontend/scripts/deadline-recruitment-nav.scenario.mjs",
+    "frontend/scripts/deadline-reservation-calendar.checks.mjs",
+    "frontend/scripts/deadline-reservation-calendar.scenario.mjs",
+    "frontend/scripts/deadline-reservation-conflict.checks.mjs",
+    "frontend/scripts/deadline-reservation-conflict.scenario.mjs",
+    "frontend/scripts/deadline-reservation-history.checks.mjs",
+    "frontend/scripts/deadline-reservation-recurrence.checks.mjs",
+    "frontend/scripts/deadline-role-boundaries.cases.mjs",
+    "frontend/scripts/deadline-role-definition.cases.mjs",
+    "frontend/scripts/deadline-role-toggles.cases.mjs",
+    "frontend/scripts/deadline-sidebar.scenario.mjs"
+  ],
+  "aliases": {
+    "knowledge-graphs": [
+      "browser:knowledge-wiki:legacy",
+      "browser:knowledge-wiki:pg"
+    ],
+    "backend/tests/deadline-native.integration.mjs": "node scripts/run_deadline_gate.mjs --suite native --pg-bin <explicit-pg18-bin>"
+  },
+  "realModel": {
+    "entry": "backend/tests/deadline-wiki-model-smoke.mjs",
+    "ownership": "caller-owned-isolated",
+    "optIn": "--model-config <secrets-free-json>",
+    "notInvoked": [
+      "frontend/scripts/task28-gemma.e2e.mjs"
+    ],
+    "reason": "Historical Gemma harness owns a hardcoded user LM Studio runtime. Gate instead requires an explicitly caller-owned isolated runtime and real ingest/query smoke; synthetic browser model is not real-model evidence."
+  },
+  "targets": [
+    {
+      "id": "root:parallel",
+      "suite": "root",
+      "command": "npm",
+      "args": [
+        "test"
+      ],
+      "required": [
+        "package.json",
+        "backend/package.json",
+        "frontend/package.json",
+        "backend/tests/agent-api-key.test.js",
+        "backend/tests/agent-onboarding.test.js",
+        "backend/tests/agent-role-mutations.test.js",
+        "backend/tests/assets-hr.test.js",
+        "backend/tests/attendance-checkin.test.js",
+        "backend/tests/calendar-handover-permissions.test.js",
+        "backend/tests/calendar-month-window.test.js",
+        "backend/tests/custom-role-settings.test.js",
+        "backend/tests/daily-corrections.test.js",
+        "backend/tests/daily-list-finance.test.js",
+        "backend/tests/daily-pg-corrections.test.js",
+        "backend/tests/deadline-analytics.test.js",
+        "backend/tests/deadline-approval-consumer.test.js",
+        "backend/tests/deadline-approvals-revision.test.js",
+        "backend/tests/deadline-approvals.test.js",
+        "backend/tests/deadline-expense-csv.test.js",
+        "backend/tests/deadline-expense-import.test.js",
+        "backend/tests/deadline-expenses.test.js",
+        "backend/tests/deadline-fixture.test.js",
+        "backend/tests/deadline-graph-contract.test.js",
+        "backend/tests/deadline-project-candidates.test.js",
+        "backend/tests/deadline-project-read-access-pg.test.js",
+        "backend/tests/deadline-project-read-access.test.js",
+        "backend/tests/deadline-receipts.test.js",
+        "backend/tests/deadline-roles.test.js",
+        "backend/tests/deadline-wiki-consumer.test.js",
+        "backend/tests/deadline-wiki-integration.test.js",
+        "backend/tests/deadline-wiki-jobs.test.js",
+        "backend/tests/deadline-wiki-publication.test.js",
+        "backend/tests/deadline-wiki-rag.test.js",
+        "backend/tests/deadline-wiki-reader.test.js",
+        "backend/tests/deadline-wiki-sse.test.js",
+        "backend/tests/deadline-wiki-storage.test.js",
+        "backend/tests/document-ai-link.test.js",
+        "backend/tests/document-confidentiality.test.js",
+        "backend/tests/documents-graph.test.js",
+        "backend/tests/finance.test.js",
+        "backend/tests/home-layout.test.js",
+        "backend/tests/identity-lifecycle.test.js",
+        "backend/tests/leave-management.test.js",
+        "backend/tests/member-field-requests.test.js",
+        "backend/tests/member-profile.test.js",
+        "backend/tests/member-provisioning-security.test.js",
+        "backend/tests/no-department-defaults.test.js",
+        "backend/tests/organization-feature-optins.test.js",
+        "backend/tests/organization-feature-settings.test.js",
+        "backend/tests/pg-agent-api-key.test.js",
+        "backend/tests/pg-auth-unavailable.test.js",
+        "backend/tests/pg-company-creator-admin.test.js",
+        "backend/tests/pg-company-memberships.test.js",
+        "backend/tests/pg-custom-role-settings.test.js",
+        "backend/tests/pg-daily-finance.test.js",
+        "backend/tests/pg-document-ai-link.test.js",
+        "backend/tests/pg-integration-security.test.js",
+        "backend/tests/pg-org-audit.test.js",
+        "backend/tests/pg-signup-transaction.test.js",
+        "backend/tests/pg-usage-tasks.test.js",
+        "backend/tests/pg-vault-contract.test.js",
+        "backend/tests/pg-vault-semantic.test.js",
+        "backend/tests/project-assignment-notifications.test.js",
+        "backend/tests/project-task-unification.test.js",
+        "backend/tests/recruitment-pipeline.test.js",
+        "backend/tests/remaining-domains.test.js",
+        "backend/tests/reservation-principal.test.js",
+        "backend/tests/security.test.js",
+        "backend/tests/seed.test.js",
+        "backend/tests/shared-ai-key.test.js",
+        "backend/tests/vault-semantic-budget.test.js",
+        "backend/tests/vault-semantic.test.js",
+        "backend/tests/deadline-import-maintenance-server.test.js",
+        "backend/tests/deadline-import-maintenance.test.js",
+        "backend/tests/deadline-runtime-startup.test.js",
+        "frontend/scripts/check-routes.mjs",
+        "frontend/scripts/check-markdown.mjs"
+      ],
+      "coverage": [
+        "root:default-parallel",
+        "legacy:all-domains",
+        "pg:sql-boundaries",
+        "runtime:maintenance-server",
+        "runtime:maintenance-scheduling",
+        "runtime:startup-native-pg"
+      ],
+      "capabilities": ["pg18"]
+    },
+    {
+      "id": "build:frontend",
+      "suite": "build",
+      "command": "npm",
+      "args": [
+        "run",
+        "build"
+      ],
+      "required": [
+        "frontend/package.json",
+        "frontend/tsconfig.json"
+      ],
+      "coverage": [
+        "frontend:compiled-bundle"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/calendar-model.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/calendar-model.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/calendar-model.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/calendar-model.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/deadline-analytics-model.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/deadline-analytics-model.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/deadline-analytics-model.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/deadline-analytics-model.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/deadline-approval-model.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/deadline-approval-model.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/deadline-approval-model.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/deadline-approval-model.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/deadline-approval-response-browser.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/deadline-approval-response-browser.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/deadline-approval-response-browser.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/deadline-approval-response-browser.test.mjs"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "unit:frontend/scripts/deadline-approval-responses.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/deadline-approval-responses.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/deadline-approval-responses.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/deadline-approval-responses.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/deadline-assets-footer.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/deadline-assets-footer.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/deadline-assets-footer.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/deadline-assets-footer.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/deadline-browser-session.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/deadline-browser-session.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/deadline-browser-session.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/deadline-browser-session.test.mjs"
+      ],
+      "capabilities": ["browser"]
+    },
+    {
+      "id": "unit:frontend/scripts/deadline-graph-contract.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/deadline-graph-contract.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/deadline-graph-contract.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/deadline-graph-contract.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/deadline-harness.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/deadline-harness.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/deadline-harness.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/deadline-harness.test.mjs"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "unit:frontend/scripts/deadline-members-pagination.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/deadline-members-pagination.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/deadline-members-pagination.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/deadline-members-pagination.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/deadline-nav-pref-harness.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/deadline-nav-pref-harness.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/deadline-nav-pref-harness.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/deadline-nav-pref-harness.test.mjs"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "unit:frontend/scripts/deadline-nav-pref.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/deadline-nav-pref.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/deadline-nav-pref.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/deadline-nav-pref.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/deadline-qa-dispatch.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/deadline-qa-dispatch.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa-dispatch.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/deadline-qa-dispatch.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/deadline-recruitment-nav.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/deadline-recruitment-nav.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/deadline-recruitment-nav.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/deadline-recruitment-nav.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/deadline-role-model.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/deadline-role-model.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/deadline-role-model.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/deadline-role-model.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/expense-model.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/expense-model.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/expense-model.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/expense-model.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/graph-engine.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/graph-engine.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/graph-engine.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/graph-engine.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/graph-model.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/graph-model.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/graph-model.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/graph-model.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/graph-response.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/graph-response.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/graph-response.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/graph-response.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/knowledge-graph-stage.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/knowledge-graph-stage.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/knowledge-graph-stage.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/knowledge-graph-stage.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/project-task-model.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/project-task-model.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/project-task-model.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/project-task-model.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/screen-table.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/screen-table.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/screen-table.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/screen-table.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/semantic-graph.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/semantic-graph.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/semantic-graph.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/semantic-graph.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/task28-personal.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/task28-personal.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/task28-personal.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/task28-personal.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/scripts/task28-wiki-model.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/scripts/task28-wiki-model.test.mjs"
+      ],
+      "required": [
+        "frontend/scripts/task28-wiki-model.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/scripts/task28-wiki-model.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/src/screens/reservation/form-contract.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/src/screens/reservation/form-contract.test.mjs"
+      ],
+      "required": [
+        "frontend/src/screens/reservation/form-contract.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/src/screens/reservation/form-contract.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/src/screens/reservation/occupancy.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/src/screens/reservation/occupancy.test.mjs"
+      ],
+      "required": [
+        "frontend/src/screens/reservation/occupancy.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/src/screens/reservation/occupancy.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:frontend/src/services/reservationApi.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "frontend/src/services/reservationApi.test.mjs"
+      ],
+      "required": [
+        "frontend/src/services/reservationApi.test.mjs"
+      ],
+      "coverage": [
+        "unit:frontend/src/services/reservationApi.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:scripts/deadline-database-isolation.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "scripts/deadline-database-isolation.test.mjs"
+      ],
+      "required": [
+        "scripts/deadline-database-isolation.test.mjs"
+      ],
+      "coverage": [
+        "unit:scripts/deadline-database-isolation.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:scripts/deadline-gate.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "scripts/deadline-gate.test.mjs"
+      ],
+      "required": [
+        "scripts/deadline-gate.test.mjs"
+      ],
+      "coverage": [
+        "unit:scripts/deadline-gate.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "unit:scripts/deadline-runner.test.mjs",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "--test",
+        "scripts/deadline-runner.test.mjs"
+      ],
+      "required": [
+        "scripts/deadline-runner.test.mjs"
+      ],
+      "coverage": [
+        "unit:scripts/deadline-runner.test.mjs"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "native:deadline-analytics-feature-failure-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-analytics-feature-failure-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-analytics-feature-failure-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-analytics-feature-failure-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-analytics-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-analytics-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-analytics-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-analytics-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-approval-history-order-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-approval-history-order-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-approval-history-order-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-approval-history-order-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-approvals-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-approvals-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-approvals-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-approvals-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-approvals-read-policy-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-approvals-read-policy-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-approvals-read-policy-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-approvals-read-policy-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-approvals-revision-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-approvals-revision-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-approvals-revision-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-approvals-revision-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-expense-import-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-expense-import-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-expense-import-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-expense-import-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-expenses-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-expenses-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-expenses-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-expenses-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-expenses-revision-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-expenses-revision-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-expenses-revision-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-expenses-revision-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-project-read-access-pg-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-project-read-access-pg-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-project-read-access-pg-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-project-read-access-pg-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-receipts-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-receipts-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-receipts-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-receipts-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-roles-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-roles-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-roles-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-roles-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-wiki-consumer-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-wiki-consumer-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-wiki-consumer-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-wiki-consumer-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-wiki-integration-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-wiki-integration-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-wiki-integration-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-wiki-integration-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-wiki-jobs-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-wiki-jobs-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-wiki-jobs-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-wiki-jobs-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-wiki-publication-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-wiki-publication-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-wiki-publication-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-wiki-publication-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-wiki-reader-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-wiki-reader-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-wiki-reader-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-wiki-reader-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-wiki-sse-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-wiki-sse-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-wiki-sse-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-wiki-sse-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-wiki-storage-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-wiki-storage-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-wiki-storage-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:deadline-wiki-storage-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:pg-daily-finance-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/pg-daily-finance-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/pg-daily-finance-native.integration.mjs"
+      ],
+      "coverage": [
+        "native:pg-daily-finance-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:pg-org-audit",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/pg-org-audit.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/pg-org-audit.integration.mjs"
+      ],
+      "coverage": [
+        "native:pg-org-audit"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "wiki:revision:legacy",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "backend/tests/deadline-wiki-revision-smoke.mjs",
+        "legacy"
+      ],
+      "required": [
+        "backend/tests/deadline-wiki-revision-smoke.mjs"
+      ],
+      "coverage": [
+        "wiki:revision:legacy"
+      ],
+      "capabilities": []
+    },
+    {
+      "id": "wiki:revision:pg",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "backend/tests/deadline-wiki-revision-smoke.mjs",
+        "pg"
+      ],
+      "required": [
+        "backend/tests/deadline-wiki-revision-smoke.mjs"
+      ],
+      "coverage": [
+        "wiki:revision:pg"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "wiki:runtime",
+      "suite": "unit",
+      "command": "node",
+      "args": [
+        "backend/tests/deadline-wiki-runtime-smoke.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-wiki-runtime-smoke.mjs"
+      ],
+      "coverage": [
+        "wiki:worker-runtime"
+      ],
+      "capabilities": ["pg18"]
+    },
+    {
+      "id": "reservation:parallel",
+      "suite": "reservation",
+      "command": "npm",
+      "args": [
+        "test",
+        "--prefix",
+        "Reservation/backend"
+      ],
+      "required": [
+        "Reservation/backend/package.json",
+        "Reservation/backend/tests/authorization.test.cjs",
+        "Reservation/backend/tests/build-assets.test.cjs",
+        "Reservation/backend/tests/migrations.test.cjs",
+        "Reservation/backend/tests/principal-write.test.cjs",
+        "Reservation/backend/tests/reservation-menu-gate.test.cjs",
+        "Reservation/backend/tests/runtime.test.cjs",
+        "Reservation/backend/tests/security.test.cjs",
+        "Reservation/backend/tests/space-admin.test.cjs",
+        "Reservation/backend/tests/space-custom-roles.test.cjs",
+        "Reservation/backend/tests/space-native-creator.test.cjs",
+        "Reservation/backend/tests/test-spaces.test.cjs"
+      ],
+      "coverage": [
+        "reservation:standalone-parallel",
+        "reservation:guard-inheritance"
+      ],
+      "capabilities": [
+        "reservation"
+      ]
+    },
+    {
+      "id": "reservation:contract",
+      "suite": "reservation",
+      "command": "node",
+      "args": [
+        "--require",
+        "./scripts/deadline-reservation-register.cjs",
+        "--test",
+        "Reservation/backend/src/modules/reservations/reservation.contract.test.cjs"
+      ],
+      "required": [
+        "Reservation/backend/src/modules/reservations/reservation.contract.test.cjs",
+        "Reservation/backend/tsconfig.json",
+        "scripts/deadline-reservation-register.cjs"
+      ],
+      "coverage": [
+        "reservation:contract"
+      ],
+      "capabilities": [
+        "reservation"
+      ]
+    },
+    {
+      "id": "reservation:native",
+      "suite": "reservation",
+      "command": "node",
+      "args": [
+        "--require",
+        "./scripts/deadline-reservation-register.cjs",
+        "--test",
+        "Reservation/backend/src/modules/reservations/reservation.native.test.cjs"
+      ],
+      "required": [
+        "Reservation/backend/src/modules/reservations/reservation.native.test.cjs",
+        "Reservation/backend/tsconfig.json",
+        "scripts/deadline-reservation-register.cjs"
+      ],
+      "coverage": [
+        "reservation:native"
+      ],
+      "capabilities": [
+        "reservation",
+        "pg18"
+      ]
+    },
+    {
+      "id": "browser:baseline",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "baseline"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "baseline"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "browser:recruitment-nav",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "recruitment-nav"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "recruitment-nav"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "browser:nav-pref",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "nav-pref"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "nav-pref"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "browser:members-pagination",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "members-pagination"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "members-pagination"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "browser:assets-footer",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "assets-footer"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "assets-footer"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "browser:sidebar",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "sidebar"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "sidebar"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "browser:project-members",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "project-members"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "project-members"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "browser:project-members-access",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "project-members-access"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "project-members-access"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "browser:month-summary",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "month-summary"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "month-summary"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "browser:roles",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "roles"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "roles"
+      ],
+      "capabilities": [
+        "browser",
+        "pg18"
+      ]
+    },
+    {
+      "id": "browser:role-toggles",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "role-toggles"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "role-toggles"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "browser:role-toggles-native",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "role-toggles-native"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "role-toggles-native"
+      ],
+      "capabilities": [
+        "browser",
+        "pg18"
+      ]
+    },
+    {
+      "id": "browser:disabled-hr-features",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "disabled-hr-features"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "disabled-hr-features"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "browser:reservation-conflict-edit",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "reservation-conflict-edit"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "reservation-conflict-edit"
+      ],
+      "capabilities": [
+        "browser",
+        "pg18",
+        "reservation"
+      ]
+    },
+    {
+      "id": "browser:reservation-space-calendar",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "reservation-space-calendar"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "reservation-space-calendar"
+      ],
+      "capabilities": [
+        "browser",
+        "pg18",
+        "reservation"
+      ]
+    },
+    {
+      "id": "browser:expense-receipt",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "expense-receipt"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "expense-receipt"
+      ],
+      "capabilities": [
+        "browser",
+        "pg18"
+      ]
+    },
+    {
+      "id": "browser:expense-csv-import",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "expense-csv-import"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "expense-csv-import"
+      ],
+      "capabilities": [
+        "browser",
+        "pg18"
+      ]
+    },
+    {
+      "id": "browser:approval-workflow",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "approval-workflow"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "approval-workflow"
+      ],
+      "capabilities": [
+        "browser",
+        "pg18"
+      ]
+    },
+    {
+      "id": "browser:analytics",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "analytics"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "analytics"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "browser:analytics-pg",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "analytics-pg"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "analytics-pg"
+      ],
+      "capabilities": [
+        "browser",
+        "pg18"
+      ]
+    },
+    {
+      "id": "browser:graph-engine",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "graph-engine"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs"
+      ],
+      "coverage": [
+        "graph-engine"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "browser:knowledge-wiki:legacy",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "knowledge-wiki",
+        "--store",
+        "legacy"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "frontend/scripts/task28-workflow.e2e.mjs",
+        "frontend/scripts/task28-personal.scenario.mjs",
+        "frontend/scripts/task28-restart-api.mjs"
+      ],
+      "coverage": [
+        "wiki:personal:legacy",
+        "wiki:company:legacy"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "browser:knowledge-wiki:pg",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "--scenario",
+        "knowledge-wiki",
+        "--store",
+        "pg"
+      ],
+      "required": [
+        "frontend/scripts/deadline-qa.e2e.mjs",
+        "frontend/scripts/task28-workflow.e2e.mjs",
+        "frontend/scripts/task28-personal.scenario.mjs",
+        "frontend/scripts/task28-restart-api.mjs"
+      ],
+      "coverage": [
+        "wiki:personal:pg",
+        "wiki:company:pg"
+      ],
+      "capabilities": [
+        "browser",
+        "pg18"
+      ]
+    },
+    {
+      "id": "browser:renderer-lifecycle",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/knowledge-graph-stage-browser.e2e.mjs"
+      ],
+      "required": [
+        "frontend/scripts/knowledge-graph-stage-browser.e2e.mjs"
+      ],
+      "coverage": [
+        "renderer-lifecycle"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "browser:graph-native",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/task26-native.e2e.mjs"
+      ],
+      "required": [
+        "frontend/scripts/task26-native.e2e.mjs"
+      ],
+      "coverage": [
+        "graph-native"
+      ],
+      "capabilities": [
+        "browser",
+        "pg18"
+      ]
+    },
+    {
+      "id": "browser:graph-scope-cancellation",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/task26-revision.e2e.mjs"
+      ],
+      "required": [
+        "frontend/scripts/task26-revision.e2e.mjs"
+      ],
+      "coverage": [
+        "graph-scope-cancellation"
+      ],
+      "capabilities": [
+        "browser"
+      ]
+    },
+    {
+      "id": "browser:receipt-blob",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-receipt-blob.scenario.mjs"
+      ],
+      "required": [
+        "frontend/scripts/deadline-receipt-blob.scenario.mjs"
+      ],
+      "coverage": [
+        "receipt-blob"
+      ],
+      "capabilities": [
+        "browser"
+      ],
+      "prepare": [
+        ".omo/evidence/task-16-deadline-erp-redesign"
+      ]
+    },
+    {
+      "id": "browser:import-built-regression",
+      "suite": "browser",
+      "command": "node",
+      "args": [
+        "frontend/scripts/deadline-expense-import.regression.mjs"
+      ],
+      "required": [
+        "frontend/scripts/deadline-expense-import.regression.mjs"
+      ],
+      "coverage": [
+        "import-built-regression"
+      ],
+      "capabilities": [
+        "browser",
+        "pg18",
+        "built"
+      ]
+    },
+    {
+      "id": "native:deadline-cleanup-pg-limits-native",
+      "suite": "native",
+      "command": "node",
+      "args": ["--test", "backend/tests/deadline-cleanup-pg-limits-native.integration.mjs"],
+      "required": ["backend/tests/deadline-cleanup-pg-limits-native.integration.mjs"],
+      "coverage": ["runtime:cleanup-pg-limits", "runtime:cleanup-tls-preservation"],
+      "capabilities": ["pg18"]
+    },
+    {
+      "id": "native:deadline-import-maintenance-native",
+      "suite": "native",
+      "command": "node",
+      "args": ["--test", "backend/tests/deadline-import-maintenance-native.integration.mjs"],
+      "required": ["backend/tests/deadline-import-maintenance-native.integration.mjs"],
+      "coverage": ["runtime:import-maintenance:legacy", "runtime:import-maintenance:pg"],
+      "capabilities": ["pg18"]
+    },
+    {
+      "id": "native:deadline-receipt-maintenance-native",
+      "suite": "native",
+      "command": "node",
+      "args": ["--test", "backend/tests/deadline-receipt-maintenance-native.integration.mjs"],
+      "required": ["backend/tests/deadline-receipt-maintenance-native.integration.mjs"],
+      "coverage": ["runtime:receipt-maintenance:legacy", "runtime:receipt-maintenance:pg"],
+      "capabilities": ["pg18"]
+    },
+    {
+      "id": "native:deadline-runtime-integration-native",
+      "suite": "native",
+      "command": "node",
+      "args": ["--test", "backend/tests/deadline-runtime-integration-native.integration.mjs"],
+      "required": ["backend/tests/deadline-runtime-integration-native.integration.mjs"],
+      "coverage": ["runtime:wiki-maintenance-shutdown:legacy", "runtime:wiki-maintenance-shutdown:pg"],
+      "capabilities": ["pg18"]
+    },
+    {
+      "id": "browser:final-ui-fixes",
+      "suite": "browser",
+      "command": "node",
+      "args": ["frontend/scripts/deadline-final-ui-fixes.e2e.mjs"],
+      "required": ["frontend/scripts/deadline-final-ui-fixes.e2e.mjs"],
+      "coverage": ["final-ui:sidebar-focus-lifecycle", "final-ui:contrast", "final-ui:role-label-accessibility"],
+      "capabilities": ["browser"]
+    },
+    {
+      "id": "model:real-compile-query",
+      "suite": "model",
+      "command": "node",
+      "args": [
+        "backend/tests/deadline-wiki-model-smoke.mjs",
+        "$MODEL_CONFIG"
+      ],
+      "required": [
+        "backend/tests/deadline-wiki-model-smoke.mjs"
+      ],
+      "coverage": [
+        "wiki:real-model:ingest",
+        "wiki:real-model:query"
+      ],
+      "capabilities": [
+        "model"
+      ]
+    }
+  ]
+}

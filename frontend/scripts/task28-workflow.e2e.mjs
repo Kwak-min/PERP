@@ -19,6 +19,7 @@ assert.ok(['legacy','pg'].includes(mode));
 await mkdir(path.join(evidence,'screens'),{recursive:true});
 const result={mode,status:'running',checks:[],http:[],screens:[],pageErrors:[],cleanup:{},hashes:{}};
 let f,vite,browser,provider,worker,restarted,proxyOptions,completePersonal;
+const browserResponses=[], observedPages=[]; result.browserNetwork=[];
 function ipc(child,type,predicate=()=>true){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{child.off('message',message);reject(new Error('IPC deadline '+type));},20000);const message=value=>{if(value.type===type&&predicate(value)){clearTimeout(timer);child.off('message',message);resolve(value);}};child.on('message',message);});}
 async function bounded(promise,label){let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Gate deadline '+label)),20000);})]);}finally{clearTimeout(timer);}}
 // 정확한 DOM 상태 신호. action 전에 구독하며 지연/폴링으로 완료를 추측하지 않는다.
@@ -66,7 +67,8 @@ try {
     const context=await browser.newContext({viewport:{width:1280,height:900},reducedMotion:'reduce',serviceWorkers:'block'});
     await context.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort('blockedbyclient'));
     await context.addInitScript(session=>{sessionStorage.setItem('orbitflow.session.v1',JSON.stringify(session));localStorage.setItem('orbitflow.demoMode','0');},session);
-    const page=await context.newPage();page.on('pageerror',error=>result.pageErrors.push(error.message));observe?.(page);
+    const page=await context.newPage();observedPages.push(page);page.on('pageerror',error=>result.pageErrors.push(error.message));observe?.(page);
+    page.on('response',response=>{const url=new URL(response.url());if(!/^\/api\/v1\/(?:pg\/)?(?:vault|documents)\/wiki(?:\/|$)/.test(url.pathname)||url.pathname.endsWith('/events'))return;const record={route:url.pathname+url.search,method:response.request().method(),status:response.status()};result.browserNetwork.push(record);browserResponses.push(response.text().then(body=>{record.body=body;},error=>{record.bodyUnavailable=error.message;}));});
     const graph=page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1${prefix}${route.startsWith('/vault')?'/vault':'/documents'}/graph`);
     await page.goto(origin+route,{waitUntil:'domcontentloaded'});await graph;
     await arm(page,'[data-wiki-workspace]');await done(page);
@@ -159,9 +161,12 @@ try {
   assert.equal((await f.api.request(f.a,prefix+`/vault/notes/${note.id}`)).content,originalText);
   assert.equal((await f.api.request(f.a,prefix+`/documents/${document.id}`)).content,originalText);
   result.checks.push('reader-only raw research; exact UTF8 revision citation; upgrade same actor to writer; exact query draft/digest review; explicit publication; originals unchanged');
-  await page.reload({waitUntil:'domcontentloaded'});
-  const pageButton=page.getByRole('button',{name:/한글 · page · 게시됨/});await pageButton.click();
-  await arm(page,`[data-revision-id="${published.revision_id}"]`);await done(page);
+  async function reloadPublished(expected) {
+    await page.reload({waitUntil:'domcontentloaded'});
+    await arm(page,`[data-wiki-workspace][data-loading="false"] [data-page-id="${expected.id}"][data-page-revision-id="${expected.revision_id}"]`);await done(page);
+    await after(page,`.wiki-revision[data-revision-id="${expected.revision_id}"]`,()=>page.getByRole('button',{name:/한글 · page · 게시됨/}).click());
+  }
+  await reloadPublished(published);
   await page.getByRole('button',{name:'게시 이력 보기',exact:true}).click();
   await page.getByRole('button',{name:'위키 수동 편집',exact:true}).click();
   await page.getByLabel('위키 편집 본문').fill('Task28 사용자가 수정한 누적 위키');
@@ -171,9 +176,10 @@ try {
   assert.notEqual(manualId,changeId);
   await page.getByLabel('이 정확한 변경 묶음 게시 확인').check();
   const manualPublication=page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1${f.root}/change-sets/${manualId}/publish`);
-  await page.getByRole('button',{name:'명시적으로 게시'}).click();assert.equal((await manualPublication).status(),200);
-  await page.reload({waitUntil:'domcontentloaded'});await page.getByRole('button',{name:/한글 · page · 게시됨/}).click();
-  await arm(page,'.wiki-revision');await done(page);assert.ok((await page.locator('.wiki-revision').innerText()).includes('Task28 사용자가 수정한 누적 위키'));
+  await page.getByRole('button',{name:'명시적으로 게시'}).click();const manualResponse=await manualPublication;assert.equal(manualResponse.status(),200);
+  const manualPublished=(await manualResponse.json()).result_json.pages[0];assert.equal(manualPublished.id,published.id);
+  await reloadPublished(manualPublished);
+  assert.ok((await page.locator('.wiki-revision').innerText()).includes('Task28 사용자가 수정한 누적 위키'));
   await capture(page,'published');result.checks.push('reload published graph; published history; manual edit produces review draft; explicit republish and reload');
   await page.getByRole('button',{name:'위키 수동 편집',exact:true}).click();await page.getByLabel('위키 편집 본문').fill('TASK28-STALE-DRAFT');await page.getByRole('button',{name:'수동 변경을 검토 초안으로 저장'}).click();await arm(page,'[data-review-id]');await done(page);
   const staleId=await page.locator('[data-review-id]').getAttribute('data-review-id');const currentPage=await f.api.request(reader,`${f.root}/pages/${published.id}`);
@@ -265,11 +271,13 @@ try {
   result.checks.push(...result.personal.checks);
   assert.deepEqual(result.pageErrors,[]);assert.equal(networkAudit.blocked.length,0);
   result.model={kind:'structured synthetic local HTTP boundary, not real Gemma',calls:provider.calls.length};result.status='passed';
-} catch(error) {result.status='failed';result.error={message:error.message,stack:error.stack};process.exitCode=1;console.error(error);}
+} catch(error) {result.status='failed';result.error={message:error.message,stack:error.stack};process.exitCode=1;console.error(error);
+  result.failureDom=[];for(const page of observedPages.filter(page=>!page.isClosed()))result.failureDom.push({url:page.url(),html:await page.content()});
+}
 finally {
   delete process.env.WIKI_LOCAL_MODEL_CONFIG;await worker?.stop();result.cleanup.worker=true;
   await completePersonal?.close(result.status==='failed'?new Error(result.error.message):undefined);
-  await browser?.close();result.cleanup.chrome=true;await vite?.close();result.cleanup.vite=true;await provider?.close();result.cleanup.model=true;
+  await browser?.close();await Promise.all(browserResponses);result.cleanup.chrome=true;await vite?.close();result.cleanup.vite=true;await provider?.close();result.cleanup.model=true;
   if(restarted?.connected){const closed=ipc(restarted,'closed'),exit=once(restarted,'exit',{signal:AbortSignal.timeout(20000)});restarted.send({type:'close'});await closed;await exit;}result.cleanup.restartedApi=true;
   if(f){result.http.push(...f.api.http);await f.close({task28:true});}result.cleanup.api=true;
   for(const file of ['frontend/src/screens/VaultGraphScreen.tsx','frontend/src/screens/KnowledgeGraphScreen.tsx','frontend/src/screens/knowledge/WikiWorkspace.tsx','frontend/src/screens/knowledge/wikiModel.ts','frontend/src/components/data/knowledgeGraphStageModel.ts'])result.hashes[file]=createHash('sha256').update(await readFile(path.join(root,file))).digest('hex');
