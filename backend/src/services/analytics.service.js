@@ -66,6 +66,7 @@ function rowScope(context, source) {
 }
 export async function analyticsKpis(context, adapter, window, now) {
   const metrics = [];
+  let points = [];
   for (const source of Object.keys(SOURCES)) {
     let state = sourceState(context, source), values;
     let reason = state === 'unavailable' ? (context.queryFailed?.has(source) ? 'SOURCE_QUERY_FAILED' : 'SOURCE_UNSUPPORTED') : null;
@@ -76,6 +77,7 @@ export async function analyticsKpis(context, adapter, window, now) {
         state = 'unavailable'; reason = 'SOURCE_QUERY_FAILED';
       }
     }
+    if (source === 'transactions' && !state) points = values.series;
     for (const [key, unit, basis, formula] of metricsFor(source)) {
       const result = values?.[key];
       metrics.push({ key, state: state ?? result.state, value: state ? null : result.value,
@@ -85,7 +87,12 @@ export async function analyticsKpis(context, adapter, window, now) {
         ...(!state && result.not_applicable ? { not_applicable: true } : {}) });
     }
   }
-  return { scope: context.scope, period: window.period, generated_at: now.toISOString(), metrics, series: [] };
+  const finance = metrics.find(metric => metric.key === 'finance.revenue');
+  const series = [{ key: 'finance', state: finance.state, unit: finance.unit,
+    currency: ['ledger_decimal', 'mixed_currency'].includes(finance.unit) ? null : finance.unit,
+    basis: 'period_flow', date_basis: 'posted_entry_date', scope: finance.scope,
+    ...seriesLayout(window.period), ...(finance.reason ? { reason: finance.reason } : {}), points }];
+  return { scope: context.scope, period: window.period, generated_at: now.toISOString(), metrics, series };
 }
 export function counts(entries) {
   return Object.fromEntries(Object.entries(entries).map(([key, value]) => [key, { value, state: value === 0 ? 'empty' : 'ready' }]));
@@ -95,6 +102,29 @@ export function moneyMetrics(rows, unit, keys = ['finance.revenue', 'finance.exp
   if (units.size > 1) return Object.fromEntries(keys.map(key => [key, { state: 'unavailable', value: null, unit: 'mixed_currency', reason: 'MIXED_CURRENCY' }]));
   const revenue = rows.reduce((total, row) => total + row.revenue_minor, 0n), expense = rows.reduce((total, row) => total + row.expense_minor, 0n);
   return Object.fromEntries(keys.map((key, index) => [key, { state: rows.length ? 'ready' : 'empty', value: decimal([revenue, expense, revenue - expense][index]), unit: [...units][0] ?? unit }]));
+}
+// DATE의 달력 일수 계산이다. timestamp를 24시간으로 잘라 시간대/DST를 재해석하지 않는다.
+const calendarDay = value => Date.parse(value + 'T00:00:00Z') / 86400000;
+const dateAtDay = value => new Date(value * 86400000).toISOString().slice(0, 10);
+export const MAX_SERIES_POINTS = 366;
+export function seriesLayout(period) {
+  const bucket_days = Math.ceil((calendarDay(period.to) - calendarDay(period.from)) / MAX_SERIES_POINTS);
+  return { granularity: bucket_days === 1 ? 'day' : 'calendar_day_group', bucket_days };
+}
+export function financeSeries(rows, period) {
+  // 전체 기간이 혼합 통화이면 일자별 단위가 달라도 하나의 선으로 연결하지 않는다.
+  if (new Set(rows.map(row => row.unit)).size > 1) return [];
+  const first = calendarDay(period.from), end = calendarDay(period.to), { bucket_days } = seriesLayout(period);
+  const buckets = Array.from({ length: Math.ceil((end - first) / bucket_days) }, (_, index) => ({
+    from: dateAtDay(first + index * bucket_days), to: dateAtDay(Math.min(end, first + (index + 1) * bucket_days)),
+    count: 0, revenue: 0n, expense: 0n,
+  }));
+  for (const row of rows) {
+    const bucket = buckets[Math.floor((calendarDay(row.date) - first) / bucket_days)];
+    bucket.count++; bucket.revenue += row.revenue_minor; bucket.expense += row.expense_minor;
+  }
+  return buckets.map(bucket => ({ from: bucket.from, to: bucket.to, state: bucket.count ? 'ready' : 'empty',
+    revenue: decimal(bucket.revenue), expense: decimal(bucket.expense), net: decimal(bucket.revenue - bucket.expense) }));
 }
 export function budgetMetrics(rows, unit) {
   const amount = rows.reduce((sum, row) => sum + row.amount_minor, 0n);

@@ -2,11 +2,11 @@
 
 ## 경로 및 DTO
 
-모든 경로는 `/api/v1` 아래이며 Bearer 인증과 `X-Org-Id`가 필요하다. legacy는 실제 organization ID, PG는 `pg:<company_id>`를 선택한다. PG 분석은 실제 PG 소속/역할만 사용하며 SQLite membership을 만들거나 합성하지 않는다. 화면25 변경은 이 작업에 포함하지 않는다.
+모든 경로는 `/api/v1` 아래이며 Bearer 인증과 `X-Org-Id`가 필요하다. legacy는 실제 organization ID, PG는 `pg:<company_id>`를 선택한다. PG 분석은 실제 PG 소속/역할만 사용하며 SQLite membership을 만들거나 합성하지 않는다. Task25는 아래 기간 시계열과 기존 지표·보고서·내보내기를 소비한다.
 
 - `GET /analytics/kpis`, `GET /pg/analytics/kpis`
 - 필터 예: `?from=2026-09-01&to=2026-10-01&tz=Asia/Seoul`
-- 응답: `{scope:{source:"legacy"|"perp_db",org_id},period:{from,to,tz},generated_at,metrics,series:[]}`
+- 응답: `{scope:{source:"legacy"|"perp_db",org_id},period:{from,to,tz},generated_at,metrics,series:[financeSeries]}`
 - metric: `{key,state,value,unit,basis,formula,scope:{source,org_id,rows,tenant_id?},reason?,not_applicable?}`
 - 기계 소비 타입: `analytics.contract.d.ts`. key와 unit/basis를 사용한다. formula는 표시용 설명이며 파싱하거나 테스트로 문구를 고정하지 않는다.
 - 모든 성공 응답 및 CSV는 `Cache-Control: private, no-store`다.
@@ -73,7 +73,21 @@ PG SQL NUMERIC SUM 결과를 text로 받고 BigInt minor 연산을 한다. legac
 
 legacy 최종 결정 timestamp가 없는 과거 행은 결정 기간에 귀속시키지 않는다. 서로 다른 offset 문자열은 문자열 MAX가 아니라 julianday instant 순서로 선택한다. 단계 이벤트별 건수/처리자 개인 생산성/결정 당시 모든 status 이력을 복원하는 API가 아니다.
 
-current_snapshot은 지금 조회한 상태다. 과거 필터를 선택해도 과거 말일 상태라고 표시하지 않는다. execution은 의도적으로 '선택 기간 흐름 / 현재 활성 예산'의 혼합 basis다. 예산 period 명칭/FY 문자열로 과거 유효 기간을 추정하지 않는다. generated_at은 이 응답 조회 시작시각이며 여러 source query의 전역 atomic snapshot 시각을 보장하지 않는다. **series=[]**이며 전기간 비교/추세/차트를 합성하지 않는다. Task25는 실제 제공된 값만 표시한다.
+current_snapshot은 지금 조회한 상태다. 과거 필터를 선택해도 과거 말일 상태라고 표시하지 않는다. execution은 의도적으로 '선택 기간 흐름 / 현재 활성 예산'의 혼합 basis다. 예산 period 명칭/FY 문자열로 과거 유효 기간을 추정하지 않는다. generated_at은 이 응답 조회 시작시각이며 여러 source query의 전역 atomic snapshot 시각을 보장하지 않는다. 시계열은 아래 동일 금융 원천의 실제 기간 합계다. 조회하지 않은 이전 기간 비교나 추세를 합성하지 않는다.
+
+## 기간 시계열 / 차트
+
+`series`는 금융 원천 하나의 상태를 담은 길이1 배열이다. 기존16개 지표, 보고서와 CSV의 의미·행 한도·인가 계약은 변경하지 않는다.
+
+- `financeSeries`: `{key:"finance",state,unit,currency,basis:"period_flow",date_basis:"posted_entry_date",scope,granularity,bucket_days,reason?,points}`.
+- `points`: `{from,to,state:"ready"|"empty",revenue,expense,net}` 배열. 금액은 소수2자리 exact decimal 문자열이다. 각 구간은 `[from,to)`이며 마지막 `to`는 요청 `to`와 정확히 일치한다.
+- 요청 범위가366달력일 이하이면 `granularity:"day",bucket_days:1`. 더 길면 `bucket_days=ceil(전체 달력일수/366)`, `granularity:"calendar_day_group"`. 시작일에 고정된 연속 구간으로 **전체 범위를 합산**한다. 마지막 구간만 짧을 수 있으며 최대366개다. 평균·표본추출·기간 절단이 아니다.
+- PG `posted entry_date`, legacy `confirmed occurred_on`은 DATE이므로 선택 `tz`에서의 날짜 이름을 보존한다. timestamp로 가정해 시간대를 이동하지 않는다. 다른 timestamp 지표와 요청 경계 검증은 기존 tz/DST 계약 그대로다.
+- 각 adapter가 기존 금융 지표에 사용한 **동일한 인가된 entries 결과**로 시계열을 만든다. 추가 조회·넓은 집계 경로·개인정보 projection은 없다. 회사/tenant/self/department/project, posted/confirmed/deleted, 계정 방향을 그대로 사용하고 BigInt로 더한다. 세 시계열 합계는 같은 응답의 수입/비용/차액 지표와 같다.
+- `empty` 구간만 성공한 인가 조회의 실제0행이다. 실제 행의 합계0은 `ready`다. 원천이 forbidden/disabled/unavailable이면 같은 state/reason, `points:[]`이며 가짜0점을 만들지 않는다. 혼합 통화는 기간 전체 `unavailable/MIXED_CURRENCY`, `unit:"mixed_currency",currency:null,points:[]`. 서로 다른 날짜의 통화라도 한 선으로 연결하지 않는다.
+- legacy 단일 통화는 실제 `unit/currency`, 전체 기간0행이면 organization.currency다. PG는 `unit:"ledger_decimal",currency:null`; 통화가 없음을 명시하며 KRW를 추정하지 않는다.
+- 차트는 API의 실제 점만 연결한다. 세 선은 동일한 대칭 선형 축이며 색과 선 패턴으로 구분한다. 좌표만 BigInt 비율을 `[-10000,10000]`에 정규화한 뒤 Number로 변환한다. 화면 금액·축 최대값·툴팁·표는 원래 문자열이다. 작은 값의 시각적 중첩 가능성을 명시한다.
+- 키보드로 조작하는 구간 선택, 현재 선택의 live region, 열/행 헤더와 caption이 있는 정확한 값 표, 스크롤 가능한 focus region을 제공한다. 기간/시간대/원천/회사/행 범위/단위/통화/DATE 기준이 명시된다. 필터·세션 변경 시 기존 결과를 폐기하는 생명주기를 공유한다.
 
 ## 보고서 및 CSV
 

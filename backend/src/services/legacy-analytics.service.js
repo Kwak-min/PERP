@@ -3,7 +3,7 @@ import { resolvePrincipal } from '../middleware/auth.js';
 import { enabledSet } from '../middleware/modules.js';
 import { enabledFeatureSet } from '../config/features.js';
 import { canReadApproval } from './approval.service.js';
-import { counts, moneyMetrics, budgetMetrics, budgetExecution } from './analytics.service.js';
+import { counts, moneyMetrics, financeSeries, budgetMetrics, budgetExecution } from './analytics.service.js';
 import { decimal, localDate } from './analytics-contract.service.js';
 import { ApiError } from '../utils/errors.js';
 
@@ -99,7 +99,7 @@ export function legacyAnalyticsAdapter(context) {
     metrics(source, w, now) {
       if (source === 'members') return counts({ 'members.active': members().length });
       if (source === 'tasks') return counts({ 'tasks.created': tasks(w).length, 'tasks.open': tasks(w, false, 'open', now).length, 'tasks.overdue': tasks(w, false, 'overdue', now).length });
-      if (source === 'transactions') { const rows = entries(w); return { ...moneyMetrics(rows, moneyUnit), ...counts({ 'finance.journals': rows.length }) }; }
+      if (source === 'transactions') { const rows = entries(w); return { ...moneyMetrics(rows, moneyUnit), ...counts({ 'finance.journals': rows.length }), series: financeSeries(rows, w.period) }; }
       if (source === 'budgets') return budgetMetrics(budgets(), moneyUnit);
       if (source === 'execution') return budgetExecution(budgets(), entries(w, false, true), moneyUnit);
       if (source === 'approvals') return counts({ 'approvals.created': approvals(w).length, 'approvals.decided': approvals(w, true).length });

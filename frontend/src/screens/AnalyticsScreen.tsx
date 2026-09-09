@@ -5,6 +5,7 @@ import { isPgWorkspace } from '../services/workspace';
 import { sessionStore, useSession } from '../store/session';
 import { basisLabels, filterSchema, metricLabels, metricUnit, metricValue, parseExportJob, parseKpis, parseReport, reasonLabels, reportColumns, reportKeySchema, reportKeys, reportLabels, rowScopeLabels, samePeriod, stateLabels, type AnalyticsExportJob, type AnalyticsMetric, type AnalyticsPeriod, type AnalyticsReport, type AnalyticsScope, type ReportKey } from './analytics/model';
 import type { AnalyticsFilter, AnalyticsKpis } from '../../../backend/src/services/analytics.contract';
+import { FinanceSeries } from './analytics/FinanceSeries';
 import './analytics/analytics.css';
 
 type State<T> = { status: 'loading' } | { status: 'error'; error: unknown } | { status: 'ready'; data: T };
@@ -78,7 +79,7 @@ function AnalyticsResults({ session, scope, filter, signal }: { session: ApiSess
         <p>현재 상태 지표는 과거 말일 상태가 아닙니다. 여러 원천의 전역 동시 스냅샷을 보장하지 않습니다.</p>
       </div>
       <div className="analytics-metrics">{state.data.metrics.map(metric => <MetricCard key={metric.key} metric={metric} />)}</div>
-      <p className="analytics-series" data-series-count={state.data.series.length}>제공된 기간 시계열이 없습니다. 비교값·추세·차트를 추정하지 않습니다.</p>
+      <FinanceSeries key={state.data.generated_at} series={state.data.series[0]} period={state.data.period} />
       <section className="analytics-reports"><h2>보고서 · CSV 내보내기</h2>
         <label>보고서 선택<select aria-label="보고서 선택" value={reportKey} onChange={event => setReportKey(reportKeySchema.parse(event.target.value))}>{reportKeys.map(key => <option key={key} value={key}>{reportLabels[key]}</option>)}</select></label>
         <p>위 확인된 기간과 시간대를 그대로 사용합니다. 활성 소속·예산 보고서는 기간과 무관한 현재 상태입니다.</p>

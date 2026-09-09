@@ -31,7 +31,11 @@ function midnight(value, tz) {
   const format = formatter(tz), wall = Date.parse(value + 'T00:00:00Z'), offsets = new Set();
   for (const hours of [-36, -12, 0, 12, 36]) {
     const sample = wall + hours * 3600000, p = parts(format, sample);
-    offsets.add(Date.parse(`${p.year.padStart(4, '0')}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}Z`) - sample);
+    // 경계 주변 표본은 5자리 연도까지 갈 수 있다. ISO 문자열의 4자리 연도 제한을 피한다.
+    const local = new Date(0);
+    local.setUTCFullYear(Number(p.year), Number(p.month) - 1, Number(p.day));
+    local.setUTCHours(Number(p.hour), Number(p.minute), Number(p.second), 0);
+    offsets.add(local.getTime() - sample);
   }
   const matches = [...offsets].map(offset => wall - offset).filter(instant => {
     const p = parts(format, instant);

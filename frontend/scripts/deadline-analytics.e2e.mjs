@@ -40,7 +40,7 @@ export async function analyticsScenario(pgMode = false) {
   let f, vite, browserServer, browser;
   try {
     result.head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
-    for (const name of ['frontend/src/screens/AnalyticsScreen.tsx', 'frontend/src/screens/analytics/model.ts', 'frontend/src/services/api.ts', 'frontend/src/services/workspace.ts', 'frontend/src/screens/registry.ts', 'frontend/src/routes/catalog.ts', 'frontend/scripts/deadline-analytics.e2e.mjs', 'frontend/scripts/deadline-qa.e2e.mjs', 'frontend/scripts/deadline-browser-session.mjs', 'backend/tests/analytics-http-fixture.js', 'db/perp_additions_v17_analytics_exports.sql']) {
+    for (const name of ['backend/src/services/analytics-contract.service.js', 'backend/src/services/analytics.service.js', 'backend/src/services/legacy-analytics.service.js', 'backend/src/services/pg-analytics.service.js', 'backend/src/services/analytics.contract.d.ts', 'frontend/src/screens/analytics/FinanceSeries.tsx', 'frontend/src/screens/analytics/analytics.css', 'frontend/src/screens/AnalyticsScreen.tsx', 'frontend/src/screens/analytics/model.ts', 'frontend/src/services/api.ts', 'frontend/src/services/workspace.ts', 'frontend/src/screens/registry.ts', 'frontend/src/routes/catalog.ts', 'frontend/scripts/deadline-analytics.e2e.mjs', 'frontend/scripts/deadline-qa.e2e.mjs', 'frontend/scripts/deadline-browser-session.mjs', 'backend/tests/analytics-http-fixture.js', 'db/perp_additions_v17_analytics_exports.sql']) {
       const file = path.join(root, name); result.hashes[name] = existsSync(file) ? createHash('sha256').update(await readFile(file)).digest('hex') : null;
     }
     f = await analyticsFixture(pgMode, attempt);
@@ -127,8 +127,26 @@ async function exercise({ page, f, result, attempt, session }) {
       assert.equal(details[2], row.formula); assert.ok(details[3].includes(row.scope.rows));
       if (row.scope.tenant_id) assert.ok(details[3].includes(row.scope.tenant_id));
     }
-    assert.equal(await page.locator('[data-series-count]').getAttribute('data-series-count'), '0');
-    assert.equal(await page.locator('.analytics-screen canvas, .analytics-screen svg').count(), 0);
+    const series = body.series[0], available = ['ready', 'empty'].includes(series.state);
+    assert.equal(await page.locator('[data-series-count]').getAttribute('data-series-count'), String(series.points.length));
+    assert.equal(await page.locator('[data-series-state]').getAttribute('data-series-state'), series.state);
+    assert.equal(await page.locator('[data-series-reason]').count(), series.reason ? 1 : 0);
+    assert.equal(await page.locator('[data-series-chart]').count(), available ? 1 : 0);
+    assert.equal(await page.locator('[data-series-table] tbody tr').count(), series.points.length);
+    if (available) {
+      const rows = await page.locator('[data-series-table] tbody tr').evaluateAll(rows => rows.map(row => ({ from: row.dataset.seriesFrom, values: [...row.querySelectorAll('[data-series-value]')].map(cell => cell.textContent) })));
+      assert.deepEqual(rows, series.points.map(point => ({ from: point.from, values: [point.revenue, point.expense, point.net] })));
+      assert.equal(await page.locator('[data-series-chart]').getAttribute('role'), 'img');
+      const geometry = await page.locator('[data-series-chart] circle').evaluateAll(nodes => nodes.map(node => ({ x: Number(node.getAttribute('cx')), y: Number(node.getAttribute('cy')) })));
+      assert.ok(geometry.every(point => Number.isFinite(point.x) && point.x >= 20 && point.x <= 700 && Number.isFinite(point.y) && point.y >= 20 && point.y <= 240));
+      const expectedX = series.points.map(point => 20 + ((Date.parse(point.from) + Date.parse(point.to)) / 2 - Date.parse(body.period.from)) / (Date.parse(body.period.to) - Date.parse(body.period.from)) * 680);
+      for (const [index, point] of geometry.entries()) assert.ok(Math.abs(point.x - expectedX[index % series.points.length]) < 1e-8, 'x axis must preserve actual bucket date positions, including the shorter last bucket');
+      const descriptions = await page.locator('[data-series-chart]').evaluate(node => node.getAttribute('aria-describedby').split(' ').map(id => document.getElementById(id)?.textContent).join(' '));
+      for (const value of [series.unit, body.period.from, body.period.to, body.period.tz, body.scope.source, body.scope.org_id, series.basis, series.date_basis]) assert.ok(descriptions.includes(value));
+    } else {
+      assert.deepEqual(series.points, []);
+      assert.equal(await page.locator('.analytics-series svg, .analytics-series [data-series-value]').count(), 0);
+    }
     result.http.push({ kind: 'kpis-body', body });
   }
   async function switchActor(actor) {
@@ -143,7 +161,7 @@ async function exercise({ page, f, result, attempt, session }) {
     await select(key); const received = responseFor('/reports/' + key); await page.getByRole('button', { name: '보고서 조회', exact: true }).click();
     const response = await received, body = await response.json(); assert.equal(response.status(), 200); assert.deepEqual(body.period, filter);
     await (await observe(page, '[data-report-rows]', 'data-report-rows', String(body.row_count)))();
-    assert.equal(await page.locator('.analytics-table tbody tr').count(), body.row_count);
+    assert.equal(await page.locator('.analytics-reports .analytics-table tbody tr').count(), body.row_count);
     result.http.push({ kind: 'report-body', body }); return body;
   }
   async function create(key) {
@@ -170,6 +188,16 @@ async function exercise({ page, f, result, attempt, session }) {
     result.http.push({ kind: 'download', status: response.status(), createdRows: job.row_count, downloadedRows: count, filename: file.suggestedFilename(), sha256: createHash('sha256').update(bytes).digest('hex') }); return text;
   }
   await (await observe(page, '[data-analytics-kpis]', 'data-state', 'ready'))();
+  await f.entry('2024-02-29', '12.34', 'income');
+  await page.getByLabel('시작일', { exact: true }).fill('2024-02-28');
+  await page.getByLabel('종료일', { exact: true }).fill('2024-03-01');
+  const seriesResponse = responseFor('/kpis');
+  await page.getByRole('button', { name: '기간 적용 · 다시 조회' }).click();
+  const seriesBody = await (await seriesResponse).json();
+  await (await observe(page, `.analytics-period time[datetime="${seriesBody.generated_at}"]`))();
+  assert.equal(await page.locator('[data-series-chart]').count(), 1, 'actual nonempty API period must render a chart');
+  assert.equal(await page.locator('[data-series-table] tbody tr').count(), 2);
+  assert.equal(await page.locator('[data-series-table] [data-series-value="revenue"]').last().textContent(), '12.34');
   let body = await apply(); assert.equal(body.metrics.find(row => row.key === 'budgets.execution_rate').not_applicable, true);
   assert.equal(body.metrics.find(row => row.key === 'tasks.created').state, 'empty');
   if (!f.pgMode) {
@@ -212,7 +240,24 @@ async function exercise({ page, f, result, attempt, session }) {
     assert.ok(observed.left >= 0 && observed.right <= width + 1 && observed.scroll <= observed.client + 1, JSON.stringify(observed));
     const file = new URL(`analytics-${width}.png`, attempt); await page.screenshot({ path: fileURLToPath(file), fullPage: true, animations: 'disabled' });
     result.captures.push({ width, file: fileURLToPath(file), observed, sha256: createHash('sha256').update(await readFile(file)).digest('hex') });
+    const choice = page.getByRole('combobox', { name: '차트 구간 선택', exact: true });
+    await choice.focus(); await choice.press('Home');
+    const selected = await observe(page, '[data-series-selected]', 'data-series-selected', '2026-09-02');
+    await choice.press('ArrowDown'); await selected();
+    assert.equal(await page.locator('[data-selected-value="revenue"]').textContent(), f.pgMode ? '19999999999999999.98' : '184467440737095516.14');
+    await choice.press('Tab');
+    assert.equal(await page.locator('[data-series-table]').evaluate(node => node === document.activeElement), true);
+    assert.equal(await page.locator('[data-series-table] thead th[scope="col"]').count(), 5);
+    assert.equal(await page.locator('[data-series-table] tbody th[scope="row"]').count(), 30);
+    const semantics = await page.locator('.analytics-series').ariaSnapshot();
+    assert.ok(semantics.includes(f.pgMode ? '19999999999999999.98' : '184467440737095516.14'));
+    const semanticFile = new URL(`series-${width}-accessibility.txt`, attempt); await writeFile(semanticFile, semantics);
+    const chartFile = new URL(`series-${width}.png`, attempt); await page.locator('.analytics-series').screenshot({ path: fileURLToPath(chartFile), animations: 'disabled' });
+    result.captures.push({ width, file: fileURLToPath(chartFile), semantics: fileURLToPath(semanticFile), sha256: createHash('sha256').update(await readFile(chartFile)).digest('hex') });
   }
+  body = await apply({ from: '2024-01-01', to: '2025-01-02', tz: 'UTC' });
+  assert.equal(body.series[0].granularity, 'calendar_day_group'); assert.equal(body.series[0].points.length, 184);
+  await apply();
   await switchActor(requester); body = await apply(); assert.equal(body.metrics.find(row => row.key === 'approvals.created').value, 1);
   assert.equal(body.metrics.find(row => row.key === 'approvals.created').scope.rows, 'own_requester');
   const ownReport = await report('approvals_created'); assert.equal(ownReport.row_count, 1);
@@ -229,6 +274,13 @@ async function exercise({ page, f, result, attempt, session }) {
   } finally {
     if (f.pgMode) await f.native.pool.query('ALTER TABLE project.tasks_analytics_ui_failed RENAME TO tasks');
     else f.database.exec('ALTER TABLE task_analytics_ui_failed RENAME TO task');
+  }
+  if (f.pgMode) await f.native.pool.query('ALTER TABLE accounting.journal_entries RENAME TO series_ui_failed');
+  else f.database.exec('ALTER TABLE transaction_record RENAME TO series_ui_failed');
+  try { body = await apply(); assert.equal(body.series[0].state, 'unavailable'); assert.equal(body.series[0].reason, 'SOURCE_QUERY_FAILED'); }
+  finally {
+    if (f.pgMode) await f.native.pool.query('ALTER TABLE accounting.series_ui_failed RENAME TO journal_entries');
+    else f.database.exec('ALTER TABLE series_ui_failed RENAME TO transaction_record');
   }
   if (f.pgMode) {
     await f.native.pool.query('ALTER TABLE org.company_feature_settings RENAME COLUMN enabled_features TO analytics_ui_failed_features');
@@ -264,7 +316,7 @@ async function exercise({ page, f, result, attempt, session }) {
   await page.getByLabel('시작일', { exact: true }).fill('2026-10-01'); await page.getByLabel('종료일', { exact: true }).fill('2026-09-01');
   const validation = await observe(page, '[data-error-code]', 'data-error-code', 'VALIDATION_ERROR'); await page.getByRole('button', { name: '기간 적용 · 다시 조회' }).click(); await validation();
   assert.equal(await page.locator('[data-metric-key]').count(), 0); assert.equal(await page.locator('[data-export-id]').count(), 0);
-  result.coverage = ['all16', 'ready-empty-forbidden-disabled-unavailable', 'exact-money', 'null-ratio', 'period-change', 'source-failure-vs-unsupported', 'own-approval-privacy', 'report-allowlist', 'fresh-csv-row-count', 'download-403-409', 'overlimit-413', 'invalid-period', 'stale-transitions'];
+  result.coverage = ['daily-finance-chart', 'exact-series-table', 'bounded-long-period', 'series-keyboard-375-768-1280', 'series-accessibility-tree', 'finance-query-failure', 'all16', 'ready-empty-forbidden-disabled-unavailable', 'exact-money', 'null-ratio', 'period-change', 'source-failure-vs-unsupported', 'own-approval-privacy', 'report-allowlist', 'fresh-csv-row-count', 'download-403-409', 'overlimit-413', 'invalid-period', 'stale-transitions'];
 }
 
 async function staleTransitions({ page, f, apply, create, switchActor, responseFor, prefix, result, session }) {

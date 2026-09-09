@@ -25,7 +25,9 @@ test('native PG feature-settings SQL failure is SOURCE_QUERY_FAILED, not unsuppo
     try {
       const observation = await f.trace(() => kpis()), body = observation.value;
       assert.deepEqual(body.metrics.map(row => row.key), keys);
-      assert.deepEqual(body.series, []);
+      assert.deepEqual(body.series, before.series, 'approval feature failure must not suppress authorized finance series');
+      assert.equal(body.series[0].state, 'empty');
+      assert.equal(body.series[0].points.length, 30);
       assert.equal(observation.queries.filter(sql => featureSQL.test(sql)).length, 1, 'no automatic feature-query retry');
       assert.equal(observation.queries.filter(sql => approvalSQL.test(sql)).length, 0);
       for (const key of approvalKeys) {
@@ -44,6 +46,8 @@ test('native PG feature-settings SQL failure is SOURCE_QUERY_FAILED, not unsuppo
       for (const permissions of [common, [...common, 'menu.approvals'], [...common, 'approval.request']]) {
         await f.grants(denied, permissions);
         const deniedObservation = await f.trace(() => kpis(denied));
+        assert.equal(deniedObservation.value.series[0].state, 'forbidden');
+        assert.deepEqual(deniedObservation.value.series[0].points, []);
         for (const row of deniedObservation.value.metrics.filter(row => approvalKeys.includes(row.key))) {
           assert.equal(row.state, 'forbidden'); assert.equal(row.value, null); assert.equal(row.reason, undefined);
         }

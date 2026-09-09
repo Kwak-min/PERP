@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { analyticsPeriod } from '../src/services/analytics-contract.service.js';
+import { analyticsPeriod, decimalMinor, decimal } from '../src/services/analytics-contract.service.js';
 
 const filter = { from: '2026-09-01', to: '2026-10-01', tz: 'Asia/Seoul' };
 const query = new URLSearchParams(filter).toString();
@@ -8,8 +8,36 @@ const metric = (body, key) => { const row = body.metrics.find(item => item.key =
 const domainSQL = /FROM\s+(?:task\b|transaction_record\b|budget\b|approval\s+a\b|project\.tasks\b|accounting\.(?:journal_entries|budgets)\b|org\.approval_requests\b)/i;
 export async function analyticsCases(t, f) {
   const { api, owner, pgMode } = f;
-  const kpis = (actor = owner, q = query) => api(actor, '/analytics/kpis?' + q);
+  const kpis = async (actor = owner, q = query) => {
+    const body = await api(actor, '/analytics/kpis?' + q);
+    assert.equal(body.series.length, 1, 'authorized period must supply typed finance series');
+    const series = body.series[0], finance = metric(body, 'finance.revenue');
+    for (const key of ['state', 'unit', 'scope', 'reason']) assert.deepEqual(series[key], finance[key]);
+    assert.equal(series.basis, 'period_flow'); assert.equal(series.date_basis, 'posted_entry_date');
+    assert.equal(series.currency, ['ledger_decimal', 'mixed_currency'].includes(series.unit) ? null : series.unit);
+    assert.ok(series.points.length <= 366);
+    if (['ready', 'empty'].includes(series.state)) {
+      assert.equal(series.points[0].from, body.period.from); assert.equal(series.points.at(-1).to, body.period.to);
+      for (const key of ['revenue', 'expense', 'net']) assert.equal(decimal(series.points.reduce((sum, point) => sum + decimalMinor(point[key]), 0n)), metric(body, `finance.${key}`).value);
+      for (const [index, point] of series.points.entries()) {
+        assert.equal(point.net, decimal(decimalMinor(point.revenue) - decimalMinor(point.expense)));
+        assert.equal(point.from, index === 0 ? body.period.from : series.points[index - 1].to);
+        assert.ok(point.from < point.to);
+        if (point.state === 'empty') for (const key of ['revenue', 'expense', 'net']) assert.equal(point[key], '0.00');
+      }
+    } else assert.deepEqual(series.points, [], 'no values or synthetic zeros for denied/disabled/failed/mixed source');
+    return body;
+  };
   const report = (key, actor = owner, q = query) => api(actor, `/analytics/reports/${key}?${q}`);
+  await t.test('actual API returns nonempty authorized daily finance series', async () => {
+    await f.entry('2024-02-29', '12.34', 'income');
+    const body = await kpis(owner, 'from=2024-02-28&to=2024-03-01&tz=Asia/Seoul');
+    assert.equal(body.series.length, 1, 'authorized nonempty period must supply finance series');
+    assert.deepEqual(body.series[0].points, [
+      { from: '2024-02-28', to: '2024-02-29', state: 'empty', revenue: '0.00', expense: '0.00', net: '0.00' },
+      { from: '2024-02-29', to: '2024-03-01', state: 'ready', revenue: '12.34', expense: '0.00', net: '12.34' },
+    ]);
+  });
   await t.test('real dates, paired endpoints and IANA timezone are validated', async () => {
     for (const q of ['from=2026-02-30&to=2026-03-01', 'from=2026-09-01', 'from=2026-10-01&to=2026-09-01', 'from=2026-09-01&to=2026-09-01', 'from=0000-01-01&to=2026-10-01', 'from=2026-09-01&to=2026-10-01&tz=bad', 'from=2026-09-01&from=2026-08-01&to=2026-10-01', 'from=2026-09-01&to=2026-10-01&limit=5']) {
       await api(owner, '/analytics/kpis?' + q, 'GET', undefined, 400);
@@ -32,7 +60,9 @@ export async function analyticsCases(t, f) {
     assert.equal(metric(body, 'finance.revenue').value, '0.00');
     const historicalEmpty = await kpis(owner, 'from=1990-01-01&to=1990-02-01');
     for (const key of ['ai.calls', 'audit.events']) assert.equal(metric(historicalEmpty, key).state, pgMode ? 'unavailable' : 'empty');
-    assert.deepEqual(body.series, []);
+    assert.equal(body.series[0].state, 'empty');
+    assert.equal(body.series[0].points.length, 30);
+    assert.ok(body.series[0].points.every(point => point.state === 'empty'));
     if (pgMode) {
       // native v8은 새0원 예산을 금지한다. 실제 분모0은 위 빈 모집단으로 검증한다.
       await assert.rejects(f.budget('0.00'), { code: '23514', constraint: 'daily_positive_amount' });
@@ -64,6 +94,15 @@ export async function analyticsCases(t, f) {
     assert.equal(queries.filter(sql => /SELECT m\.(?:id|user_id::text AS id)/.test(sql)).length, 0);
     await api(basic, '/analytics/reports/transactions?' + query, 'GET', undefined, 403);
     await api(basic, '/analytics/exports', 'POST', { reportKey: 'transactions', filter }, 403);
+  });
+  await t.test('finance series requires both source action and menu even behind analytics', async () => {
+    for (const permission of ['transaction.read', 'menu.finance']) {
+      await f.grants(basic, [...common, permission]);
+      const { value, queries } = await f.trace(() => kpis(basic));
+      assert.equal(value.series[0].state, 'forbidden');
+      assert.ok(!queries.some(sql => /FROM (?:transaction_record\b|accounting\.journal_entries)/i.test(sql)));
+    }
+    await f.grants(basic, common);
   });
   const taskTimes = ['2026-08-31T14:59:59.999Z', '2026-08-31T15:00:00.000Z', '2026-09-30T14:59:59.999Z', '2026-09-30T15:00:00.000Z'];
   const taskIds = [];
@@ -113,6 +152,30 @@ export async function analyticsCases(t, f) {
     assert.equal(rows.length, 6); assert.ok(rows.every(row => typeof row.revenue === 'string' && typeof row.expense === 'string'));
     const foreign = await kpis(f.foreign); assert.equal(metric(foreign, 'finance.journals').value, 0);
     if (pgMode) assert.equal(f.database.prepare('SELECT COUNT(*) AS n FROM membership').get().n, 0, 'PG analytics does not synthesize legacy membership');
+  });
+  await t.test('series uses the same single authorized source query and keeps each daily exact amount', async () => {
+    await f.grants(basic, [...common, 'transaction.read', 'menu.finance']);
+    const { value: body, queries } = await f.trace(() => kpis(basic));
+    assert.equal(queries.filter(sql => /FROM (?:transaction_record\b|accounting\.journal_entries)/i.test(sql)).length, 1);
+    const points = body.series[0].points;
+    assert.equal(points[0].revenue, '30.00'); assert.equal(points[0].expense, '30.01'); assert.equal(points[0].net, '-0.01');
+    assert.equal(points[1].revenue, pgMode ? '19999999999999999.98' : '180143985094819.82');
+    assert.equal(points[2].state, 'empty'); assert.equal(points[29].expense, '19.99');
+    await f.grants(basic, common);
+  });
+  await t.test('bounded calendar buckets preserve the full range, leap days and DST DATE semantics', async () => {
+    for (const [from, to, before] of [['2025-03-09', '2025-03-10', '2025-03-08'], ['2025-11-02', '2025-11-03', '2025-11-01']]) {
+      await f.entry(before, '900.00'); await f.entry(from, '5.01', 'income'); await f.entry(from, '5.01'); await f.entry(to, '900.00');
+      for (const tz of ['America/New_York', 'Asia/Seoul', 'UTC']) {
+        const body = await kpis(owner, new URLSearchParams({ from, to, tz }));
+        assert.deepEqual(body.series[0].points, [{ from, to, state: 'ready', revenue: '5.01', expense: '5.01', net: '0.00' }]);
+      }
+    }
+    for (const [from, to, expectedDays, expectedCount] of [['2024-01-01', '2025-01-01', 1, 366], ['2024-01-01', '2025-01-02', 2, 184], ['0001-01-01', '9999-12-31', 9979, 366]]) {
+      const body = await kpis(owner, new URLSearchParams({ from, to, tz: 'UTC' })), series = body.series[0];
+      assert.equal(series.bucket_days, expectedDays); assert.equal(series.points.length, expectedCount);
+      assert.equal(series.granularity, expectedDays === 1 ? 'day' : 'calendar_day_group');
+    }
   });
   await t.test('budget execution uses active linked ledger, not cache, and requires BOTH source actions', async () => {
     const body = await kpis();
@@ -195,6 +258,18 @@ export async function analyticsCases(t, f) {
       else f.database.exec('ALTER TABLE task_analytics_unavailable RENAME TO task');
     }
   });
+  await t.test('real finance source failure returns unavailable series without zeros or partial values', async () => {
+    if (pgMode) await f.native.pool.query('ALTER TABLE accounting.journal_entries RENAME TO series_unavailable_entries');
+    else f.database.exec('ALTER TABLE transaction_record RENAME TO series_unavailable_entries');
+    try {
+      const body = await kpis();
+      assert.equal(body.series[0].state, 'unavailable'); assert.equal(body.series[0].reason, 'SOURCE_QUERY_FAILED');
+      assert.equal(metric(body, 'tasks.created').value, 2);
+    } finally {
+      if (pgMode) await f.native.pool.query('ALTER TABLE accounting.series_unavailable_entries RENAME TO journal_entries');
+      else f.database.exec('ALTER TABLE series_unavailable_entries RENAME TO transaction_record');
+    }
+  });
   await t.test('export allowlist, validated filter, fresh download data and revocation', async () => {
     for (const reportKey of ['__proto__', 'constructor', 'monthly', 'audit', 'tasks; DROP TABLE task']) await api(owner, '/analytics/exports', 'POST', { reportKey, filter }, 400);
     await api(owner, '/analytics/exports', 'POST', { reportKey: 'tasks', filter: { from: '2026-02-30', to: '2026-03-01' } }, 400);
@@ -265,8 +340,30 @@ export async function analyticsCases(t, f) {
       const mixed = await kpis(); assert.equal(metric(mixed, 'finance.revenue').state, 'unavailable');
       assert.equal(metric(mixed, 'finance.revenue').reason, 'MIXED_CURRENCY'); assert.equal(metric(mixed, 'finance.journals').value, 7);
       assert.ok((await report('transactions')).items.some(row => row.unit === 'USD' && row.revenue === '10.00'));
+      const dollars = (await kpis(owner, 'from=2026-09-04&to=2026-09-05&tz=UTC')).series[0];
+      assert.equal(dollars.unit, 'USD'); assert.equal(dollars.currency, 'USD'); assert.equal(dollars.state, 'ready');
+      assert.deepEqual(dollars.points, [{ from: '2026-09-04', to: '2026-09-05', state: 'ready', revenue: '10.00', expense: '0.00', net: '10.00' }]);
     });
   }
+  if (!pgMode) await t.test('finance day buckets enforce self/department/project, company and deleted/draft predicates', async () => {
+    const periodQuery = 'from=2027-05-01&to=2027-05-03&tz=UTC';
+    for (const scope of ['self', 'department', 'project']) {
+      const actor = await f.limited([...common, 'transaction.read', 'menu.finance'], scope);
+      const department = f.record('department', { name: 'Series scope' }).id;
+      const project = f.record('project', { name: 'Series scope' }).id;
+      f.database.prepare('UPDATE membership SET department_id=? WHERE org_id=? AND user_id=?').run(department, owner.orgId, actor.userId);
+      f.record('project_member', { project_id: project, user_id: actor.userId });
+      const base = { occurred_on: '2027-05-01', created_by: actor.userId, department_id: department, project_id: project, status: 'confirmed', currency: 'KRW' };
+      const ids = [f.record('transaction_record', { ...base, kind: 'income', amount_minor: 1000 }).id, f.record('transaction_record', { ...base, kind: 'expense', amount_minor: 300 }).id];
+      for (const extra of [{ status: 'draft' }, { deleted_at: '2027-05-02' }, { org_id: f.foreign.orgId }, { tenant_id: 'foreign-tenant' }]) f.record('transaction_record', { ...base, kind: 'income', amount_minor: 99999, ...extra });
+      f.record('transaction_record', { occurred_on: '2027-05-01', kind: 'income', amount_minor: 99999, status: 'confirmed', currency: 'USD' });
+      const body = await kpis(actor, periodQuery);
+      assert.equal(body.series[0].scope.rows, scope); assert.equal(body.series[0].unit, 'KRW');
+      assert.deepEqual(body.series[0].points[0], { from: '2027-05-01', to: '2027-05-02', state: 'ready', revenue: '10.00', expense: '3.00', net: '7.00' });
+      assert.equal(body.series[0].points[1].state, 'empty');
+      assert.deepEqual((await report('transactions', actor, periodQuery)).items.map(row => row.id).sort(), ids.sort());
+    }
+  });
   await t.test('100000 rows export in full; creation and fresh download reject 100001 explicitly', async () => {
     const largeFilter = { from: '2030-01-01', to: '2030-02-01', tz: 'Asia/Seoul' };
     await f.bulkTasks(100000);

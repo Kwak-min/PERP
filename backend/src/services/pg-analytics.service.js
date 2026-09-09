@@ -2,7 +2,7 @@ import { pgQuery } from '../config/pg.js';
 import { resolvePgCompanyPrincipal } from '../middleware/pgAccess.js';
 import { pgEnabledFeatures } from '../middleware/features.js';
 import { canReadPgApproval } from './pg-approval-read-policy.service.js';
-import { counts, moneyMetrics, budgetMetrics, budgetExecution } from './analytics.service.js';
+import { counts, moneyMetrics, financeSeries, budgetMetrics, budgetExecution } from './analytics.service.js';
 import { decimalMinor, decimal, localDate } from './analytics-contract.service.js';
 import { ApiError } from '../utils/errors.js';
 
@@ -72,7 +72,7 @@ export function pgAnalyticsAdapter(context) {
         const [created, open, overdue] = await Promise.all([tasks(w), tasks(w, false, 'open', now), tasks(w, false, 'overdue', now)]);
         return counts({ 'tasks.created': created.length, 'tasks.open': open.length, 'tasks.overdue': overdue.length });
       }
-      if (source === 'transactions') { const rows = await entries(w); return { ...moneyMetrics(rows, moneyUnit), ...counts({ 'finance.journals': rows.length }) }; }
+      if (source === 'transactions') { const rows = await entries(w); return { ...moneyMetrics(rows, moneyUnit), ...counts({ 'finance.journals': rows.length }), series: financeSeries(rows, w.period) }; }
       if (source === 'budgets') return budgetMetrics(await budgets(), moneyUnit);
       if (source === 'execution') {
         const [active, linked] = await Promise.all([budgets(), entries(w, false, true)]);
