@@ -7,6 +7,7 @@ import { useSession } from '../store/session';
 import { notifyAccessChanged, useAccess } from '../hooks/useWorkspaceAccess';
 import { Button } from '../components/ui/Button';
 import { assignmentSchema, canDelegateRole, effectiveRoleSources, membersSchema, roleAccessSchema, roleSchema, roleScopeSchema, rolesSchema, scopeLabels, scopes, toggleRoleValue, type Member, type Role, type Roles } from './role-settings-model';
+import { actionPermissionLabels } from './action-permission-labels';
 import './role-settings.css';
 
 const roleFeatureCatalog = [
@@ -191,8 +192,8 @@ function RoleEditor({ screen, session }: Readonly<{ screen: ScreenDefinition; se
           <div className="role-settings__checks">{data.catalog.filter(item => kind === 'delegation' ? item.code === 'role.assign' : item.kind === kind && item.code !== 'role.assign').map(item => {
             const feature = roleFeatureCatalog.find(feature => feature.includes(item.code));
             return <label key={item.code}>
-              <input type="checkbox" data-permission={item.code} checked={permissions.includes(item.code)} disabled={locked || !data.grantable.includes(item.code)} onChange={() => setPermissions(toggleRoleValue(permissions, item.code))} />
-              <span>{item.label}<small data-feature-status={feature ? enabledFeatures.has(feature.key) ? 'enabled' : 'disabled' : undefined}>
+              <input type="checkbox" data-permission={item.code} aria-labelledby={`permission-label-${item.code}`} aria-describedby={`permission-code-${item.code}`} checked={permissions.includes(item.code)} disabled={locked || !data.grantable.includes(item.code)} onChange={() => setPermissions(toggleRoleValue(permissions, item.code))} />
+              <span><span id={`permission-label-${item.code}`}>{actionPermissionLabels[item.code] ?? item.label}</span><small id={`permission-code-${item.code}`} data-feature-status={feature ? enabledFeatures.has(feature.key) ? 'enabled' : 'disabled' : undefined}>
                 {item.code}{feature ? ` · 조직 기능 ${enabledFeatures.has(feature.key) ? '켜짐' : '꺼짐 (저장 권한 유지)'}` : ''}
               </small></span>
             </label>;
@@ -208,7 +209,7 @@ function RoleEditor({ screen, session }: Readonly<{ screen: ScreenDefinition; se
           <p>선택한 역할로 교체합니다. 모두 해제하면 이 회사의 역할이 회수됩니다. 마지막 활성 회사 전체 관리자는 회수할 수 없습니다.</p>
           <Button disabled={locked || !memberDelegable} onClick={() => mutate('member')}>역할 배정 저장</Button>
           <details className="role-settings__sources"><summary>저장된 유효 권한과 출처 · {sources.length}개</summary><p>선택 초안이 아닌 현재 읽은 역할 배정의 합집합입니다. 꺼진 기능의 권한도 보존됩니다.</p>
-            <ul>{sources.map(item => <li key={item.code} data-effective-permission={item.code}><strong>{item.label}</strong><small>{item.code} · {item.sources.join(' + ')}</small></li>)}</ul>
+            <ul>{sources.map(item => <li key={item.code} data-effective-permission={item.code}><strong>{actionPermissionLabels[item.code] ?? item.label}</strong><small>{item.code} · {item.sources.join(' + ')}</small></li>)}</ul>
           </details></>}
       </section>
     </>}
