@@ -1,6 +1,7 @@
 import { migrateReceipts } from './receipt-migration.js';
 import { migrateExpenses } from './expense-migration.js';
 import { migrateApprovalWorkflow, migrateApprovalSnapshotBoundary } from './approval-migration.js';
+import { migrateExpenseImports } from './expense-import-migration.js';
 
 function columnsOf(conn, table) {
   return new Set(conn.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
@@ -253,6 +254,9 @@ MIGRATIONS.push({
     migrateApprovalSnapshotBoundary(conn);
   },
 });
+
+// Version 12 is reserved for Wiki; applied versions need not be contiguous.
+MIGRATIONS.push({ version: 13, up: migrateExpenseImports });
 
 export function applyMigrations(conn) {
   conn.exec(`
