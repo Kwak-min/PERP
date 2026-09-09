@@ -51,7 +51,7 @@ export function actionPopupTests({ test, surface, openSidebar, openActions, choo
       await change(page, '.nav-action-popup', () => page.keyboard.press('Tab'), 0);
       assert.equal(await page.locator('.sidebar').evaluate(node => node.contains(document.activeElement)), true);
       await openActions(page, 'PRJ-001');
-      await change(page, '.nav-action-popup', () => page.locator('.nav-personalization > p').click(), 0);
+      await change(page, '.nav-action-popup', () => page.locator('.sidebar__brand').click({ position: { x: 2, y: 2 } }), 0);
       assert.equal(await pin.evaluate(node => node === document.activeElement), true);
       assert.deepEqual(await ids(page), []);
       await chooseAction(page, 'PRJ-001', 'favorite', '.nav-group');
