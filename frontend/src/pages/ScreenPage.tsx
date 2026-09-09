@@ -13,6 +13,8 @@ import { SectionCard } from "../components/ui/SectionCard";
 import { StatCard, type Stat } from "../components/ui/StatCard";
 import { StatTrendModal, metricKeyOf, type MetricKey } from "../components/data/StatTrendModal";
 import { MemberListModal, membersSchema, type Member } from "../components/data/MemberListModal";
+import { HomeDetailModal } from '../components/data/HomeDetailModal';
+import { homeCategories, type HomeSelection } from '../components/data/homeDetailModel';
 import { allFilter, screenFilters } from "./screenFilters";
 import { downloadCsv, filterTable, liveTable, notificationTaskLink, paginateTable, type TableData, type TableRow } from "./screenTable";
 import { apiRequest, userMessageOf } from "../services/api";
@@ -315,7 +317,14 @@ function DetailAction({
 
 export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   if (screen.id === "CAL-001" || screen.id === "CAL-002") return <CalendarSurface screen={screen} />;
+  if (screen.id === 'DASH-001') return <HomeScreenPage screen={screen} />;
   return <GenericScreenPage screen={screen} />;
+}
+
+// 회사·로그인 변경 시 홈 집계와 열린 상세를 함께 버려 이전 회사의 내용을 남기지 않는다.
+function HomeScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
+  const session = useSession();
+  return <GenericScreenPage key={`${session?.token}:${session?.orgId}`} screen={screen} />;
 }
 
 function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
@@ -348,6 +357,8 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const trendable = (screen.endpoint ?? "").startsWith("/members");
   const [trend, setTrend] = useState<{ stat: Stat; metric: MetricKey } | null>(null);
   const [showMembers, setShowMembers] = useState(false);
+  const [homeDetail, setHomeDetail] = useState<HomeSelection | null>(null);
+  const isHome = screen.id === 'DASH-001';
   const [custodyId, setCustodyId] = useState<string | null>(null);
   const [quickModal, setQuickModal] = useState<"create" | "edit" | null>(null);
   const [editModal, setEditModal] = useState<{ config: CreateConfig; initialValues: Record<string, string> } | null>(null);
@@ -494,9 +505,11 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             stat={stat}
             action={
               <DetailAction
-                label={screen.path === "/members" ? "구성원 목록 자세히 보기" : "자세히 보기"}
+                label={isHome ? `${stat.label} 목록 자세히 보기` : screen.path === "/members" ? "구성원 목록 자세히 보기" : "자세히 보기"}
                 onClick={() =>
-                  screen.path === "/members"
+                  isHome
+                    ? setHomeDetail(homeCategories.find(item => item.label === stat.label)?.key ?? 'overview')
+                    : screen.path === "/members"
                     ? setShowMembers(true)
                     : trendable
                     ? setTrend({ stat, metric: metricKeyOf(stat, index) })
@@ -507,6 +520,10 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
           />
         ))}
       </section>
+
+      {isHome && homeDetail && apiSession && (
+        <HomeDetailModal initial={homeDetail} session={apiSession} onClose={() => setHomeDetail(null)} />
+      )}
 
       {trend && (
         <StatTrendModal
@@ -559,8 +576,8 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
           subtitle="권한 범위 안의 최신 데이터"
           action={
             <DetailAction
-              label={screen.path === "/members" ? "구성원 목록 자세히 보기" : "자세히 보기"}
-              {...(screen.path === "/members" ? { onClick: () => setShowMembers(true) } : {})}
+              label={isHome ? '홈 현황 자세히 보기' : screen.path === "/members" ? "구성원 목록 자세히 보기" : "자세히 보기"}
+              {...(isHome ? { onClick: () => setHomeDetail('overview') } : screen.path === "/members" ? { onClick: () => setShowMembers(true) } : {})}
             />
           }
           foot="서버 응답 기준"
