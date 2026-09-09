@@ -126,14 +126,20 @@ try {
   assert.equal((await paid).status(), 200);
   await page.getByText("납부", { exact: true }).waitFor();
 
-  // Given: live membership and agent surfaces. Then membership is localized and unsupported chat is honestly disabled.
+  // Given: live membership and agent surfaces. Then chat sends with the server-enforced Vault-off scope.
   await page.goto(`${origin}/members`);
   await page.getByRole("button", { name: "구성원 목록 자세히 보기" }).last().click();
   await page.getByRole("dialog", { name: "구성원 목록" }).getByText("활성", { exact: true }).waitFor();
   await page.getByRole("button", { name: "구성원 목록 닫기" }).click();
-  await page.getByRole("button", { name: "AI Agent" }).click();
-  await page.getByText("대화 기능을 현재 사용할 수 없습니다", { exact: true }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "전송 사용 불가" }).isDisabled(), true);
+  await page.getByRole("button", { name: "AI Agent", exact: true }).click();
+  const agent = page.getByRole("dialog", { name: "AI Agent" });
+  await agent.locator('[data-vault-mode="off"]').waitFor();
+  await agent.getByLabel("Agent에게 요청").fill("운영 대화 확인");
+  const chatResponse = page.waitForResponse(response => response.url().endsWith("/api/v1/agent/chat") && response.request().method() === "POST");
+  await agent.getByRole("button", { name: "전송", exact: true }).click();
+  const chatBody = await (await chatResponse).json();
+  assert.equal(chatBody.scope.vault_mode, "off");
+  assert.equal(chatBody.scope.personal_vault_used, false);
   await page.getByRole("button", { name: "Agent 패널 닫기" }).click();
 
   const captures = [];
@@ -154,13 +160,13 @@ try {
     await page.screenshot({ path: path.join(evidence, memberModalCapture) });
     captures.push(memberModalCapture);
     await page.getByRole("button", { name: "구성원 목록 닫기" }).click();
-    await page.getByRole("button", { name: "AI Agent" }).click();
-    const agentCapture = `agent-disabled-${width}.png`;
+    await page.getByRole("button", { name: "AI Agent", exact: true }).click();
+    const agentCapture = `agent-chat-${width}.png`;
     await page.screenshot({ path: path.join(evidence, agentCapture), animations: "disabled" });
     captures.push(agentCapture);
     await page.getByRole("button", { name: "Agent 패널 닫기" }).click();
   }
-  await writeFile(path.join(evidence, "result.json"), JSON.stringify({ result: "PASS", apiPort, frontendPort: vite.httpServer.address().port, persistence: "reload and full API process restart", isolated: true, workflows: ["tasks", "task-board", "calendar", "approvals", "membership", "dues", "agent-disabled"], captures }, null, 2));
+  await writeFile(path.join(evidence, "result.json"), JSON.stringify({ result: "PASS", apiPort, frontendPort: vite.httpServer.address().port, persistence: "reload and full API process restart", isolated: true, workflows: ["tasks", "task-board", "calendar", "approvals", "membership", "dues", "agent-chat"], captures }, null, 2));
   console.log("OPERATIONAL_WORKFLOWS_PASS");
 } finally {
   await browser?.close();

@@ -164,7 +164,9 @@ describe("document confidentiality through HTTP and provider wire adapters", { t
       const created = await request(actor, path, { method: "POST", body: { title: "context fixture", content: "contextneedle", sensitivity: kind === "vault" ? "sensitive" : "confidential" } });
       assert.equal(created.status, 201, JSON.stringify(created.body));
       const start = calls.length;
-      const result = await request(actor, "/agent/chat", { method: "POST", body: { message: "contextneedle", data_class: "internal" } });
+      const result = await request(actor, "/agent/chat", { method: "POST", body: {
+        message: "contextneedle", data_class: "internal", ...(kind === "vault" ? { vault_mode: "on" } : {}),
+      } });
       assert.equal(result.body.provider, "ollama");
       assert.deepEqual(calls.slice(start).map((call) => call.path), ["/local/v1/chat/completions"]);
       assert.ok(calls.at(-1).body.messages[0].content.includes("contextneedle"));

@@ -9,6 +9,7 @@ export const agentRouter = Router();
 agentRouter.post("/chat", asyncRoute(controller.chat));
 agentRouter.get("/conversations", asyncRoute(controller.listConversations));
 agentRouter.get("/brief", asyncRoute(controller.brief));
+agentRouter.get("/pending-approvals", asyncRoute(controller.pendingApprovals));
 
 agentRouter.get("/memory", asyncRoute(controller.listMemory));
 agentRouter.post("/memory", asyncRoute(controller.createMemory));

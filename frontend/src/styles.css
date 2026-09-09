@@ -451,8 +451,26 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .agent-vault-toggle small { color: var(--of-text-muted); font-size: 11px; line-height: 1.45; }
 
 .prompt-list { display: grid; gap: 7px; margin-top: 16px; }
-.prompt-list a { padding: 11px 12px; border: 1px solid var(--of-border); border-radius: var(--r-md); text-decoration: none; font-size: 12.5px; font-weight: 700; }
-.prompt-list a:hover { border-color: #c4b5fd; background: var(--of-ai-soft); }
+.prompt-list > button { justify-content: flex-start; padding: 11px 12px; border: 1px solid var(--of-border); border-radius: var(--r-md); color: var(--of-text); background: var(--of-card); font-size: 12.5px; font-weight: 700; }
+.prompt-list > button:hover { border-color: #c4b5fd; background: var(--of-ai-soft); }
+.agent-log { display: grid; gap: 9px; margin-top: 14px; }
+.agent-log article { max-width: 92%; padding: 9px 11px; border-radius: var(--r-md); font-size: 12px; line-height: 1.55; }
+.agent-log article p { margin: 0; }
+.agent-log article ul { margin: 7px 0 0; padding-left: 18px; color: var(--of-text-muted); }
+.agent-log__user { justify-self: end; background: var(--of-ai); color: #fff; }
+.agent-log__agent { border: 1px solid #ddd6fe; background: var(--of-ai-soft); }
+.agent-workflow, .agent-decision { display: grid; gap: 10px; margin-top: 14px; padding: 12px; border: 1px solid var(--of-border); border-radius: var(--r-md); }
+.agent-workflow h3, .agent-decision h3 { margin: 0; font-size: 13px; }
+.agent-workflow > p, .agent-decision > p { margin: 0; color: var(--of-text-muted); font-size: 12px; }
+.agent-workflow > ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.agent-workflow > ul > li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid var(--of-border); }
+.agent-workflow li > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.agent-workflow li > span:has(button) { flex-direction: row; flex: 0 0 auto; }
+.agent-workflow li b { font-size: 12px; }
+.agent-workflow li small { color: var(--of-text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.agent-decision label, .agent-memory-form label { display: grid; gap: 5px; font-size: 11px; font-weight: 700; }
+.agent-decision > div { display: flex; gap: 7px; }
+.agent-memory-form { display: grid; gap: 8px; padding-top: 8px; border-top: 1px solid var(--of-border); }
 .agent-compose { display: flex; flex-direction: column; gap: 7px; padding: 14px; border-top: 1px solid var(--of-border); }
 .agent-compose label { font-size: 11px; font-weight: 800; }
 .mobile-nav, .sidebar-scrim { display: none; }
