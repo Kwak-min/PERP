@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { expenseImportsRouter } from './expenseImports.routes.js';
 
 import * as controller from "../controllers/pgAuth.controller.js";
 import { createCompany } from "../controllers/pgCompanies.controller.js";
@@ -21,6 +22,7 @@ import { duesPaymentHistory, recordDuesPayment } from '../controllers/pgDuesPaym
 import { receiptRaw, uploadReceipt, downloadReceipt } from '../controllers/receiptFiles.controller.js';
 
 export const pgRouter = Router();
+pgRouter.use('/finance/transactions/imports', expenseImportsRouter('perp_db'));
 pgRouter.post('/finance/expenses', asyncRoute(pgRoute(expenses.createExpense, 'transaction.write', 'finance')));
 pgRouter.post('/finance/transactions/:id/receipts', asyncRoute(pgRoute(expenses.appendReceipts, 'transaction.write', 'finance')));
 pgRouter.get('/finance/transactions/:id', asyncRoute(pgRoute(expenses.transactionDetail, 'transaction.read', 'finance')));

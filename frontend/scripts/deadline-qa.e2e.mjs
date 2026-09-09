@@ -19,15 +19,17 @@ const args = process.argv.slice(2);
 const sharedScenarioArgs = args[0] === '--scenario'
   && ['baseline', 'recruitment-nav', 'nav-pref', 'members-pagination', 'assets-footer', 'sidebar', 'knowledge-graphs', 'project-members', 'project-members-access'].includes(args[1])
   && (args.length === 2 || (args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])));
-const dedicatedScenarioArgs = args.length === 2 && args[0] === '--scenario' && ['month-summary', 'roles', 'role-toggles', 'role-toggles-native', 'disabled-hr-features'].includes(args[1]);
+const dedicatedScenarioArgs = args.length === 2 && args[0] === '--scenario' && ['month-summary', 'roles', 'role-toggles', 'role-toggles-native', 'disabled-hr-features', 'expense-receipt', 'expense-csv-import'].includes(args[1]);
 if (!sharedScenarioArgs && !dedicatedScenarioArgs) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar|knowledge-graphs|project-members|project-members-access [--probe error|cancel] | --scenario month-summary|roles|role-toggles|role-toggles-native|disabled-hr-features');
+  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar|knowledge-graphs|project-members|project-members-access [--probe error|cancel] | --scenario month-summary|roles|role-toggles|role-toggles-native|disabled-hr-features|expense-receipt|expense-csv-import');
   process.exitCode = 2;
 } else {
   assertIsolated();
   if (args[1] === 'roles') await (await import('./deadline-roles-qa.mjs')).rolesScenario();
   else if (['role-toggles', 'role-toggles-native'].includes(args[1])) await (await import('./deadline-role-toggles.e2e.mjs')).roleTogglesScenario(args[1] === 'role-toggles-native');
   else if (args[1] === 'disabled-hr-features') await (await import('./deadline-disabled-hr-features-qa.mjs')).disabledHrFeaturesScenario();
+  else if (args[1] === 'expense-csv-import') await import('./deadline-expense-import.scenario.mjs');
+  else if (args[1] === 'expense-receipt') await import('./deadline-expense-receipt.scenario.mjs');
   else if (args[1] === 'month-summary') await (await import('./deadline-month-summary.e2e.mjs')).monthSummary();
   else if (args[1] === 'nav-pref') await (await import('./deadline-nav-pref.e2e.mjs')).navPrefScenario(args[3]);
   else await baseline(args[3], args[1]);
@@ -283,7 +285,7 @@ async function baseline(probe, scenario) {
       ['projects-members', '/projects', '/api/v1/projects', '[data-screen-id="PRJ-001"]'],
       ['roles', '/settings/roles', '/api/v1/settings/roles', 'main h1'],
       ['disabled-hr-features', '/settings/organization', '/api/v1/tenants/modules', 'main input[type="checkbox"]'],
-      ['finance-transactions', '/finance/transactions', '/api/v1/finance/transactions', 'main tbody tr'],
+      ['finance-transactions', '/finance/transactions', '/api/v1/finance/transactions', 'main [data-transaction-id]'],
       ['approvals-admin-inbox-empty', '/approvals', '/api/v1/approvals/requests', 'main .state-card:not([role])'],
       ['analytics', '/analytics', '/api/v1/analytics/dashboard', 'main [data-screen-id]'],
       ['company-graph', '/documents/graph', '/api/v1/documents/graph', 'main .graph-stage__canvas'],

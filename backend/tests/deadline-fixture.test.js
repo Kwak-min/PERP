@@ -18,13 +18,13 @@ function migrationEffects(conn) {
 }
 
 function assertMigrationEffects(effects) {
-  assert.deepEqual(effects.versions, [1,2,3,4,5,6,7,8,9,10,11]);
+  assert.deepEqual(effects.versions, [1,2,3,4,5,6,7,8,9,10,11,13]);
   assert.ok(effects.membershipColumns.includes('roles_version'));
   for (const column of ['counterparty','occurred_at','input_currency','no_receipt_reason']) assert.ok(effects.transactionColumns.includes(column));
   for (const column of ['org_id','receipt_upload_id']) assert.ok(effects.evidenceColumns.includes(column));
   for (const column of ['body_json','form_revision','form_snapshot_json','attachment_snapshot_json','workflow_locked','submitted_at']) assert.ok(effects.approvalColumns.includes(column));
-  for (const table of ['receipt_upload','approval_receipt_files','finance_request_replay','approval_history']) assert.ok(effects.tables.includes(table));
-  for (const trigger of ['receipt_evidence_scope','receipt_file_update','expense_original_update','expense_original_delete','approval_submitted_snapshot_update','approval_submitted_boundary_update','approval_history_update','approval_snapshot_receipt_insert']) assert.ok(effects.triggers.includes(trigger));
+  for (const table of ['receipt_upload','approval_receipt_files','finance_request_replay','approval_history','expense_import_uploads','expense_import_jobs','imported_transaction_identities']) assert.ok(effects.tables.includes(table));
+  for (const trigger of ['receipt_evidence_scope','receipt_file_update','expense_original_update','expense_original_delete','approval_submitted_snapshot_update','approval_submitted_boundary_update','approval_history_update','approval_snapshot_receipt_insert','expense_import_job_immutable','expense_import_identity_immutable']) assert.ok(effects.triggers.includes(trigger));
 }
 
 test('API-created companies, role actors and boundary resources remain isolated', { timeout: 60000 }, async () => {
