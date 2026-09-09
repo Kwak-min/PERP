@@ -15,6 +15,9 @@ const sessionSchema = z.object({
   email: z.string(),
   mustChangePassword: z.boolean(),
   organizations: z.array(membershipSchema),
+  // 이전 저장 세션에는 없을 수 있다. 신규 인증은 소속 확인 전까지 loading이다.
+  organizationStatus: z.enum(["loading", "ready"]).optional(),
+  preferredOrgId: z.string().nullable().optional(),
 });
 
 export type Organization = z.infer<typeof membershipSchema>;

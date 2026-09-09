@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 
-import { organizationsOf } from "../services/auth";
+import { loadSessionOrganizations, organizationsOf } from "../services/auth";
+import { consumeReturnPath, readAuthTransition } from "../services/authTransition";
 import { userMessageOf } from "../services/api";
 import { Button } from "../components/ui/Button";
 import { sessionStore, useSession, type Organization } from "../store/session";
@@ -9,6 +10,7 @@ import { sessionStore, useSession, type Organization } from "../store/session";
 export function WelcomePage() {
   const session = useSession();
   const navigate = useNavigate();
+  const location = useLocation();
   const [organizations, setOrganizations] = useState<readonly Organization[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -20,26 +22,30 @@ export function WelcomePage() {
     let cancelled = false;
     setOrganizations(null);
     setError(null);
-    void organizationsOf(token).then((found) => {
-      if (cancelled) return;
+    const load = sessionStore.getSnapshot()?.organizationStatus === "loading"
+      ? loadSessionOrganizations : organizationsOf;
+    void load(token).then((found) => {
+      if (cancelled || sessionStore.getSnapshot()?.token !== token) return;
       setOrganizations(found);
       sessionStore.patch({ organizations: [...found] });
+      if (readAuthTransition().invite) navigate("/invitations", { replace: true });
+      else if (sessionStore.getSnapshot()?.orgId) navigate(consumeReturnPath() ?? "/", { replace: true });
     }).catch((caught: unknown) => {
       if (!cancelled) setError(userMessageOf(caught));
     });
     return () => {
       cancelled = true;
     };
-  }, [token, attempt]);
+  }, [token, attempt, navigate]);
 
   if (!session) return <Navigate to="/login" replace />;
   if (session.mustChangePassword) return <Navigate to="/change-password" replace />;
-  if (session.orgId) return <Navigate to="/" replace />;
 
   if (error || organizations === null) {
     return (
       <section className="auth-card auth-card--wide">
         <h2>소속 조직 확인</h2>
+        {location.state?.accountCreated === true && <p>계정이 생성되었습니다. 다시 가입하지 않아도 됩니다.</p>}
         {error ? (
           <>
             <p role="alert">{error}</p>
@@ -52,7 +58,7 @@ export function WelcomePage() {
 
   function enter(orgId: string): void {
     sessionStore.patch({ orgId });
-    navigate("/", { replace: true });
+    navigate(consumeReturnPath() ?? "/", { replace: true });
   }
 
   const hasOrganizations = organizations.length > 0;

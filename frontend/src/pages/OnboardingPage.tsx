@@ -5,6 +5,7 @@ import { z } from "zod";
 import { Button } from "../components/ui/Button";
 import { ApiError, apiRequest, userMessageOf } from "../services/api";
 import { isPgToken, organizationsOf } from "../services/auth";
+import { consumeReturnPath, readAuthTransition } from "../services/authTransition";
 import { sessionStore, useSession } from "../store/session";
 
 const catalogItemSchema = z.object({
@@ -123,8 +124,8 @@ export function OnboardingPage() {
           code: "NO_ORGANIZATION", status: 403, requestId: "", details: {},
         });
       }
-      sessionStore.patch({ orgId: created.org_id, organizations: [...organizations] });
-      navigate("/", { replace: true });
+      sessionStore.patch({ orgId: created.org_id, organizations: [...organizations], organizationStatus: "ready" });
+      navigate(readAuthTransition().invite ? "/invitations" : consumeReturnPath() ?? "/", { replace: true });
     } catch (caught) {
       setError(userMessageOf(caught));
     } finally {

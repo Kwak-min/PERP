@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { Button } from "../components/ui/Button";
 import { apiRequest, userMessageOf } from "../services/api";
+import { captureAuthTransition, clearInvitation, consumeReturnPath, readAuthTransition } from "../services/authTransition";
 import { sessionStore, useSession } from "../store/session";
 
 const invitationSchema = z.object({
@@ -39,13 +40,21 @@ export function InvitationsPage() {
   const navigate = useNavigate();
   const [mailbox, setMailbox] = useState<readonly Invitation[] | null>(null);
   const [token, setToken] = useState(
-    () => new URLSearchParams(location.search).get("invite") ?? "",
+    () => readAuthTransition().invite ?? "",
   );
   const [checked, setChecked] = useState<z.infer<typeof verifySchema> | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const apiSession = session ? { token: session.token, orgId: null } : null;
+  const canInspectInvitation = session !== null && !session.mustChangePassword;
+
+  useEffect(() => {
+    captureAuthTransition(location.search);
+    setToken(readAuthTransition().invite ?? "");
+    // 인증/비밀번호 가드가 이동할 때 쿼리 정리로 그 이동을 덮어쓰지 않는다.
+    if (canInspectInvitation && location.search) navigate(location.pathname, { replace: true });
+  }, [location.pathname, location.search, navigate, canInspectInvitation]);
 
   useEffect(() => {
     if (!apiSession) return;
@@ -93,19 +102,11 @@ export function InvitationsPage() {
           body,
         }),
       );
-      sessionStore.patch({
-        orgId: joined.org_id,
-        organizations: [
-          ...session.organizations,
-          {
-            org_id: joined.org_id,
-            org_name: joined.org_name,
-            org_type: joined.org_type,
-            roles: joined.roles,
-          },
-        ],
-      });
-      navigate("/", { replace: true });
+      // 수락은 완료됐다. 소속 조회 장애 때문에 다시 수락하지 않도록 분리한다.
+      clearInvitation();
+      if (readAuthTransition().next === "/invitations") consumeReturnPath();
+      sessionStore.patch({ orgId: null, preferredOrgId: joined.org_id, organizationStatus: "loading" });
+      navigate("/welcome", { replace: true });
     } catch (caught) {
       setError(userMessageOf(caught));
     } finally {
@@ -158,6 +159,7 @@ export function InvitationsPage() {
           초대 링크 또는 토큰
           <input
             value={token}
+            disabled={busy}
             onChange={(event) => {
               setToken(event.target.value);
               setChecked(null);
