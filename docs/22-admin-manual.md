@@ -112,7 +112,10 @@ SQLite 조직 또는 `pg:<company_id>` PG 회사)에 따라 다른 규칙은 각
 - **LLM Wiki 모델은 별도**: Wiki 컴파일·조사는 서버의 `WIKI_LOCAL_MODEL_CONFIG`(loopback 로컬 모델)만
   사용하고 AI 정책의 Echo/OpenRouter 설정을 상속하지 않는다. 설정은 백엔드 배포 단위가
   `.env.example`/Secret Manager에 반영하며, 이 매뉴얼은 실제 `.env` 값을 다루지 않는다. 모델이
-  없으면 Wiki 작업은 "사용 불가"이고 원본 등록·게시 위키 읽기는 계속 된다.
+  미설정으로 접수된 모델 의존 Wiki 작업은 "사용 불가"이고 원본 등록·게시 위키 읽기·근거 없는
+  조사는 계속 된다. 빈 설정은 scheduler를 끄지 않는다. worker는 `legacy`/`pg`의 기존 job을
+  조회하고 저장된 모델 설정으로 재개할 수 있으며, job이 없으면 idle이다. Wiki 운영 store
+  선택/disable env는 없고 CSV/원증빙 정리 선택과도 독립이다.
 
 ## 5. 개인 Vault (개인 맞춤형 지식베이스)
 - 각 사용자는 `/vault`(VLT-001)에 개인 노트를 두고 `[[위키링크]]`로 연결한다. 백링크와 3D 그래프
@@ -150,8 +153,10 @@ SQLite 조직 또는 `pg:<company_id>` PG 회사)에 따라 다른 규칙은 각
   transaction), CSV 가져오기(hash/parser/원본 ordinal/장부 ID·건수만, 셀 값·external ID·매핑
   이름·사유·token은 저장하지 않음), Wiki event log(append-only, 본문 없음).
 - `/admin/data`(ADM-004): 모듈별 보존기간, legal hold, 조직 전체 내보내기. 원증빙 원본과 Wiki 게시
-  revision은 자동 삭제 정책이 없다. CSV 원본과 원증빙 임시 업로드는 24시간 뒤 만료된다(DB 시각 기준, 즉시 적용). 물리 정리는 ERP
-  내장 timer가 담당하며 CSV(`ORBITFLOW_IMPORT_CLEANUP_STORES`)와 원증빙 staging
+  revision은 자동 삭제 정책이 없다. CSV 원본과 원증빙 임시 업로드는 24시간 뒤 만료된다
+  (CSV와 PG 원증빙은 DB 시각, legacy 원증빙은 앱 시각; sweep 전에도 만료 적용).
+  물리 정리는 현재 `server.js`에 배선된 ERP 내장 timer가 담당하며 둘 다 기본 꺼짐이다.
+  CSV(`ORBITFLOW_IMPORT_CLEANUP_STORES`)와 원증빙 staging
   (`ORBITFLOW_RECEIPT_CLEANUP_STORES`)을 각각 env로 켜야 동작한다. 원증빙 정리는 미소비 임시 파일만
   지우고 소비된 원본·공유 파일은 보존한다(활성화 여부와 모니터 전송은 배포 문서 참조). 이 문서는 법적 보존 요건 충족을
   주장하지 않는다.

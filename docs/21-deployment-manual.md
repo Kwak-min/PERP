@@ -90,9 +90,11 @@ baseline으로 reconcile해야 합니다. `init.sql`도 새 local compose volume
 7. `ORBITFLOW_UPLOAD_DIR`를 영속·백업 대상 volume으로 지정합니다. 원증빙 원본은 이
    경로에 저장되며 DB link와 같은 backup ID로 묶어야 합니다.
 8. LLM Wiki를 켤 환경에는 `WIKI_LOCAL_MODEL_CONFIG`(numeric loopback origin, 실제 loaded
-   model ID, context/output token, timeout)를 준비합니다. 값이 없으면 Wiki job은
-   `unavailable`로 끝나고 나머지 Wiki 읽기/원본 등록은 동작합니다. 범용
-   `ORBITFLOW_AI_PROVIDER`/OpenRouter/Echo 설정은 Wiki에 적용되지 않습니다.
+   model ID, context/output token, timeout)를 준비합니다. 값이 없으면 새 모델 의존 Wiki job은
+   `unavailable`로 끝나고 읽기/원본 등록/`no_evidence` 조사는 동작합니다. 빈 값은 scheduler
+   disable이 아닙니다. worker는 `legacy`/`pg`를 조회하고 기존 job의 저장된 모델 설정으로
+   재개할 수 있으며, job이 없으면 idle입니다. Wiki 운영 store 선택/disable env는 없습니다.
+   범용 `ORBITFLOW_AI_PROVIDER`/OpenRouter/Echo 설정은 Wiki에 적용되지 않습니다.
 9. CSV 가져오기 원본(24시간)과 원증빙 staging(24시간) 정리는 ERP 내장 timer를 **각각 env로
    활성화**합니다. `ORBITFLOW_IMPORT_CLEANUP_STORES`(CSV)와 `ORBITFLOW_RECEIPT_CLEANUP_STORES`
    (원증빙)는 서로 독립이며 둘 다 기본 비활성입니다. cadence `ORBITFLOW_IMPORT_CLEANUP_INTERVAL_MS`
@@ -101,12 +103,11 @@ baseline으로 reconcile해야 합니다. `init.sql`도 새 local compose volume
    프로세스만 켭니다. stdout `expense_import_cleanup` 이벤트(종류·store별 건수, `shared>0` 검토)를
    수집·알림하는 collector와 보존은 배포 대상이 준비합니다. `backend/.env.example`에는 두 opt-in의
    빈 기본값과 주석 예시가 있으며 백엔드 단위가 관리합니다. 실제 `.env` 값은 Secret Manager에서
-   주입합니다. 상세는 `docs/20-operations-manual.md`의 정기 정리 절을 따릅니다. 이 timer 인터페이스는
-   별도 커밋된 정리 런타임(worker thread와 `backend/src/server.js` 배선)의 설정 계약이며, 그 커밋이
-   이 tree에 병합되기 전까지는 수동 CSV CLI `scripts/cleanup_expense_imports.mjs`와
-   `backend/src/services/expense-import.service.js`의 cleanup 함수만 존재합니다.
-   어느 환경에서도 timer가 운영 중이라고 주장하지 않으며, 활성화 증거는 병합 뒤 실제 기동 이벤트로만
-   인정합니다.
+   주입합니다. 상세는 `docs/20-operations-manual.md`의 정기 정리 절을 따릅니다. 현재 tree에는
+   timer·전용 worker thread와 `backend/src/server.js`의 Wiki/정리 공동 lifecycle 배선이
+   포함되어 있습니다. 격리 검증 범위는 `docs/runtime-integration-task29.md`를 참조합니다.
+   어느 환경에서도 timer가 운영 중이라고 주장하지 않으며, 활성화 증거는 배포 대상의 실제
+   기동 이벤트로만 인정합니다.
 
 ### Remote 배포 차단 조건
 
@@ -129,8 +130,9 @@ baseline으로 reconcile해야 합니다. `init.sql`도 새 local compose volume
 - 정리 timer의 활성화 증거(기동 이벤트의 `stores`와 `receipt_stores` 선택값), 종류·store별
   `succeeded` 이벤트를 수집하는 collector·알림 전송 증거, 원증빙 upload root의 영속 volume 증거
   (소스 배선 존재만으로는 미충족; 활성화 전 코드·설정·종료 검증이 필요)
-- Wiki를 켤 경우 `WIKI_LOCAL_MODEL_CONFIG`와 로컬 모델 서버의 loaded 상태 확인; 끌 경우
-  사용자에게 `unavailable`이 정상 상태라는 공지
+- Wiki 모델을 사용할 경우 `WIKI_LOCAL_MODEL_CONFIG`와 로컬 모델 서버의 loaded 상태 확인;
+  모델 미설정이면 새 모델 의존 작업의 `unavailable` 공지. scheduler는 꺼지지 않으며 기존
+  durable job과 저장된 설정을 별도로 점검 (`docs/20-operations-manual.md`)
 
 저장소 검증이나 local compose 성공은 이 조건을 대체하지 않습니다.
 

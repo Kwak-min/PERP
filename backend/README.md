@@ -78,8 +78,9 @@ PG 세션 만료는 기존 `auth.sessions.login_at`과 `ORBITFLOW_SESSION_TTL`�
 ### 정리 작업
 
 CSV 가져오기 원본과 원증빙 staging 정리는 `server.js`에 내장된 **하나의** timer가 실행하며 두
-종류 모두 **기본 비활성**입니다. 활성화 전 코드·설정·종료 검증이 필요하며 운영 활성화는 배포
-gate입니다.
+종류 모두 **기본 비활성**입니다. 현재 tree에 timer·전용 worker와 Wiki/정리 공동 lifecycle 배선이
+포함됩니다. 격리 검증 범위는 `docs/runtime-integration-task29.md`를 참조하며, 배포 대상의
+설정·종료 검증과 운영 활성화는 별도 gate입니다.
 
 ```bash
 ORBITFLOW_IMPORT_CLEANUP_STORES=legacy,perp_db    # CSV job. 빈 값 = 비활성
@@ -116,8 +117,14 @@ DB/WAL/backup의 forensic 소거나 법적 보존 충족이 아닙니다. `.env.
 `WIKI_LOCAL_MODEL_CONFIG`(JSON: `base_url`, `model`, `context_tokens`, `output_tokens`,
 `timeout_ms`, `temperature`)만 Wiki 컴파일·조사에 사용됩니다. `base_url`은 numeric
 loopback origin만 허용되고 `ORBITFLOW_AI_PROVIDER`/Echo/OpenRouter를 상속하지 않습니다.
-설정이 없으면 job은 `unavailable`이며 원본 등록과 게시된 위키 읽기는 계속 동작합니다.
-`server.js`가 worker를 기동·종료하며 lease 판정은 DB 시각입니다.
+설정이 없으면 새 모델 의존 job은 `unavailable`이며 원본 등록·게시된 위키 읽기·`no_evidence`
+조사는 계속 동작합니다. 빈 설정은 scheduler disable이 아닙니다. worker는 `legacy`/`pg`의
+기존 job을 조회하고 저장된 모델 설정으로 재개할 수 있습니다. job이 없으면 idle, PG 연결
+실패는 저장소 unavailable이며 Wiki 전용 운영 store 선택/disable env는 없습니다.
+`server.js`는 설정 검증·migration 뒤 listen 성공 시 두 worker를 시작합니다. SIGINT/SIGTERM에
+둘의 stop과 HTTP close를 즉시 요청하고, worker 종료와 기존 HTTP drain을 모두 기다린 뒤
+SQLite/PG를 닫아 자연 종료합니다(정상 0, 오류 1). 강제 HTTP drain timeout은 없으며 lease
+판정은 DB 시각입니다.
 
 ## 개인 AI API 키
 

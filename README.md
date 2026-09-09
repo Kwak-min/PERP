@@ -30,8 +30,10 @@ PG 16/Redis/MinIO를 띄우는 로컬 개발 보조 파일일 뿐 서비스 배�
 | LLM Wiki·지식 그래프 | 원본 revision → 검토 전 조사 → 초안 → 사용자가 확인한 digest만 게시, 원본 회수 시 `SOURCE_REVOKED`, strict local 모델만 | `docs/knowledge-wiki-jobs-contract.md`, `docs/knowledge-wiki-publication-interface.md`, `docs/knowledge-wiki-integration-task28.md` |
 
 최종 통합 산출물에는 위 Wiki 계약 문서와 `frontend/THIRD_PARTY_NOTICES.md`가 포함되어야
-합니다. 유효한 인용은 추적 가능성이지 사실성 보증이 아니며, 모델이 없을 때 Wiki 작업은
-`unavailable`로 표시되고 원본 등록과 게시된 위키 읽기는 계속 동작합니다.
+합니다. 유효한 인용은 추적 가능성이지 사실성 보증이 아니며, 모델 미설정으로 접수된 모델 의존
+Wiki 작업은 `unavailable`로 표시됩니다. 원본 등록·게시된 위키 읽기·`no_evidence` 조사는
+계속 동작합니다. 빈 모델 설정은 Wiki scheduler disable이 아니며 기존 job의 저장된 설정으로
+재개될 수 있습니다 (`docs/20-operations-manual.md`).
 
 ## 기술 스택
 
@@ -78,8 +80,10 @@ SQLite additive migration은 기동 시 자동 적용되며 이번 기능군은 
 v18 순서로 수동 적용합니다. 원증빙 원본은 `ORBITFLOW_UPLOAD_DIR`에 저장되므로 영속 volume이
 필요하고, CSV 원본과 원증빙 임시 업로드의 24시간 정리는 각각 `ORBITFLOW_IMPORT_CLEANUP_STORES`와
 `ORBITFLOW_RECEIPT_CLEANUP_STORES`로 켜는 내장 timer입니다(둘 다 기본 꺼짐, stdout 이벤트 수집과
-알림은 운영자 몫)
-([`docs/21-deployment-manual.md`](docs/21-deployment-manual.md)).
+알림은 운영자 몫). 현재 tree의 `backend/src/server.js`에 Wiki/정리 공동 기동·종료 배선이
+포함되며, 격리 검증은 운영 활성화 증거가 아닙니다
+([`docs/runtime-integration-task29.md`](docs/runtime-integration-task29.md),
+[`docs/21-deployment-manual.md`](docs/21-deployment-manual.md)).
 
 ## 검증
 

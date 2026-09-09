@@ -55,8 +55,12 @@ WIKI_LOCAL_MODEL_CONFIG={"base_url":"http://127.0.0.1:12345","model":"loaded-ide
 - context 한도는 tokenizer가 아닌 보수적 바이트 상한 추정입니다. 입력이 loaded
   context를 넘으면 422이며 prefix만 잘라 처리하지 않습니다.
 
-`server.js`는 기동 시 Wiki worker(`startWikiWorker`)를 시작하고 종료 시 `stop()`을
-기다립니다. worker는 30초 maintenance와 queue 신호로 durable job을 처리하며 scope당
+`server.js`는 설정 검증과 SQLite migration 뒤 HTTP listen이 성공해야 Wiki worker
+(`startWikiWorker`)와 선택된 정리 scheduler를 시작하고, 종료 시 둘의 `stop()`과 HTTP drain을
+모두 기다립니다. 빈 `WIKI_LOCAL_MODEL_CONFIG`는 모델 미설정이지 Wiki scheduler 비활성화가
+아닙니다. worker는 `legacy`와 `pg`의 durable job을 계속 조회하며, 접수 시 모델 설정이 저장된
+기존 job은 재개될 수 있습니다. 대기 job이 없으면 idle이고 PG 연결 실패는 저장소 unavailable로
+기록됩니다. Wiki 전용 운영 store 선택/disable env는 없으며 정리 opt-in과 독립입니다. worker는 30초 maintenance와 queue 신호로 durable job을 처리하며 scope당
 queued/running 20개, lease 120초, heartbeat 30초, 최대 3 attempts입니다. lease 판정은 DB
 시각만 사용하므로 앱 호스트와 DB 시각 차이를 모니터링해야 합니다. 상세 계약은
 `docs/knowledge-wiki-jobs-contract.md`와 `docs/knowledge-wiki-publication-interface.md`입니다.
@@ -213,14 +217,16 @@ receipt는 복구 대상 데이터입니다.
 
 세 가지를 구분합니다. **활성화**는 env로 켜는 코드 내장 timer, **저장 volume**은 운영자가
 마련하는 영속 디스크·backup, **모니터 전송**은 stdout 이벤트를 수집·알림하는 외부 collector입니다.
-코드는 첫 번째만 제공하며, 어느 환경에서도 이 문서가 "운영 중"이라고 주장하지 않습니다. 아래 timer
-설명은 별도 커밋된 정리 런타임(worker thread와 `backend/src/server.js` 배선)의 설정 계약입니다. 그 커밋이 이 tree에 병합되기 전까지 현재 tree에는 수동 CSV CLI와
-`cleanupLegacy*/cleanupPg*` 서비스 함수만 있으며, 통합 검증자가 병합 뒤 다시 확인합니다.
+코드는 첫 번째만 제공하며, 어느 환경에서도 이 문서가 "운영 중"이라고 주장하지 않습니다.
+현재 tree에는 `expense-import-maintenance.js`, 전용 cleanup worker thread와
+`backend/src/server.js`의 Wiki/정리 공동 기동·종료 배선이 포함되어 있습니다.
+격리 통합 검증 범위는 `docs/runtime-integration-task29.md`에 기록하며, 운영 활성화·영속 volume·
+collector 증거를 대신하지 않습니다.
 
 | 대상 | 실행 방식 | 만료 기준 | 반환값과 재시도 |
 |---|---|---|---|
 | CSV 가져오기 원본·preview | ERP 프로세스 내장 timer(`ORBITFLOW_IMPORT_CLEANUP_STORES`로 opt-in) 또는 수동 one-shot `node scripts/cleanup_expense_imports.mjs legacy` / `perp_db` | 업로드 후 24시간; 새 preview를 만들어도 연장되지 않음. 만료 판정은 DB 시각이며 sweep과 무관하게 즉시 적용 | `{deleted,redacted}`; 재실행 안전. busy/timeout/실패는 즉시 재시도 없이 다음 tick |
-| 원증빙 staging(미소비 임시 업로드) | 같은 내장 timer(`ORBITFLOW_RECEIPT_CLEANUP_STORES`로 **독립** opt-in). 내부적으로 기존 `cleanupLegacyReceipts()` / `cleanupPgReceipts()`만 호출 | token 24시간; 미소비 `writing|ready` staging만 | `{deleted,failed,shared}`; `failed>0`은 `unlink_failed`로 다음 tick 재시도, `shared>0`은 공유 참조 **보존**(운영자 확인 필요) |
+| 원증빙 staging(미소비 임시 업로드) | 같은 내장 timer(`ORBITFLOW_RECEIPT_CLEANUP_STORES`로 **독립** opt-in). 내부적으로 기존 `cleanupLegacyReceipts()` / `cleanupPgReceipts()`만 호출 | token 24시간; 미소비 `writing|ready` staging만. legacy는 앱 시각, PG는 DB 시각 | `{deleted,failed,shared}`; `failed>0`은 `unlink_failed`로 다음 tick 재시도, `shared>0`은 공유 참조 **보존**(운영자 확인 필요) |
 | 분석 export 요청 | 별도 정리 없음 | `expires_at` 이후 다운로드 409 | 파일을 만들지 않으므로 디스크 정리 대상 아님 |
 
 #### 내장 정리 timer (코드 내장, 두 종류 모두 기본 꺼짐)
@@ -239,7 +245,8 @@ receipt는 복구 대상 데이터입니다.
 | `ORBITFLOW_UPLOAD_DIR` | 원증빙 선택 시 필수. API와 같은 **절대 경로의 기존 디렉터리**. 기동 시 trim·snapshot하며 누락/상대/비디렉터리는 기동 거부. worker는 DB 정리 전 존재를 재확인하고 없으면 `store_unavailable`(상태 변경 없음). 영속성·mount·ACL·backup은 운영자 책임 | 없음 |
 
 - legacy를 어느 종류에서든 선택하면 절대 경로 `ORBITFLOW_DATABASE_FILE`이 필수(`:memory:`/상대
-  기본값 불가). 파일이 없으면 `store_unavailable`이며 생성하지 않습니다. perp_db는
+  기본값 불가). cleanup worker는 파일이 없으면 `store_unavailable`이며 생성하지 않습니다
+  (서버의 기존 startup migration은 별개로 DB를 생성할 수 있습니다). perp_db는
   protocol/host/port/user/database를 모두 담은 `DATABASE_URL` 또는 완전한
   `PG_HOST/PG_PORT/PG_DATABASE/PG_USER`(+`PG_PASSWORD`)가 필수이며 localhost/55432 기본값을 빌리지
   않습니다. 선택된 연결 설정과 upload root는 기동 시 snapshot됩니다.
@@ -247,8 +254,12 @@ receipt는 복구 대상 데이터입니다.
   순차 실행. job마다 전용 native worker thread 하나가 해당 cleanup 함수만 import하고 자기 SQLite/PG
   자원을 닫습니다. 겹치는 tick은 enqueue 없이 `skipped/overlap`만 기록합니다. HTTP pool과 기존
   cleanup service transaction은 바뀌지 않습니다.
-- SIGINT/SIGTERM: 공유 interval 정지 → 진행 중 worker abort·실제 종료 대기 → HTTP `server.close` →
-  exit 0. 정지 뒤 남은 종류/store는 시작되지 않습니다.
+- SIGINT/SIGTERM은 Wiki와 정리 worker의 stop을 즉시 요청하고 HTTP `server.close`로 새 유입을
+  닫습니다. 공유 interval 정지·진행 중 worker abort/실제 종료·기존 HTTP 요청 drain을 모두
+  기다린 뒤 SQLite/PG 자원을 닫고 자연 종료합니다. 반복 signal은 같은 종료 작업을 공유하고,
+  한 stop이 실패해도 나머지 완료 전에 DB를 닫지 않습니다. 정상 exit 0, 오류 exit 1이며 별도
+  강제 HTTP drain timeout은 없습니다. 외부 HTTP close도 둘을 정지합니다. 정지 뒤 남은
+  종류/store는 시작되지 않습니다.
 - **multi-process 배포는 한 프로세스만 두 선택 변수를 설정**하고 나머지는 모두 비워 둡니다. 프로세스
   내 non-overlap은 분산 lease가 아니며 저장소 경합 보호는 기존 DB lock이 담당합니다.
 - 수동 CSV CLI는 one-shot이며 두 번째 scheduler가 아닙니다. 원증빙 정리는 수동 CLI 없이 timer 또는
