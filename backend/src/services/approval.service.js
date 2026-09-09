@@ -2,6 +2,7 @@ import { db } from '../config/db.js';
 import { bumpVersion, findScoped, insert, listScoped, newId, nowIso, update } from '../models/base.js';
 import * as audit from './audit.service.js';
 import { notify } from './notification.service.js';
+import { legacyApprovalPeople, personDisplay } from './approval-person-display.service.js';
 import { BUILTIN_APPROVAL_FORMS, approvalBody, normalizeApprovalFields } from './approval-forms.service.js';
 import { canReadDocument } from './rag.service.js';
 import { enabledSet } from '../middleware/modules.js';
@@ -122,8 +123,10 @@ export function approvalView(principal, approval) {
   const steps = approval.status === 'draft'
     ? json(approval.steps_json, []).map((step, ordinal) => ({ ...step, ordinal, status: 'draft', comment: null, decided_at: null, delegate_of: null }))
     : stepsOf(principal, approval.id);
+  const people = legacyApprovalPeople(principal, [approval.requester_id, ...steps.map(step => step.approver_id)]);
   return {
     ...approvalSnapshot(principal, approval),
+    requester_display: personDisplay(people, approval.requester_id),
     current_step: approval.current_step,
     due_at: approval.due_at,
     submitted_at: approval.submitted_at ?? null,
@@ -131,7 +134,7 @@ export function approvalView(principal, approval) {
     workflow_locked: Boolean(approval.workflow_locked),
     requires_reauth: approval.amount >= HIGH_AMOUNT_MINOR,
     steps: steps.map(step => ({
-      ordinal: step.ordinal, approver_id: step.approver_id, mode: step.mode, kind: step.kind,
+      ordinal: step.ordinal, approver_id: step.approver_id, approver_display: personDisplay(people, step.approver_id), mode: step.mode, kind: step.kind,
       status: step.status, comment: step.comment, decided_at: step.decided_at, delegate_of: step.delegate_of,
     })),
   };

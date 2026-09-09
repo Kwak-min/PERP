@@ -23,6 +23,7 @@ import {
 import { extractSupportedTextUpload, persistUploadedSource } from "../services/document-ingestion.service.js";
 import { graphEdge, graphIdentity, graphNode } from "../services/graph-identity.service.js";
 import { canReadPgApproval } from '../services/pg-approval-read-policy.service.js';
+import { pgApprovalPeople, personDisplay } from '../services/approval-person-display.service.js';
 
 // perp_db(PostgreSQL) 모듈 read 슬라이스.
 // strangler-fig 1단계: 홈/프로젝트/캘린더/재무/HR 화면을 실데이터로 전환.
@@ -244,17 +245,18 @@ export async function approvals(req, res) {
   if (!principal.has('approval.decide')) principal.require('approval.request');
   const canDecide = principal.has('approval.decide');
   const { rows } = await pgQuery(
-    `SELECT ar.id AS __id, ar.requester_id, to_jsonb(ar)->>'title' AS title, ar.request_type AS 유형, r.name AS 신청자, t.name AS 대상,
+    `SELECT ar.id AS __id, ar.requester_id, ar.target_user_id, to_jsonb(ar)->>'title' AS title, ar.request_type AS 유형,
             ar.status AS status, ar.created_at AS 신청일, ar.payload, ar.decision_note, ar.decided_at
        FROM org.approval_requests ar
-       LEFT JOIN auth.users r ON r.id = ar.requester_id
-       LEFT JOIN auth.users t ON t.id = ar.target_user_id
       WHERE ar.company_id = $1
       ORDER BY ar.created_at DESC, ar.id DESC`,
     [companyId],
   );
   // 같은 읽기 predicate를 통과한 행에만 인증 ID 기반 내 요청 분류용 ID를 투영한다.
-  const items = rows.filter(row => canReadPgApproval(principal, row));
+  const readable = rows.filter(row => canReadPgApproval(principal, row));
+  const people = await pgApprovalPeople(pgQuery, companyId, readable.flatMap(row => [row.requester_id, row.target_user_id]));
+  const items = readable.map(({ target_user_id, ...row }) => ({ ...row, requester_display: personDisplay(people, row.requester_id),
+    신청자: personDisplay(people, row.requester_id).name, 대상: personDisplay(people, target_user_id).name }));
   res.json({ items, can_decide: canDecide, can_request: principal.has('approval.request') });
 }
 
