@@ -25,7 +25,9 @@ const dedicatedScenarioArgs = args[0] === '--scenario' && (
 );
 const wikiScenarioArgs = args[0] === '--scenario' && args[1] === 'knowledge-wiki'
   && (args.length === 2 || (args.length === 4 && args[2] === '--store' && ['legacy', 'pg'].includes(args[3])));
-if (!sharedScenarioArgs && !dedicatedScenarioArgs && !wikiScenarioArgs) {
+if (args[0] === '--scenario' && args[1] === 'all') {
+  process.exitCode = await (await import('../../scripts/run_deadline_gate.mjs')).runGate(['--suite', 'browser', ...args.slice(2)]);
+} else if (!sharedScenarioArgs && !dedicatedScenarioArgs && !wikiScenarioArgs) {
   console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar|knowledge-graphs|project-members|project-members-access [--probe error|cancel] | --scenario month-summary|roles|role-toggles|role-toggles-native|disabled-hr-features|reservation-conflict-edit|expense-receipt|expense-csv-import|approval-workflow|analytics|analytics-pg|graph-engine | --scenario reservation-space-calendar [--baseline] | --scenario knowledge-wiki [--store legacy|pg]');
   process.exitCode = 2;
 } else {
