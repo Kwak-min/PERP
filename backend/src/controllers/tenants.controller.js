@@ -91,6 +91,7 @@ export function moduleCatalog(req, res) {
 export function createOrg(req, res) {
   const payload = createSchema.parse(req.body);
   const user = currentUser(req);
+  if (payload.type === "personal") payload.name = user.name;
   const template = ORG_TEMPLATES[payload.type];
   if (!template) {
     throw new ApiError("VALIDATION_ERROR", `unknown organization type: ${payload.type}`);

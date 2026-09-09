@@ -21,7 +21,8 @@ export function pgMembershipError(error) {
 
 async function membershipsOf(userId, companyId = null) {
   try {
-    return (await pgQuery(`SELECT m.company_id, m.user_id, m.department_id, m.position_id, c.name
+    return (await pgQuery(`SELECT m.company_id, m.user_id, m.department_id, m.position_id, c.name,
+      to_jsonb(c)->>'organization_type' AS organization_type
       FROM org.company_memberships m JOIN org.companies c ON c.id = m.company_id
       WHERE m.user_id = $1 AND m.status = 'active' AND c.is_active = true
       ${companyId ? "AND m.company_id = $2" : ""}
@@ -40,7 +41,7 @@ async function workspaceOf(userId, membership) {
       WHERE ur.user_id = $1 AND ur.workspace_id IS NULL`, [userId, companyId]),
     pgQuery("SELECT module_key FROM org.company_modules WHERE company_id = $1", [companyId]),
   ]);
-  return { org_id: `pg:${companyId}`, org_name: membership.name, org_type: "perp_db",
+  return { org_id: `pg:${companyId}`, org_name: membership.name, org_type: membership.organization_type === 'personal' ? 'personal' : 'perp_db',
     roles: [...new Set(grants.rows.map(row => row.role))],
     permissions: [...new Set(grants.rows.map(row => row.code).filter(code => code && code !== '*' && code !== 'menu.configured' && !code.startsWith('platform.')))],
     menu_permissions: effectivePgPermissions(grants.rows).filter(code => code.startsWith('menu.')),

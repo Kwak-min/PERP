@@ -46,16 +46,16 @@ export function OnboardingPage() {
   const session = useSession();
   const navigate = useNavigate();
   const nativePg = isPgToken(session?.token ?? "");
-  const availableTypes = nativePg ? types.filter(([key]) => key === "company") : types;
+  const availableTypes = nativePg ? types.filter(([key]) => key === "company" || key === "personal") : types;
   const [step, setStep] = useState(1);
   const TOTAL_STEPS = 4;
   const [type, setType] = useState(nativePg ? "company" : "club");
   const [name, setName] = useState("");
+  const organizationName = type === "personal" ? session?.name.trim() ?? "" : name.trim();
   const [modules, setModules] = useState<string[]>([]);
   const [features, setFeatures] = useState<string[]>([]);
   const [catalog, setCatalog] = useState<z.infer<typeof catalogItemSchema>[]>([]);
   const [featureCatalog, setFeatureCatalog] = useState<z.infer<typeof featureItemSchema>[]>([]);
-  const [departments, setDepartments] = useState("");
   const [fiscalStart, setFiscalStart] = useState(1);
   const [busy, setBusy] = useState(false);
   const [createdOrgId, setCreatedOrgId] = useState<string | null>(null);
@@ -87,7 +87,7 @@ export function OnboardingPage() {
   }
 
   async function createOrganization(): Promise<void> {
-    if (!session || !name.trim()) return;
+    if (!session || !organizationName) return;
     setBusy(true);
     setError(null);
     try {
@@ -96,22 +96,18 @@ export function OnboardingPage() {
           method: "POST",
           session: { token: session.token, orgId: null },
           body: nativePg ? {
-            name: name.trim(),
+            name: organizationName,
+            type,
             modules: catalog.filter((item) => item.key !== "approvals" && (item.core || modules.includes(item.key))).map((item) => item.key),
             features,
-            departments: departments.split(",").map((item) => item.trim()).filter(Boolean),
           } : {
-            name: name.trim(),
+            name: organizationName,
             type,
             currency: "KRW",
             timezone: "Asia/Seoul",
             fiscal_year_start: fiscalStart,
             modules: catalog.filter((item) => item.key !== "approvals" && (item.core || modules.includes(item.key))).map((item) => item.key),
             features,
-            departments:
-              type === "custom"
-                ? departments.split(",").map((item) => item.trim()).filter(Boolean)
-                : undefined,
           },
         }),
       );
@@ -173,14 +169,11 @@ export function OnboardingPage() {
       )}
       {step === 2 && (
         <div className="form-stack">
-          <label>조직 이름<input value={name} onChange={(event) => setName(event.target.value)} placeholder="예: 오비트 연구회" required /></label>
+          <label>조직 이름<input value={type === "personal" ? organizationName : name} readOnly={type === "personal"} onChange={(event) => setName(event.target.value)} placeholder="예: 오비트 연구회" required /></label>
           {!nativePg && <div className="form-split">
             <label>기본 통화<select defaultValue="KRW"><option value="KRW">KRW · 대한민국 원</option></select></label>
             <label>회계연도 시작<select value={String(fiscalStart)} onChange={(event) => setFiscalStart(Number(event.target.value))}><option value="1">1월</option><option value="3">3월</option><option value="7">7월</option></select></label>
           </div>}
-          {(nativePg || type === "custom") && (
-            <label>추가할 부서 (선택, 쉼표로 구분)<input value={departments} onChange={(event) => setDepartments(event.target.value)} /></label>
-          )}
         </div>
       )}
       {step === 3 && (
@@ -213,7 +206,7 @@ export function OnboardingPage() {
       {step === 4 && (
         <dl className="summary-review">
           <div><dt>유형</dt><dd>{types.find(([key]) => key === type)?.[1] ?? type}</dd></div>
-          <div><dt>이름</dt><dd>{name.trim() || "—"}</dd></div>
+          <div><dt>이름</dt><dd>{organizationName || "—"}</dd></div>
           {!nativePg && <div><dt>통화·회계연도</dt><dd>KRW · {fiscalStart}월 시작</dd></div>}
           {nativePg && <div><dt>저장소</dt><dd>PostgreSQL 회사</dd></div>}
           <div>
@@ -237,9 +230,9 @@ export function OnboardingPage() {
           이전
         </Button>
         {step < TOTAL_STEPS ? (
-          <Button disabled={step === 2 && !name.trim()} onClick={() => setStep((value) => value + 1)}>다음</Button>
+          <Button disabled={step === 2 && !organizationName} onClick={() => setStep((value) => value + 1)}>다음</Button>
         ) : (
-          <Button disabled={busy || !name.trim()} onClick={createOrganization}>{busy ? "조직 확인 중…" : createdOrgId ? "소속 다시 확인" : "조직 만들기"}</Button>
+          <Button disabled={busy || !organizationName} onClick={createOrganization}>{busy ? "조직 확인 중…" : createdOrgId ? "소속 다시 확인" : "조직 만들기"}</Button>
         )}
       </div>
     </section>

@@ -72,7 +72,8 @@ export async function installCompanyFixture() {
     }
     if (text.includes('org.company_memberships') && !schemaAvailable) throw Object.assign(new Error('relation org.company_memberships does not exist'), { code: '42P01' });
     if (text.includes('INSERT INTO org.companies')) {
-      const company = { id: String(78 + data.companies.length - 1), name: values[0], is_active: true };
+      const company = { id: String(78 + data.companies.length - 1), name: values[0], is_active: true,
+        organization_type: text.includes("organization_type) VALUES ($1, 'personal')") ? 'personal' : 'company' };
       data.companies.push(company); return { rows: [company], rowCount: 1 };
     }
     if (text.startsWith('DELETE FROM org.company_modules')) {
@@ -146,7 +147,8 @@ export async function installCompanyFixture() {
     if (text.includes('SELECT name FROM org.companies')) return { rows: data.companies.filter(row => row.id === values[0]) };
     if (text.includes('FROM org.company_memberships m JOIN org.companies c')) {
       return { rows: data.memberships.filter(m => m.user_id === values[0] && (values.length === 1 || m.company_id === values[1]) && m.status === 'active')
-        .filter(m => data.companies.some(c => c.id === m.company_id && c.is_active)).map(m => ({ ...m, name: data.companies.find(c => c.id === m.company_id).name })) };
+        .filter(m => data.companies.some(c => c.id === m.company_id && c.is_active)).map(m => ({ ...m, name: data.companies.find(c => c.id === m.company_id).name,
+          organization_type: text.includes("to_jsonb(c)->>'organization_type'") ? data.companies.find(c => c.id === m.company_id).organization_type : undefined })) };
     }
     if (text.includes('AS members') && text.includes('org.company_memberships')) return { rows: [{ members: data.memberships.filter(m => m.company_id === values[0] && m.status === 'active').length, projects: 0, tasks: 0, documents: 0 }] };
     if (text.includes('JOIN project.projects p ON p.company_id = m.company_id')) {

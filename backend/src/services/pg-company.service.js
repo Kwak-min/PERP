@@ -25,7 +25,10 @@ export async function grantCompanyCreator(client, companyId, userId) {
 export async function createPgCompany(userId, payload) {
   try {
     return await pgTransaction(async client => {
-      const { rows: companies } = await client.query('INSERT INTO org.companies (name) VALUES ($1) RETURNING id, name', [payload.name]);
+      // 기존 회사 생성은 이전 스키마에서도 유지하고 개인 유형만 새 열에 기록한다.
+      const { rows: companies } = await client.query(payload.type === 'personal'
+        ? "INSERT INTO org.companies (name, organization_type) VALUES ($1, 'personal') RETURNING id, name"
+        : 'INSERT INTO org.companies (name) VALUES ($1) RETURNING id, name', [payload.name]);
       const company = companies[0];
       await client.query(`INSERT INTO org.company_modules (company_id, module_key)
         SELECT $1, k FROM unnest($2::text[]) AS k`, [company.id, payload.modules]);
@@ -45,7 +48,12 @@ export async function createPgCompany(userId, payload) {
         VALUES ($1, $2, $3, $4, $2)`, [company.id, userId, null, null]);
       await grantCompanyCreator(client, company.id, userId);
       await client.query("INSERT INTO org.company_events (company_id, actor_id, action) VALUES ($1, $2, 'company.created')", [company.id, userId]);
-      return { org_id: `pg:${company.id}`, name: company.name, type: 'perp_db', enabled_features: payload.features };
+      return { org_id: `pg:${company.id}`, name: company.name, type: payload.type === 'personal' ? 'personal' : 'perp_db', enabled_features: payload.features };
     });
-  } catch (error) { throw pgMembershipError(error); }
+  } catch (error) {
+    if (error?.code === '42703' && payload.type === 'personal') {
+      throw new ApiError('SERVICE_UNAVAILABLE', 'PG 개인 조직 스키마가 없습니다. perp_additions_v19_personal_organizations.sql 적용 상태를 확인하세요.');
+    }
+    throw pgMembershipError(error);
+  }
 }
