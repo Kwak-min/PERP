@@ -4,21 +4,23 @@ import { isPgWorkspace } from '../../services/workspace';
 
 const id = z.string().min(1);
 const version = z.number().int().positive().safe();
-export const stepSchema = z.object({ approver_id: id, mode: z.enum(['sequential','parallel']), kind: z.string(), ordinal: z.number().optional(), status: z.string().optional(), comment: z.string().nullable().optional(), decided_at: z.string().nullable().optional() });
+const personDisplaySchema = z.object({ name: z.string().nullable() });
+export const personLabel = (display?: z.infer<typeof personDisplaySchema>) => display?.name?.trim() || '확인할 수 없는 사용자';
+export const stepSchema = z.object({ approver_id: id, approver_display: personDisplaySchema.optional(), mode: z.enum(['sequential','parallel']), kind: z.string(), ordinal: z.number().optional(), status: z.string().optional(), comment: z.string().nullable().optional(), decided_at: z.string().nullable().optional() });
 export const formSchema = z.object({ key: id, name: z.string(), revision: version, fields: z.array(z.object({ key: id, label: z.string(), type: z.enum(['text','textarea','krw']), required: z.boolean() })), route: z.array(stepSchema).optional() });
 export const formsSchema = z.object({ items: z.array(formSchema) });
 export const receiptSchema = z.object({ file_id: id, filename: z.string(), mime: z.string(), size_bytes: z.number(), checksum_sha256: z.string() });
-export const detailSchema = z.object({ id, title: z.string().nullable(), requester_id: id.nullable(), form_key: z.string().nullable(), body: z.record(z.string(), z.unknown()).nullable(), status: z.string(), version,
+export const detailSchema = z.object({ id, title: z.string().nullable(), requester_id: id.nullable(), requester_display: personDisplaySchema.optional(), decided_by: id.nullable().optional(), decided_by_display: personDisplaySchema.optional(), form_key: z.string().nullable(), body: z.record(z.string(), z.unknown()).nullable(), status: z.string(), version,
   form_snapshot: formSchema.nullable(), attachment_snapshot: z.array(receiptSchema), predecessor_id: id.nullable(), steps: z.array(stepSchema).optional(), requires_reauth: z.boolean().optional(), amount: z.number().optional(),
   submitted_at: z.string().nullable().optional(), withdrawn_at: z.string().nullable().optional(), decision_note: z.string().nullable().optional(), target_user_id: id.nullable().optional(), subject_type: z.string().nullable().optional(), subject_id: id.nullable().optional(),
 });
-export const historySchema = z.object({ items: z.array(z.object({ id: id.nullable(), actor_id: id.nullable(), action: z.string(), status: z.string(), snapshot: z.unknown().nullable(), created_at: z.string(), comment: z.string().nullable().optional(), origin: z.string().optional() })) });
+export const historySchema = z.object({ items: z.array(z.object({ id: id.nullable(), actor_id: id.nullable(), actor_display: personDisplaySchema.optional(), action: z.string(), status: z.string(), snapshot: z.unknown().nullable(), created_at: z.string(), comment: z.string().nullable().optional(), origin: z.string().optional() })) });
 export type ApprovalDetail = z.infer<typeof detailSchema>;
 export type ApprovalForm = z.infer<typeof formSchema>;
 export type ApprovalStep = z.infer<typeof stepSchema>;
 export type Box = 'inbox' | 'sent' | 'completed' | 'drafts';
-export type ListRow = { id: string; requester_id: string | null; title: string; status: string; requesterName?: string | null };
-const pgListSchema = z.object({ items: z.array(z.object({ __id: id, requester_id: id.nullable(), title: z.string().nullable(), 유형: z.string(), 신청자: z.string().nullable(), status: z.string() })), can_request: z.boolean(), can_decide: z.boolean() });
+export type ListRow = { id: string; requester_id: string | null; title: string; status: string; requester_display?: z.infer<typeof personDisplaySchema> | undefined };
+const pgListSchema = z.object({ items: z.array(z.object({ __id: id, requester_id: id.nullable(), requester_display: personDisplaySchema.optional(), title: z.string().nullable(), 유형: z.string(), status: z.string() })), can_request: z.boolean(), can_decide: z.boolean() });
 export const statusLabels: Record<string,string> = { draft: '임시저장', pending: '대기', approved: '승인', rejected: '반려', withdrawn: '철회', held: '보류' };
 export const terminal = (status: string) => ['approved','rejected','withdrawn'].includes(status);
 export function exactAmount(detail: ApprovalDetail): string | null {
@@ -49,7 +51,7 @@ export function approvalAdapter(session: ApiSession) {
         const rows = data.items.filter(row => box === 'sent' ? row.requester_id === userId
           : box === 'drafts' ? row.status === 'draft' && row.requester_id === userId
             : box === 'completed' ? terminal(row.status) : data.can_decide && row.status === 'pending');
-        return { items: rows.slice(page * 25, (page + 1) * 25).map(row => ({ id: row.__id, requester_id: row.requester_id, title: row.title ?? row.유형, status: row.status, requesterName: row.신청자 })), hasMore: rows.length > (page + 1) * 25 };
+        return { items: rows.slice(page * 25, (page + 1) * 25).map(row => ({ id: row.__id, requester_id: row.requester_id, title: row.title ?? row.유형, status: row.status, requester_display: row.requester_display })), hasMore: rows.length > (page + 1) * 25 };
       }
       const data = z.object({ items: z.array(detailSchema), has_more: z.boolean() }).parse(await apiRequest(`${requests}?box=${box}&limit=25&offset=${page * 25}`, { session, signal }));
       return { items: data.items.map(row => ({ ...row, title: row.title ?? row.form_key ?? '기존 요청' })), hasMore: data.has_more };
@@ -59,7 +61,9 @@ export function approvalAdapter(session: ApiSession) {
     async detail(value: string, signal: AbortSignal) { return detailSchema.parse(await apiRequest(detailPath(value), { session, signal })); },
     async history(value: string, signal: AbortSignal) { return historySchema.parse(await apiRequest(detailPath(value) + '/history', { session, signal })).items; },
     async mutate(path: string, method: 'POST' | 'PATCH', body: unknown, signal: AbortSignal) {
-      return detailSchema.parse(await apiRequest(path, { session, method, body, signal }));
+      const value = detailSchema.parse(await apiRequest(path, { session, method, body, signal }));
+      // PG write DTOs are immutable-record views; labels come from the authorized read.
+      return pg ? detailSchema.parse(await apiRequest(detailPath(value.id), { session, signal })) : value;
     },
   };
 }

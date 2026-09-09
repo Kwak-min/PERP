@@ -11,6 +11,7 @@ import {
 import { approvalBody, initialApprovalFormRevision, legacyApprovalAmount, normalizeApprovalFields, validateApprovalSubmission } from '../services/approval-forms.service.js';
 import { consumeLegacyReceipts } from '../services/legacy-receipt-files.service.js';
 import { notify } from '../services/notification.service.js';
+import { legacyApprovalPeople, personDisplay } from '../services/approval-person-display.service.js';
 import { legacyRoleGrants } from '../services/company-roles.service.js';
 import { verifyPassword } from '../utils/crypto.js';
 import { ApiError, notFound } from '../utils/errors.js';
@@ -224,7 +225,8 @@ export function history(req, res) {
   const approval = readableApproval(principal, req.params.approvalId);
   const rows = db().prepare(`SELECT id,actor_id,action,status,snapshot_json,created_at FROM approval_history
     WHERE tenant_id=? AND org_id=? AND approval_id=? ORDER BY created_at,id`).all(principal.tenantId, principal.orgId, approval.id);
-  res.json({ items: rows.map(row => ({ ...row, snapshot: JSON.parse(row.snapshot_json), snapshot_json: undefined })) });
+  const people = legacyApprovalPeople(principal, rows.map(row => row.actor_id));
+  res.json({ items: rows.map(row => ({ ...row, actor_display: personDisplay(people, row.actor_id), snapshot: JSON.parse(row.snapshot_json), snapshot_json: undefined })) });
 }
 
 export function decide(req, res) {
