@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { withKnowledgeTransaction } from './knowledge-wiki-store.service.js';
-import { canonical, sha256, citationSchema, freezeManifest, WIKI_CONTRACT, wikiError } from './knowledge-wiki-contract.service.js';
+import { canonical, sha256, citationSchema, freezeManifest, restoreSpan, WIKI_CONTRACT, wikiError } from './knowledge-wiki-contract.service.js';
 
 const fail = (code, status = 409) => { throw wikiError(code,status); };
 const id = z.string().min(1).max(200);
@@ -55,22 +55,34 @@ export function* authorizeLineage(tx,lineage,{current=false}={}) {
   if (current && freshness!=='current') fail('SOURCE_STALE');
   return freshness;
 }
-function* dependencies(tx,lineage,dependent,ownPage=null) {
+function* dependencies(tx,lineage,dependent,replacedHeads=new Set()) {
   const raw=new Set(lineage.inputs.flatMap(i=>i.source_revision_ids ?? []));
-  const pages=new Set(lineage.inputs.filter(i=>i.kind==='page_revision').map(i=>i.revision_id));
-  // 자기 이전 head는 ancestry이지 살아 있는 외부 head가 아니다. 그 전체 dependency는 유지한다.
-  for (const pageId of [...pages]) {
-    const revision=yield* tx.get('page_revision',pageId);
-    if (ownPage && revision.page_id===ownPage) {
-      pages.delete(pageId);
-      for (const dep of yield* tx.all('dependency',{where:{dependent_page_revision_id:pageId}})) {
-        if (dep.page_revision_id) pages.add(dep.page_revision_id);
-        if (dep.source_revision_id) raw.add(dep.source_revision_id);
-      }
+  const pending=new Set(lineage.inputs.filter(i=>i.kind==='page_revision').map(i=>i.revision_id)), pages=new Set();
+  // Only exact heads replaced by this validated atomic publication are ancestry.
+  // Keep their immutable input/citation bytes in the change set; carry their entire
+  // dependency frontier forward, not circular claims against the new bundle text.
+  // External revisions remain live, including uncited context and inherited inputs.
+  for (const pageId of pending) {
+    if (!replacedHeads.has(pageId)) { pages.add(pageId); continue; }
+    for (const dep of yield* tx.all('dependency',{where:{dependent_page_revision_id:pageId}})) {
+      if (dep.page_revision_id) pending.add(dep.page_revision_id);
+      if (dep.source_revision_id) raw.add(dep.source_revision_id);
     }
   }
   for (const source_revision_id of raw) yield* tx.insert('dependency',{...dependent,source_revision_id,relation:'transitive'});
   for (const page_revision_id of pages) yield* tx.insert('dependency',{...dependent,page_revision_id,relation:'direct'});
+}
+function* publishedChange(tx,revisionId) {
+  const publication=(yield* tx.all('publication')).find(p=>JSON.parse(p.result_json).page_revision_ids.includes(revisionId));
+  return decode(yield* tx.get('change_set',publication.change_set_id));
+}
+function* validatePublicationCitation(tx,citation,checked,inherited) {
+  if (!inherited.has(canonical(citation))) return yield* tx.validateCitation(citation,checked);
+  // A human may retain an already published exact anchor, not relabel it as a
+  // citation to changed text. Current parent lineage was checked in full below.
+  const revision=citation.artifact_kind==='source_revision' ? yield* tx.sourceRevision(citation.revision_id,{current:true}) : yield* tx.pageRevision(citation.revision_id,{current:false});
+  if (!revision) fail('SOURCE_REVOKED');
+  restoreSpan(revision,citation);
 }
 function* validateProposal(tx,change) {
   if (tx.wiki.active_schema_id!==change.schema_revision_id) fail('SCHEMA_CONFLICT');
@@ -87,19 +99,24 @@ function* validateProposal(tx,change) {
     if (page && page.kind!==proposal.kind) fail('INVALID_PAGE_KIND',400);
     // compiler의 새 근거 전용 rebuild는 이전 본문을 읽지 않는다. 이전 문맥을 공급하면 manifest가 다시 검사한다.
     // 수동 텍스트 변경만으로는 기존 lineage를 줄일 수 없다.
+    const inherited=new Set();
     if (page && proposal.provenance.origin==='human') {
       if (!(yield* tx.pageRevision(page.published_head_id))) fail('NOT_FOUND',404);
+      if (proposal.provenance.previous_revision_id===page.published_head_id) {
+        const original=yield* publishedChange(tx,page.published_head_id), old=original.proposed_revisions.find(p=>p.page_id===page.id);
+        for (const citation of [...old.citations,...old.links.flatMap(l=>l.citations)]) inherited.add(canonical(citation));
+      }
       for (const dep of yield* tx.all('dependency',{where:{dependent_page_revision_id:page.published_head_id}})) {
         const has=dep.source_revision_id ? checked.inputs.some(i=>i.source_revision_ids.includes(dep.source_revision_id)) : checked.inputs.some(i=>i.kind==='page_revision' && i.revision_id===dep.page_revision_id);
         if (!has) fail('INCOMPLETE_LINEAGE',400);
       }
     }
-    for (const citation of proposal.citations) yield* tx.validateCitation(citation,checked);
+    for (const citation of proposal.citations) yield* validatePublicationCitation(tx,citation,checked,inherited);
     for (const link of proposal.links) {
       if (link.type==='ai_derived' && (link.origin!=='compiler' || !link.citations.length)) fail('INVALID_RELATION',400);
       if (link.type==='manual' && link.origin!=='human') fail('INVALID_RELATION',400);
       if (!bundle.has(link.target_page_id) && !suppliedPages.has(link.target_page_id)) fail('INVALID_RELATION',400);
-      for (const citation of link.citations) yield* tx.validateCitation(citation,checked);
+      for (const citation of link.citations) yield* validatePublicationCitation(tx,citation,checked,inherited);
     }
   }
   return checked;
@@ -129,6 +146,7 @@ export async function publishChangeSet(context,id,input,idempotencyKey) {
     }
     if (change.state!=='draft') fail('CHANGE_SET_STATE');
     const checked=yield* validateProposal(tx,change), created_at=yield* tx.clock();
+    const replacedHeads=new Set(change.expected_heads.map(h=>h.published_head_id).filter(Boolean));
     const pages=[],revisionIds=new Map(change.proposed_revisions.map(p=>[p.page_id,randomUUID()]));
     for (const input of checked.inputs.filter(i=>i.kind==='page_revision')) {
       const revision=yield* tx.get('page_revision',input.revision_id);
@@ -138,12 +156,15 @@ export async function publishChangeSet(context,id,input,idempotencyKey) {
       const expected=change.expected_heads.find(h=>h.page_id===proposal.page_id);
       if (expected.version===null) yield* tx.insert('page',{id:proposal.page_id,kind:proposal.kind,version:1,created_at});
       const revision=yield* tx.insert('page_revision',{id:revisionIds.get(proposal.page_id),page_id:proposal.page_id,title:proposal.title,markdown:proposal.markdown,index_entry:proposal.index_entry,content_sha256:sha256(proposal.markdown),citations_json:canonical(proposal.citations),links_json:canonical(proposal.links.map(link=>({...link,target_revision_id:revisionIds.get(link.target_page_id)}))),provenance_json:canonical(proposal.provenance),input_manifest_hash:checked.hash,schema_revision_id:change.schema_revision_id,actor_id:context.actorId,created_at});
-      yield* dependencies(tx,checked,{dependent_page_revision_id:revision.id},proposal.page_id);
+      yield* dependencies(tx,checked,{dependent_page_revision_id:revision.id},replacedHeads);
       const version=expected.version===null ? 1 : expected.version+1;
       yield* tx.update('page',proposal.page_id,{published_head_id:revision.id,version,state:'published'});
       pages.push({id:proposal.page_id,revision_id:revision.id,version});
     }
     const publication=yield* tx.insert('publication',{change_set_id:id,actor_id:context.actorId,idempotency_key:idempotencyKey,manifest_hash:body.manifest_hash,result_json:canonical({page_revision_ids:pages.map(p=>p.revision_id),page_ids:pages.map(p=>p.id),pages}),created_at});
+    // An external dependency can itself depend on a replaced head. Do not erase
+    // that cross-publication contract or commit a bundle that invalidates itself.
+    for (const page of pages) if (!(yield* tx.pageRevision(page.revision_id))) fail('SOURCE_STALE');
     yield* tx.update('change_set',id,{state:'published'});
     yield* tx.updateWiki({generation:tx.wiki.generation+1});
     for (const page of pages) yield* tx.event('page.published',{page_revision_id:page.revision_id});
@@ -185,13 +206,18 @@ export async function createManualChangeSet(context,pageId,input) {
     const page=yield* tx.get('page',pageId,true), revision=page && (yield* tx.pageRevision(page.published_head_id));
     if (!revision) fail('NOT_FOUND',404);
     if (body.expected_version!==page.version) fail('VERSION_CONFLICT');
-    const publication=(yield* tx.all('publication')).find(p=>JSON.parse(p.result_json).page_revision_ids.includes(revision.id));
-    const original=decode(yield* tx.get('change_set',publication.change_set_id));
-    // 공개 페이지의 현재 권한을 검사하고, 전체 입력을 새 편집자의 인가 snapshot으로 고정한다.
-    const inputs=[];
-    for (const input of original.lineage.inputs) {
-      const prior=input.kind==='page_revision' ? yield* tx.get('page_revision',input.revision_id) : null;
-      inputs.push(prior?.page_id===pageId ? {...input,revision_id:revision.id,supplied_text:revision.markdown} : input);
+    const original=yield* publishedChange(tx,revision.id);
+    // Keep exact replaced-head context as historical evidence; the current parent
+    // and its live frontier authorize a new edit. Never substitute new text at an
+    // old citation or discard private/uncited inputs from the original manifest.
+    const ancestry=new Set(original.expected_heads.map(h=>h.published_head_id).filter(Boolean));
+    const inputs=original.lineage.inputs.map(input=>input.kind==='page_revision' && ancestry.has(input.revision_id)
+      ? {...input,kind:'prior_result',provenance:{...input.provenance,artifact_kind:'page_revision'}} : input);
+    for (const revisionId of new Set([revision.id,...(yield* tx.all('dependency',{where:{dependent_page_revision_id:revision.id}})).map(d=>d.page_revision_id).filter(Boolean)])) {
+      if (inputs.some(i=>i.kind==='page_revision' && i.revision_id===revisionId)) continue;
+      const current=yield* tx.pageRevision(revisionId);
+      if (!current) fail('SOURCE_REVOKED');
+      inputs.push({kind:'page_revision',revision_id:current.id,supplied_text:current.markdown,classification:'public'});
     }
     const old=original.proposed_revisions.find(p=>p.page_id===pageId);
     for (const link of old.links) {
