@@ -1981,60 +1981,7 @@ export async function hrOnboardingComplete(req, res) {
   res.json({ ok: true });
 }
 
-// POST /api/v1/pg/members/invites — 채용 확정 후 계정 초대 { email, roles?, department_id?, position_id? }
-export async function membersInvite(req, res) {
-  const { userId, companyId } = await resolveUser(req);
-  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 초대할 수 있습니다");
-  const b = req.body ?? {};
-  const email = String(b.email ?? "").trim();
-  if (!email || !email.includes("@")) throw new ApiError("VALIDATION_ERROR", "올바른 이메일을 입력하세요");
-  const roles = Array.isArray(b.roles)
-    ? [...new Set(b.roles.map((r) => String(r).trim()).filter(Boolean))]
-    : [];
-  const departmentId = normNumericId(b.department_id);
-  const positionId = normNumericId(b.position_id);
-  if (departmentId) {
-    const { rows } = await pgQuery(`SELECT 1 FROM org.departments WHERE id = $1 AND company_id = $2`, [departmentId, companyId]);
-    if (!rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 부서입니다");
-  }
-  if (positionId) {
-    const { rows } = await pgQuery(`SELECT 1 FROM org.positions WHERE id = $1 AND company_id = $2`, [positionId, companyId]);
-    if (!rows[0]) throw new ApiError("VALIDATION_ERROR", "유효하지 않은 직급입니다");
-  }
-  const returning = `id, email, roles, status,
-    to_char(expires_at, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS expires_at, token`;
-  const { rows } = await pgQuery(
-    `INSERT INTO org.member_invites (company_id, email, roles, department_id, position_id, invited_by)
-     VALUES ($1, $2, $3::text[], $4, $5, $6)
-     ON CONFLICT (company_id, lower(email)) WHERE status = 'pending' DO NOTHING
-     RETURNING ${returning}`,
-    [companyId, email, roles, departmentId, positionId, userId],
-  );
-  let row = rows[0];
-  if (!row) {
-    // 이미 대기 중인 초대가 있으면 그 초대를 그대로 돌려준다(멱등).
-    const existing = await pgQuery(
-      `SELECT ${returning} FROM org.member_invites
-        WHERE company_id = $1 AND lower(email) = lower($2) AND status = 'pending'
-        ORDER BY id DESC LIMIT 1`,
-      [companyId, email],
-    );
-    row = existing.rows[0];
-    if (!row) throw new ApiError("CONFLICT", "초대를 생성할 수 없습니다");
-  }
-  const company = await pgQuery(`SELECT name FROM org.companies WHERE id = $1`, [companyId]);
-  res.status(201).json({
-    invitation_id: String(row.id),
-    email: row.email,
-    org_id: `pg:${companyId}`,
-    org_name: company.rows[0]?.name ?? "",
-    org_type: "perp_db",
-    roles: row.roles,
-    status: row.status,
-    expires_at: row.expires_at,
-    token: row.token,
-  });
-}
+export { create as membersInvite, revoke as membersInviteRevoke } from './pgInvitations.controller.js';
 
 // GET /api/v1/pg/members/invites — 회사가 보낸 초대 목록(회사 스코프). 생성 응답과 같은 item 형태.
 export async function membersInvitesList(req, res) {
@@ -2061,19 +2008,4 @@ export async function membersInvitesList(req, res) {
     expires_at: r.expires_at,
   }));
   res.json({ items });
-}
-
-// POST /api/v1/pg/members/invites/:id/revoke — 대기 중 초대 취소(status='revoked')
-export async function membersInviteRevoke(req, res) {
-  const { companyId } = await resolveUser(req);
-  if (!companyId) throw new ApiError("PERMISSION_DENIED", "회사에 배정된 계정만 초대를 취소할 수 있습니다");
-  const id = String(req.params.id ?? "");
-  if (!/^[1-9]\d*$/.test(id)) throw new ApiError("VALIDATION_ERROR", "잘못된 초대 id");
-  const result = await pgQuery(
-    `UPDATE org.member_invites SET status = 'revoked'
-      WHERE id = $1 AND company_id = $2 AND status = 'pending'`,
-    [id, companyId],
-  );
-  if (result.rowCount === 0) throw new ApiError("NOT_FOUND", "취소할 대기 중 초대를 찾을 수 없습니다");
-  res.json({ ok: true });
 }

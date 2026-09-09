@@ -10,6 +10,7 @@ import * as audit from "../services/audit.service.js";
 import { assertInvitationDelegation } from '../services/company-roles.service.js';
 import { hashPassword, newToken, tokenFingerprint, verifyPassword } from "../utils/crypto.js";
 import { ApiError } from "../utils/errors.js";
+import { invitationToken as extractInvitationToken } from '../utils/invitation-token.js';
 
 const signupSchema = z.object({
   email: z.string().email(),
@@ -49,14 +50,10 @@ function revokeAllSessions(userId) {
 const createSignup = transaction((payload, email, req) => {
   let invite = null;
   if (payload.invitation_token) {
-    invite = db().prepare("SELECT * FROM invitation WHERE token = ?").get(payload.invitation_token);
-    if (!invite || invite.status !== "pending") {
-      throw new ApiError("VALIDATION_ERROR", "invitation is invalid or already used");
-    }
-    if (invite.expires_at < nowIso()) throw new ApiError("VALIDATION_ERROR", "invitation expired");
-    if (invite.email.toLowerCase() !== email) {
-      throw new ApiError("VALIDATION_ERROR", "invitation email mismatch");
-    }
+    const token = extractInvitationToken(payload.invitation_token);
+    const check = inspectInvitation(token, email);
+    if (!check.valid) throw new ApiError('VALIDATION_ERROR', check.message, { reason: check.reason });
+    invite = db().prepare("SELECT * FROM invitation WHERE token = ?").get(token);
   }
   const user = insert("app_user", {
     id: newId(),
@@ -77,7 +74,7 @@ const createSignup = transaction((payload, email, req) => {
       joined_at: nowIso(),
       created_by: user.id,
     });
-    update("invitation", invite.id, { status: "accepted" });
+    update("invitation", invite.id, { status: "accepted" }, user.id);
     audit.record({
       tenantId: invite.tenant_id,
       action: "member.invitation.accepted",
@@ -195,15 +192,6 @@ const acceptInvitationSchema = z
     message: "token 또는 invitation_id가 필요합니다",
   });
 
-// 초대 링크 전체를 붙여넣어도 되도록 URL에서 토큰만 뽑아낸다.
-function extractInvitationToken(raw) {
-  const value = raw.trim();
-  const match = /[?&](?:invite|token|invitation_token)=([^&#\s]+)/.exec(value);
-  if (match?.[1]) return decodeURIComponent(match[1]);
-  const tail = /([^/?&#\s]+)\s*$/.exec(value);
-  return tail?.[1] ? decodeURIComponent(tail[1]) : value;
-}
-
 function invitationView(invite) {
   const org = db().prepare("SELECT * FROM organization WHERE id = ?").get(invite.org_id);
   return {
@@ -221,21 +209,18 @@ function invitationView(invite) {
 // 확인 전용: 비밀 토큰이 살아있는지와 대상 조직을 알려준다.
 function inspectInvitation(token, email) {
   const invite = db().prepare("SELECT * FROM invitation WHERE token = ?").get(token);
-  if (!invite) return { valid: false, reason: "not_found", message: "초대를 찾을 수 없습니다. 링크를 다시 확인하세요." };
+  if (!invite || invite.deleted_at) return { valid: false, reason: "not_found", message: "초대를 찾을 수 없습니다. 링크를 다시 확인하세요." };
+  if (email && invite.email.toLowerCase() !== email.toLowerCase()) {
+    return { valid: false, reason: 'email_mismatch', message: '초대받은 이메일의 계정으로 로그인하세요.' };
+  }
   if (invite.status !== "pending") {
     return { valid: false, reason: invite.status, message: `이미 처리된 초대입니다: ${invite.status}`, invitation: invitationView(invite) };
   }
-  if (invite.expires_at < nowIso()) {
+  if (invite.expires_at <= nowIso()) {
     return { valid: false, reason: "expired", message: "초대 유효기간이 지났습니다.", invitation: invitationView(invite) };
   }
-  if (email && invite.email.toLowerCase() !== email.toLowerCase()) {
-    return {
-      valid: false,
-      reason: "email_mismatch",
-      message: `이 초대는 ${invite.email} 주소로 발송되었습니다.`,
-      invitation: invitationView(invite),
-    };
-  }
+  const organization = db().prepare("SELECT o.id FROM organization o JOIN tenant t ON t.id = o.tenant_id WHERE o.id = ? AND o.tenant_id = ? AND o.deleted_at IS NULL AND t.status = 'active'").get(invite.org_id, invite.tenant_id);
+  if (!organization) return { valid: false, reason: 'company_inactive', message: '활성 조직이 아닙니다.' };
   return { valid: true, reason: "ok", message: "사용할 수 있는 초대입니다.", invitation: invitationView(invite) };
 }
 
@@ -245,13 +230,29 @@ export function listMyInvitations(req, res) {
   res.json({ email: user.email, items: [] });
 }
 
+function invitationRecipient(req) {
+  const user = currentUser(req);
+  // PG 브리지의 운영 사용자는 SQLite 초대의 수신 계정이 아니다.
+  if (req.authSource === 'perp_db') {
+    throw new ApiError('PERMISSION_DENIED', '이 초대의 저장소 계정으로 로그인하세요.', { reason: 'store_mismatch' });
+  }
+  return user;
+}
+
 export function verifyInvitation(req, res) {
   const payload = invitationTokenSchema.parse(req.body);
-  currentUser(req);
-  res.json(inspectInvitation(extractInvitationToken(payload.token)));
+  const user = invitationRecipient(req);
+  res.set('Cache-Control', 'no-store').json(inspectInvitation(extractInvitationToken(payload.token), user.email));
 }
 
 const joinByInvitation = transaction((invite, user, requestId) => {
+  // Only the original recipient can replay; never restore a removed membership or roles.
+  if (invite.status === 'accepted' && invite.updated_by === user.id && !invite.deleted_at && invite.email.toLowerCase() === user.email.toLowerCase()) {
+    const active = db().prepare(`SELECT m.id FROM membership m JOIN organization o ON o.id = m.org_id AND o.tenant_id = m.tenant_id
+      JOIN tenant t ON t.id = o.tenant_id WHERE m.user_id = ? AND m.org_id = ? AND m.status = 'active'
+      AND m.deleted_at IS NULL AND o.deleted_at IS NULL AND t.status = 'active'`).get(user.id, invite.org_id);
+    if (active) return;
+  }
   const check = inspectInvitation(invite.token, user.email);
   if (!check.valid) throw new ApiError("VALIDATION_ERROR", check.message, { reason: check.reason });
 
@@ -270,7 +271,7 @@ const joinByInvitation = transaction((invite, user, requestId) => {
     joined_at: nowIso(),
     created_by: user.id,
   });
-  update("invitation", invite.id, { status: "accepted" });
+  update("invitation", invite.id, { status: "accepted" }, user.id);
   audit.record({
     tenantId: invite.tenant_id,
     action: "member.invitation.accepted",
@@ -283,7 +284,7 @@ const joinByInvitation = transaction((invite, user, requestId) => {
 
 export function acceptInvitation(req, res) {
   const payload = acceptInvitationSchema.parse(req.body);
-  const user = currentUser(req);
+  const user = invitationRecipient(req);
 
   if (payload.invitation_id) throw new ApiError("VALIDATION_ERROR", "초대 토큰이 필요합니다");
   const invite = db()
@@ -293,7 +294,7 @@ export function acceptInvitation(req, res) {
 
   joinByInvitation(invite, user, req.requestId);
 
-  res.status(201).json({ joined: true, ...invitationView({ ...invite, status: "accepted" }) });
+  res.status(201).set('Cache-Control', 'no-store').json({ joined: true, ...invitationView({ ...invite, status: "accepted" }) });
 }
 
 export function me(req, res) {

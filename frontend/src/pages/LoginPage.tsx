@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { Button } from "../components/ui/Button";
 import { login } from "../services/auth";
-import { captureAuthTransition } from "../services/authTransition";
+import { captureAuthTransition, readAuthTransition } from "../services/authTransition";
 import { userMessageOf } from "../services/api";
 import { sessionStore } from "../store/session";
 
@@ -24,7 +24,7 @@ export function LoginPage() {
     setBusy(true);
     setError(null);
     try {
-      const session = await login(String(form.get("email")), String(form.get("password")));
+      const session = await login(String(form.get("email")), String(form.get("password")), readAuthTransition().invite);
       sessionStore.set(session, form.get("remember") !== null);
       navigate(
         session.mustChangePassword ? "/change-password" : "/welcome",

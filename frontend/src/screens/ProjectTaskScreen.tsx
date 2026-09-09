@@ -47,6 +47,12 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
   const branch = useBranch(session.orgId);
   const projectView = screen.id === "PRJ-001" || screen.id === "PRJ-002";
   const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    const refresh = () => setRevision(value => value + 1);
+    window.addEventListener('focus', refresh);
+    window.addEventListener('orbitflow:access-changed', refresh);
+    return () => { window.removeEventListener('focus', refresh); window.removeEventListener('orbitflow:access-changed', refresh); };
+  }, []);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set(projectId ? [projectId] : []));
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get('q') ?? '';

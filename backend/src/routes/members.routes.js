@@ -13,6 +13,8 @@ membersRouter.delete("/competencies/:competencyId", asyncRoute(controller.delete
 membersRouter.get("/:memberId/field-requests", asyncRoute(controller.listFieldRequests));
 membersRouter.post("/:memberId/field-requests", asyncRoute(controller.createFieldRequest));
 membersRouter.post("/field-requests/:requestId/decide", asyncRoute(controller.decideFieldRequest));
+membersRouter.get('/invites/options', asyncRoute(controller.inviteOptions));
+membersRouter.get('/invites', asyncRoute(controller.listInvites));
 membersRouter.post("/invites", asyncRoute(controller.createInvite));
 membersRouter.post("/invites/:invitationId/revoke", asyncRoute(controller.revokeInvite));
 membersRouter.post("/provision", asyncRoute(controller.provision));

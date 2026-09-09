@@ -63,6 +63,7 @@ export async function apiRequest(
 
   const timeout = AbortSignal.timeout(10_000);
   const request: RequestInit = {
+    cache: 'no-store',
     method: options.method ?? "GET",
     headers,
     signal: options.signal

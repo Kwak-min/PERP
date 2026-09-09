@@ -1,0 +1,13 @@
+.invitation-sharing { margin: 16px 0; padding: 16px; border: 1px solid var(--of-border); border-radius: var(--r-lg); min-width: 0; }
+.invitation-sharing p, .invitation-sharing a { font-size: 13px; overflow-wrap: anywhere; }
+.invitation-sharing__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.invitation-sharing__form, .invitation-sharing__result { display: grid; gap: 12px; margin-top: 12px; max-width: 640px; }
+.invitation-sharing label { display: grid; gap: 6px; font-size: 13px; min-width: 0; }
+.invitation-sharing input:not([type=checkbox]) { width: 100%; min-width: 0; box-sizing: border-box; padding: 10px; }
+.invitation-sharing input[type=checkbox] { width: 16px; height: 16px; min-height: 0; padding: 0; margin: 0; flex: 0 0 auto; }
+.invitation-sharing__result p { margin: 0; }
+.invitation-sharing fieldset { margin: 0; min-width: 0; border: 1px solid var(--of-border); }
+.invitation-sharing .invitation-sharing__role { display: inline-flex; align-items: center; margin: 6px 12px 6px 0; }
+.invitation-sharing__list { display: grid; gap: 8px; padding: 0; list-style: none; }
+.invitation-sharing__list li { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+.invitation-sharing__list span { overflow-wrap: anywhere; min-width: 0; font-size: 13px; }

@@ -8,8 +8,18 @@ const internalOrigin = "https://orbitflow.invalid";
 const allowedPaths = new Set([...screens.map((screen) => screen.path), "/invitations", "/onboarding/organization"]);
 
 function invitationToken(value: string | null): string | null {
-  // backend newToken(): randomBytes(32).toString('base64url')
-  return value && /^[A-Za-z0-9_-]{43}$/.test(value) ? value : null;
+  // Existing SQLite randomBytes(32) and PostgreSQL gen_random_uuid invite tokens.
+  return value && /^(?:[A-Za-z0-9_-]{43}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.test(value) ? value : null;
+}
+
+export function parseInvitationCode(raw: string): string | null {
+  const value = raw.trim();
+  if (value.length > 500) return null;
+  if (!/^https?:\/\//i.test(value)) return invitationToken(value);
+  try {
+    const params = new URL(value).searchParams;
+    return invitationToken(params.get('invite') ?? params.get('token') ?? params.get('invitation_token'));
+  } catch { return null; }
 }
 
 function returnPath(value: string | null): string | null {

@@ -22,12 +22,12 @@ async function screenshot(page, name) {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.screenshot({ path: path.join(evidence, name + '.png'), fullPage: true, animations: 'disabled' });
 }
-async function submitLogin(page, email) {
+async function submitLogin(page, email, endpoint = '/pg/auth/login') {
   await expect(page.locator('#login-title')).toBeVisible();
   await page.getByLabel('이메일', { exact: true }).fill(email);
   await page.getByLabel('비밀번호', { exact: true }).fill(password);
   const [response] = await Promise.all([
-    page.waitForResponse(r => routePath(r) === '/api/v1/pg/auth/login'),
+    page.waitForResponse(r => routePath(r) === '/api/v1' + endpoint),
     page.getByRole('button', { name: '로그인', exact: true }).click(),
   ]);
   return response;
@@ -140,13 +140,15 @@ try {
     const token = forcedInvite.body.token, next = '/members?tab=active', changedPassword = 'direct-invite-changed-1234';
     const entry = origin + '/invitations?invite=' + encodeURIComponent(token) + '&next=' + encodeURIComponent(next);
     await page.goto(entry);
+    await expect(page.getByLabel('초대 링크 또는 토큰', { exact: true })).toHaveValue(token);
+    await page.getByRole('button', { name: '로그인하고 참여', exact: true }).click();
     await expect(page).toHaveURL(origin + '/login');
     await expect(page.locator('#login-title')).toBeVisible();
     assert.equal(await stored(page), null); assert.deepEqual(requests, []);
     assert.equal(await page.evaluate(() => sessionStorage.getItem('orbitflow.auth.invite.v1')), token);
     assert.equal(await page.evaluate(() => sessionStorage.getItem('orbitflow.auth.next.v1')), next);
     for (const width of [375, 768, 1280]) { await page.setViewportSize({ width, height: 900 }); await screenshot(page, `direct-invite-login-${width}`); }
-    await Promise.all([page.waitForURL(origin + '/change-password'), submitLogin(page, forcedEmail)]);
+    await Promise.all([page.waitForURL(origin + '/change-password'), submitLogin(page, forcedEmail, '/auth/login')]);
     assert.equal((await stored(page)).mustChangePassword, true);
     // 인증은 됐지만 비밀번호 변경이 필요한 직접 진입도 가드가 소유한다.
     await page.goto(entry);
@@ -187,8 +189,8 @@ try {
     await expect(page).toHaveURL(origin + '/signup');
     await page.getByRole('link', { name: '로그인', exact: true }).click();
     assert.equal(new URL(page.url()).search, '');
-    const [response] = await Promise.all([submitLogin(page, email), page.waitForURL(origin + '/invitations')]);
-    assert.equal(response.status(), 401);
+    const [response] = await Promise.all([submitLogin(page, email, '/auth/login'), page.waitForURL(origin + '/invitations')]);
+    assert.equal(response.status(), 200);
     assert.equal((await stored(page)).organizationStatus, 'ready');
     await expect(page.getByLabel('초대 링크 또는 토큰', { exact: true })).toHaveValue(token);
     // Context survives the actual onboarding screen and return, including reload.
@@ -222,7 +224,7 @@ try {
   });
   await scenario('invalid-invitation-no-accept', async page => {
     await page.goto(origin + '/login?invite=' + 'A'.repeat(43));
-    await Promise.all([page.waitForURL(origin + '/invitations'), submitLogin(page, email)]);
+    await Promise.all([page.waitForURL(origin + '/invitations'), submitLogin(page, email, '/auth/login')]);
     const [verified] = await Promise.all([page.waitForResponse(r => routePath(r) === '/api/v1/auth/invitations/verify'),
       page.getByRole('button', { name: '초대 확인', exact: true }).click()]);
     assert.equal((await verified.json()).valid, false);

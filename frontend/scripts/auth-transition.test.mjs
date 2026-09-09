@@ -99,6 +99,31 @@ test('signup never accepts an invitation inside account creation', async () => {
   assert.equal(requests[0].body.invitation_token, undefined);
 });
 
+for (const [label, invitation, endpoint, payload] of [
+  ['SQLite', 'A'.repeat(43), '/auth', legacy],
+  ['PostgreSQL', pgToken, '/pg/auth', pg],
+]) {
+  test(`${label} invitation login selects its store even with identical credentials in both stores`, async () => {
+    routes.set('/pg/auth/login', { body: pg }); routes.set('/auth/login', { body: legacy });
+    const session = await auth.login(user.email, 'synthetic-password', invitation);
+    assert.equal(session.token, payload.token ?? payload.access_token);
+    assert.deepEqual(requests.map(req => req.path), [`${endpoint}/login`]);
+  });
+  test(`${label} invitation credential rejection never falls through to the other store`, async () => {
+    routes.set('/pg/auth/login', { body: pg }); routes.set('/auth/login', { body: legacy });
+    routes.set(`${endpoint}/login`, error(401, 'UNAUTHENTICATED'));
+    await assert.rejects(auth.login(user.email, 'synthetic-password', invitation), err => err instanceof api.ApiError && err.status === 401);
+    assert.deepEqual(requests.map(req => req.path), [`${endpoint}/login`]);
+  });
+  test(`${label} invitation signup creates only an account in its store`, async () => {
+    routes.set('/pg/auth/signup', { status: 201, body: pg }); routes.set('/auth/signup', { status: 201, body: legacy });
+    const session = await auth.signup(user.email, user.name, 'synthetic-password', invitation);
+    assert.equal(session.token, payload.token ?? payload.access_token);
+    assert.deepEqual(requests.map(req => req.path), [`${endpoint}/signup`]);
+    assert.equal(requests[0].body.invitation_token, undefined);
+  });
+}
+
 test('saved organization selection is only a hint until fresh membership validates it', async () => {
   store.set({ token: 'old', orgId: 'pg:2', name: user.name, email: user.email, mustChangePassword: false, organizations: [] });
   routes.set('/pg/auth/login', { body: pg });

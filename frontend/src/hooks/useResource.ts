@@ -32,6 +32,14 @@ export function useResource(
     error: null,
   });
 
+  const [freshness, setFreshness] = useState(0);
+  useEffect(() => {
+    const refresh = () => setFreshness(value => value + 1);
+    window.addEventListener('focus', refresh);
+    window.addEventListener('orbitflow:access-changed', refresh);
+    return () => { window.removeEventListener('focus', refresh); window.removeEventListener('orbitflow:access-changed', refresh); };
+  }, []);
+
   useEffect(() => {
     if (!path || !session) {
       setState({ status: "idle", data: null, error: null });
@@ -66,7 +74,7 @@ export function useResource(
         });
       });
     return () => controller.abort();
-  }, [path, session, reloadKey]);
+  }, [path, session, reloadKey, freshness]);
 
   return state;
 }

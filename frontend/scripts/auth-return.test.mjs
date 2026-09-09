@@ -22,6 +22,17 @@ test('validated token syntax and return path survive auth and onboarding without
   assert.deepEqual(transition.readAuthTransition(), { invite: null, next: null });
 });
 
+test('existing PG UUID invitation survives auth and pasted links without accepting arbitrary next URLs', async () => {
+  const transition = await load(), pgToken = '12345678-1234-4234-8234-123456789abc';
+  for (const code of [pgToken, token]) {
+    assert.equal(transition.parseInvitationCode(`https://example.invalid/invitations?invite=${code}&next=https://evil.invalid`), code);
+    transition.captureAuthTransition(`?invite=${code}&next=${encodeURIComponent('/members')}`);
+    assert.equal(transition.readAuthTransition().invite, code);
+    assert.equal(transition.consumeReturnPath(), '/members');
+  }
+  for (const value of ['https://example.invalid/?invite=%ZZ', 'javascript:alert(1)', '//evil.invalid', 'http://[', 'a'.repeat(501)]) assert.equal(transition.parseInvitationCode(value), null);
+});
+
 test('nested invitation return URL becomes token-free internal routing', async () => {
   const transition = await load();
   transition.captureAuthTransition(`?next=${encodeURIComponent(`/invitations?invite=${token}`)}`);

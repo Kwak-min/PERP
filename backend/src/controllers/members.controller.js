@@ -340,6 +340,24 @@ export function simulatePermissions(req, res) {
   });
 }
 
+export function inviteOptions(req, res) {
+  const principal = freshLegacyAuthority(resolvePrincipal(req), 'menu.members');
+  principal.require('member.write');
+  const items = legacyRoleDefinitions(principal).filter(role => {
+    try { assertDelegation(principal, resolveRoleKeys([role], [role.key])); return true; }
+    catch (error) { if (error instanceof ApiError && error.code === 'PERMISSION_DENIED') return false; throw error; }
+  }).map(role => ({ key: role.key, label: role.label, scope: role.scope }));
+  res.json({ items });
+}
+
+export function listInvites(req, res) {
+  const principal = freshLegacyAuthority(resolvePrincipal(req), 'menu.members');
+  principal.require('member.write');
+  const items = db().prepare(`SELECT id AS invitation_id, email, roles, status, expires_at FROM invitation
+    WHERE tenant_id = ? AND org_id = ? AND deleted_at IS NULL ORDER BY created_at DESC`).all(principal.tenantId, principal.orgId);
+  res.json({ items: items.map(row => ({ ...row, roles: row.roles.split(',').filter(Boolean) })) });
+}
+
 export const createInvite = transaction((req, res) => {
   const principal = freshLegacyAuthority(resolvePrincipal(req), 'menu.members');
   principal.require("member.write");
@@ -392,6 +410,7 @@ export const createInvite = transaction((req, res) => {
     id: invitation.id,
     email: invitation.email,
     token: invitation.token,
+    delivery: 'manual',
     expires_at: invitation.expires_at,
   });
 });

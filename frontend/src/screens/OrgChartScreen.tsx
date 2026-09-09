@@ -18,6 +18,7 @@ import { OrgLogModal } from "./orgchart/OrgLogModal";
 import { SeatSetupPanel } from "./orgchart/SeatSetupPanel";
 import { flattenSeats, membersSchema, orgChartSchema, type OrgChart, type OrgMember, type OrgSeat } from "./orgchart/model";
 import "./orgchart.css";
+import { InvitationSharingPanel } from './members/InvitationSharingPanel';
 
 const permissionsSchema = z.object({ permissions: z.array(z.string()) });
 type DataState = Readonly<{ status: "loading" | "ready" | "error"; chart: OrgChart | null; members: readonly OrgMember[]; error: string | null }>;
@@ -44,6 +45,7 @@ function OrganizationWorkspace({ screen, session }: Readonly<{ screen: ScreenDef
   const [notice, setNotice] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
+  const [showInvitations, setShowInvitations] = useState(search.has('inviteEmail'));
   const [showLog, setShowLog] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
   const can = (permission: string) => permissions.includes(permission) || (!pg && permissions.includes("*"));
@@ -159,12 +161,14 @@ function OrganizationWorkspace({ screen, session }: Readonly<{ screen: ScreenDef
   return <div className="screen org-unified" data-screen-id={screen.id} data-org-state={state.status} data-org-permissions={permissionState}>
     <header className="screen-header"><div><div className="screen-header__meta"><span className="eyebrow">사람</span><Badge>{screen.id}</Badge></div><h1>구성원·조직도</h1><p>구성원과 부서 구조를 함께 확인하고 관리합니다.</p></div>
       <div className="screen-header__actions">
-        {pg && createConfig && can("member.write") && can("role.assign") && <Button size="small" onClick={() => setShowCreate(true)}>구성원 추가</Button>}
+        {can("member.write") && can("role.assign") && <Button size="small" aria-expanded={showInvitations} aria-controls="member-invitation-sharing" onClick={() => setShowInvitations(true)}>구성원 추가</Button>}
+        {pg && createConfig && can("member.write") && can("role.assign") && <Button tone="neutral" size="small" onClick={() => setShowCreate(true)}>계정 직접 등록</Button>}
         <Button tone="neutral" size="small" aria-haspopup="dialog" disabled={state.status !== "ready"} onClick={() => setShowMembers(true)}>구성원 목록 팝업</Button>
         <Button tone="neutral" size="small" id="org-log-trigger" aria-haspopup="dialog" aria-controls="org-log-dialog" aria-expanded={showLog} disabled={!canReadLog} onClick={() => setShowLog(true)}>변경 로그</Button>
         <Button tone="neutral" size="small" disabled={busy || state.status === "loading"} onClick={reload}>새로 고침</Button>
       </div>
     </header>
+    <InvitationSharingPanel session={session} open={showInvitations} onToggle={() => setShowInvitations(value => !value)} />
     {permissionError && <div className="form-error" role="alert">{permissionError}</div>}
     {requestedLog && permissionState === "ready" && !canReadLog && <div className="form-error" role="alert">조직 변경 로그를 볼 권한이 없습니다.</div>}
     {mutationError && <div className="form-error" role="alert">{mutationError}</div>}

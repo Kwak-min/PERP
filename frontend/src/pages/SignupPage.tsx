@@ -46,6 +46,7 @@ export function SignupPage() {
         String(form.get("email")),
         name,
         String(form.get("password")),
+        invitation,
       );
       sessionStore.set(session);
       navigate("/welcome", { replace: true, state: { accountCreated: true } });

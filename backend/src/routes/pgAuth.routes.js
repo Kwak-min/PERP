@@ -2,6 +2,7 @@ import { Router } from "express";
 import { expenseImportsRouter } from './expenseImports.routes.js';
 
 import * as controller from "../controllers/pgAuth.controller.js";
+import * as invitations from '../controllers/pgInvitations.controller.js';
 import { createCompany } from "../controllers/pgCompanies.controller.js";
 import * as members from "../controllers/pgMembers.controller.js";
 import * as mod from "../controllers/pgModules.controller.js";
@@ -51,6 +52,9 @@ pgRouter.post("/auth/login", asyncRoute(controller.login));
 pgRouter.get("/auth/me", asyncRoute(controller.me));
 pgRouter.get("/auth/workspace", asyncRoute(controller.workspace));
 pgRouter.post("/auth/logout", asyncRoute(controller.logout));
+pgRouter.post('/auth/invitations/verify', asyncRoute(invitations.verify));
+pgRouter.post('/auth/invitations/accept', asyncRoute(invitations.accept));
+pgRouter.get('/members/invites/options', asyncRoute(pgRoute(invitations.options, ['member.write', 'role.assign'], null)));
 
 // 구성원(members) 슬라이스 — 회사(company_id) 스코프
 pgRouter.get("/members", asyncRoute(pgRoute(members.listMembers, "member.read", null)));

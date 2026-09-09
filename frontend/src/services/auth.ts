@@ -111,14 +111,21 @@ export async function loadSessionOrganizations(token: string): Promise<readonly 
   return organizations;
 }
 
-export async function login(email: string, password: string): Promise<SessionState> {
+export async function login(email: string, password: string, invitation: string | null = null): Promise<SessionState> {
+  // 초대 토큰 형식은 저장소 라우팅 힌트다. 다른 저장소의 동일 이메일로 대체하지 않는다.
+  if (invitation && /^[A-Za-z0-9_-]{43}$/.test(invitation)) {
+    const payload = legacyLoginSchema.parse(
+      await apiRequest('/auth/login', { method: 'POST', body: { email, password } }),
+    );
+    return toSessionState(payload.access_token, payload.user, payload.must_change_password);
+  }
   let payload: z.infer<typeof pgLoginSchema>;
   try {
     payload = pgLoginSchema.parse(
       await apiRequest("/pg/auth/login", { method: "POST", body: { email, password } }),
     );
   } catch (error) {
-    if (!(error instanceof ApiError && error.status === 401 && error.code === "UNAUTHENTICATED")) {
+    if (invitation || !(error instanceof ApiError && error.status === 401 && error.code === "UNAUTHENTICATED")) {
       throw error;
     }
     // 두 저장소 계약: PG의 계정 없음/비밀번호 불일치(401 UNAUTHENTICATED)만
@@ -135,8 +142,13 @@ export async function signup(
   email: string,
   name: string,
   password: string,
+  invitation: string | null = null,
 ): Promise<SessionState> {
   const body = { email, name, password };
+  if (invitation && /^[A-Za-z0-9_-]{43}$/.test(invitation)) {
+    const payload = legacyLoginSchema.parse(await apiRequest('/auth/signup', { method: 'POST', body }));
+    return toSessionState(payload.access_token, payload.user);
+  }
   const payload = pgLoginSchema.parse(
     await apiRequest("/pg/auth/signup", { method: "POST", body }),
   );
