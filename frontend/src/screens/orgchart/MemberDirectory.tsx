@@ -8,16 +8,16 @@ type Props = Readonly<{
   members: readonly OrgMember[];
   seats: readonly OrgSeat[];
   selectedMemberId: string | null;
-  initialQuery: string;
+  query: string;
+  department: string;
+  status: string;
+  onFilterChange: (name: 'q' | 'department' | 'status', value: string) => void;
   onSelect: (membershipId: string) => void;
 }>;
 
-export function MemberDirectory({ members, seats, selectedMemberId, initialQuery, onSelect }: Props) {
-  const [query, setQuery] = useState(initialQuery);
+export function MemberDirectory({ members, seats, selectedMemberId, query, department, status, onFilterChange, onSelect }: Props) {
   const [page, setPage] = useState(1);
-  useEffect(() => { setQuery(initialQuery); setPage(1); }, [initialQuery]);
-  const [department, setDepartment] = useState("");
-  const [status, setStatus] = useState("");
+  useEffect(() => { setPage(1); }, [query, department, status]);
   const departmentName = (member: OrgMember) => seats.find(seat => seat.id === member.department_id)?.name ?? member.department_id ?? "미배정";
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("ko-KR");
@@ -41,9 +41,9 @@ export function MemberDirectory({ members, seats, selectedMemberId, initialQuery
   }
   return <div className="org-directory"><SectionCard title="구성원 목록" subtitle={`전체 ${members.length}명`} foot="이름을 선택하면 조직도와 같은 상세 패널에서 확인할 수 있습니다">
     <div className="org-directory__filters">
-      <label>구성원 검색<input type="search" value={query} onChange={event => { setQuery(event.target.value); setPage(1); }} placeholder="이름, 이메일, 부서, 역할" /></label>
-      <label>부서<select aria-label="부서" value={department} onChange={event => { setDepartment(event.target.value); setPage(1); }}><option value="">전체 부서</option><option value="unassigned">미배정</option>{seats.map(seat => <option key={seat.id} value={seat.id}>{seat.name}</option>)}</select></label>
-      <label>상태<select aria-label="상태" value={status} onChange={event => { setStatus(event.target.value); setPage(1); }}><option value="">전체 상태</option>{[...new Set(members.map(member => member.status))].map(value => <option key={value} value={value}>{statusLabel(value)}</option>)}</select></label>
+      <label>구성원 검색<input type="search" value={query} onChange={event => onFilterChange('q', event.target.value)} placeholder="이름, 이메일, 부서, 역할" /></label>
+      <label>부서<select aria-label="부서" value={department} onChange={event => onFilterChange('department', event.target.value)}><option value="">전체 부서</option><option value="unassigned">미배정</option>{seats.map(seat => <option key={seat.id} value={seat.id}>{seat.name}</option>)}</select></label>
+      <label>상태<select aria-label="상태" value={status} onChange={event => onFilterChange('status', event.target.value)}><option value="">전체 상태</option>{[...new Set(members.map(member => member.status))].map(value => <option key={value} value={value}>{statusLabel(value)}</option>)}</select></label>
       <Button tone="neutral" size="small" disabled={filtered.length === 0} onClick={exportCsv}>내보내기</Button>
     </div>
     <p className="org-directory__count" role="status">검색 결과 {filtered.length}명</p>

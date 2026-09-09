@@ -6,7 +6,7 @@ import { sessionStore, useSession } from '../store/session';
 import { useAccess } from '../hooks/useWorkspaceAccess';
 import { apiBlob, apiUpload, userMessageOf, type ApiSession } from '../services/api';
 import { Button } from '../components/ui/Button';
-import { approvalAdapter, exactAmount, statusLabels, type ApprovalDetail, type ApprovalForm, type ApprovalStep, type Box, type ListRow } from './approvals/model';
+import { approvalAdapter, exactAmount, personLabel, statusLabels, type ApprovalDetail, type ApprovalForm, type ApprovalStep, type Box, type ListRow } from './approvals/model';
 import './approvals/approvals.css';
 
 type Adapter = ReturnType<typeof approvalAdapter>;
@@ -62,7 +62,7 @@ function ApprovalWorkspace({ session, screen }: { session: ApiSession; screen: S
     {identity && (selected || creating) ? <ApprovalRecord key={selected ?? 'new'} session={session} adapter={adapter} id={selected} identity={identity} canRequest={canRequest} canDecide={canDecide} open={id => setParams({ request: id })} /> : identity && <section aria-label="요청 목록">
       <div className="approvals-actions"><Button tone="neutral" onClick={() => setRevision(n => n + 1)}>새로고침</Button><span>{page + 1}페이지 · 페이지당 25건</span></div>
       {!rows && !error && <p role="status">목록을 불러오는 중...</p>}
-      {rows && <><ul className="approvals-list">{rows.items.map(row => <li key={row.id} data-approval-row={row.id}><Link to={requestUrl(row.id)}>{row.title || '제목 없는 초안'}</Link><span>{statusLabels[row.status] ?? row.status}</span><small>요청자 {row.requesterName ?? row.requester_id ?? '기록 없음'} · #{row.id}</small></li>)}</ul>
+      {rows && <><ul className="approvals-list">{rows.items.map(row => <li key={row.id} data-approval-row={row.id}><Link to={requestUrl(row.id)}>{row.title || '제목 없는 초안'}</Link><span>{statusLabels[row.status] ?? row.status}</span><small>요청자 <span data-approval-person="requester">{personLabel(row.requester_display)}</span></small></li>)}</ul>
         {!rows.items.length && <p>표시할 요청이 없습니다.</p>}
         <div className="approvals-actions"><Button tone="neutral" disabled={page === 0} onClick={() => setPage(n => n - 1)}>이전 페이지</Button><Button tone="neutral" disabled={!rows.hasMore} onClick={() => setPage(n => n + 1)}>다음 페이지</Button></div></>}
     </section>}
@@ -166,9 +166,12 @@ function ApprovalRecord({ session, adapter, id, identity, canRequest, canDecide,
   return <section className="approval-record" data-approval-detail={detail?.id} data-operation-state={busy ? 'busy' : 'idle'} aria-label="결재 상세">
     {error && <p role="alert">{error} 입력한 초안은 자동으로 지우지 않습니다.</p>}{notice && <p role="status">{notice}</p>}
     {id && !detail && !error && <p role="status">상세와 기록을 불러오는 중...</p>}
-    {detail && <header><h2>{detail.title || '제목 없는 초안'}</h2><p data-approval-status={detail.status}>{statusLabels[detail.status] ?? detail.status} · 버전 {detail.version} · 요청 #{detail.id}</p>
-      <div className="approvals-actions"><Link to={requestUrl(detail.id)}>상세 URL</Link><Link to={requestUrl(detail.id,true) + '#approval-history'}>이력 URL</Link>{detail.predecessor_id && <Link to={requestUrl(detail.predecessor_id)}>이전 요청 원본</Link>}</div>
-      <p>요청자 ID: {detail.requester_id ?? '기록 없음'}</p></header>}
+    {detail && <header><h2>{detail.title || '제목 없는 초안'}</h2><p data-approval-status={detail.status}>{statusLabels[detail.status] ?? detail.status}</p>
+      <div className="approvals-actions"><Link to={requestUrl(detail.id)}>요청 상세</Link><Link to={requestUrl(detail.id,true) + '#approval-history'}>처리 이력</Link>{detail.predecessor_id && <Link to={requestUrl(detail.predecessor_id)}>이전 요청 원본</Link>}</div>
+      <p>요청자 <span data-approval-person="requester">{personLabel(detail.requester_display)}</span></p>
+      <details><summary>요청 식별 정보</summary><p>요청 ID: {detail.id} · 버전 {detail.version}</p><p>요청자 ID: {detail.requester_id ?? '기록 없음'}</p>
+        {detail.steps?.map((step,index) => <p key={index}>결재자 {index + 1} ID: {step.approver_id}</p>)}
+        {detail.decided_by && <p>처리자 ID: {detail.decided_by}</p>}</details></header>}
     {editable && <div data-approval-editor>
       {id && error && <Button tone="neutral" disabled={busy} onClick={() => void operation(async signal => {
         const latest = await adapter.detail(id, signal); if (!scope.current()) return;
@@ -182,7 +185,7 @@ function ApprovalRecord({ session, adapter, id, identity, canRequest, canDecide,
         {activeForm?.fields.map(field => <label key={field.key}>{field.label}{field.required ? ' (필수)' : ''}{field.type === 'krw' ? ' · KRW' : ''}
           {field.type === 'textarea' ? <textarea value={text(body[field.key])} aria-required={field.required} onChange={event => setBody(body => ({ ...body, [field.key]: event.target.value }))} /> : <input type="text" inputMode={field.type === 'krw' ? 'decimal' : 'text'} value={text(body[field.key])} aria-required={field.required} placeholder={field.type === 'krw' ? '1000.00' : undefined} onChange={event => setBody(body => ({ ...body, [field.key]: event.target.value }))} />}</label>)}
         {Object.entries(body).filter(([key]) => !activeForm?.fields.some(field => field.key === key)).map(([key,value]) => <label key={key}>{key} (기존 본문)<textarea value={text(value)} onChange={event => setBody(body => ({ ...body, [key]: event.target.value }))} /></label>)}
-        {!adapter.pg && <section aria-label="저장할 결재 경로"><h3>결재 경로</h3>{steps.map((step,index) => <div className="approval-step-edit" key={index}><label>결재자 {index + 1}<select aria-label={`결재자 ${index + 1}`} value={step.approver_id} onChange={event => editSteps(steps => steps.map((step,i) => i === index ? { ...step, approver_id: event.target.value } : step))}><option value="">선택</option>{step.approver_id && !candidates.some(item => item.id === step.approver_id) && <option value={step.approver_id}>{step.approver_id} (현재 후보 아님)</option>}{candidates.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></label>
+        {!adapter.pg && <section aria-label="저장할 결재 경로"><h3>결재 경로</h3>{steps.map((step,index) => <div className="approval-step-edit" key={index}><label>결재자 {index + 1}<select aria-label={`결재자 ${index + 1}`} value={step.approver_id} onChange={event => editSteps(steps => steps.map((step,i) => i === index ? { ...step, approver_id: event.target.value } : step))}><option value="">선택</option>{step.approver_id && !candidates.some(item => item.id === step.approver_id) && <option value={step.approver_id}>{personLabel(step.approver_display)} (현재 후보 아님)</option>}{candidates.map(item => <option key={item.id} value={item.id}>{item.name} · {item.id}</option>)}</select></label>
           <label>진행 방식 {index + 1}<select aria-label={`진행 방식 ${index + 1}`} value={step.mode} onChange={event => editSteps(steps => steps.map((step,i) => i === index ? { ...step, mode: event.target.value as ApprovalStep['mode'] } : step))}><option value="sequential">순차</option><option value="parallel">병렬</option></select></label><Button tone="ghost" onClick={() => editSteps(steps => steps.filter((_,i) => i !== index))}>단계 {index + 1} 제거</Button></div>)}<Button tone="neutral" onClick={() => editSteps(steps => [...steps, { approver_id: '', mode: 'sequential', kind: 'approve' }])}>결재자 추가</Button></section>}
         <p>{adapter.pg ? '제출하면 현재 회사 결재 권한자 누구나 처리할 수 있습니다. 대상자 참조는 결재자 배정이 아닙니다.' : '결재자와 순서를 저장합니다. 현재 활성 결재 권한자 후보만 표시하며 제출 시 서버가 다시 검증합니다.'}</p>
         {id ? <label>첨부 파일<input type="file" accept="image/jpeg,image/png,application/pdf" disabled={staged.length + (detail?.attachment_snapshot.length ?? 0) >= 5} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void operation(signal => upload(file,signal)); }} /></label> : <p>초안을 저장한 뒤 원본 첨부를 업로드할 수 있습니다.</p>}
@@ -191,11 +194,12 @@ function ApprovalRecord({ session, adapter, id, identity, canRequest, canDecide,
         <div className="approvals-actions"><Button disabled={!activeForm} onClick={() => void operation(async signal => { await save(signal); })}>임시저장</Button>{id && <Button disabled={!activeForm} onClick={() => void operation(submit)}>제출</Button>}</div>
       </fieldset>
     </div>}
-    {detail && !editable && <section aria-label="제출 원본"><h3>제출 원본</h3><p>양식 {detail.form_snapshot ? `${detail.form_snapshot.name} · revision ${detail.form_snapshot.revision}` : '기존 기록에 양식 snapshot 없음'}</p>
+    {detail && !editable && <section aria-label="제출 원본"><h3>제출 원본</h3><p>양식 {detail.form_snapshot ? `${detail.form_snapshot.name} · 버전 ${detail.form_snapshot.revision}` : '당시 양식 정보가 남아 있지 않습니다'}</p>
       {exactAmount(detail) !== null && <p data-exact-amount>금액 {exactAmount(detail)} KRW</p>}
       <dl>{Object.entries(detail.body ?? {}).map(([key,value]) => <div key={key}><dt>{detail.form_snapshot?.fields.find(field => field.key === key)?.label ?? key}</dt><dd>{text(value)}</dd></div>)}</dl>
-      {adapter.pg ? <p>회사 공용 결정 권한 · 개인 배정 단계 없음{detail.target_user_id ? ` · 대상 참조 ID ${detail.target_user_id}` : ''}</p> : <ol>{detail.steps?.map((step,index) => <li key={index}>{index + 1}. {step.approver_id} · {step.mode === 'sequential' ? '순차' : '병렬'} · {statusLabels[step.status ?? ''] ?? step.status} {step.comment && `· ${step.comment}`} {step.decided_at}</li>)}</ol>}
+      {adapter.pg ? <p>회사 공용 결정 권한 · 개인 배정 단계 없음{detail.target_user_id ? ` · 대상 참조 ID ${detail.target_user_id}` : ''}</p> : <ol>{detail.steps?.map((step,index) => <li key={index}><span data-approval-person="approver">{personLabel(step.approver_display)}</span> · {step.mode === 'sequential' ? '순차' : '병렬'} · {statusLabels[step.status ?? ''] ?? step.status} {step.comment && `· ${step.comment}`} {step.decided_at}</li>)}</ol>}
       {detail.subject_id && <p>관련 참조: {detail.subject_type} #{detail.subject_id} (별도 원천 열람 권한 필요)</p>}
+      {adapter.pg && (detail.decided_by || ['approved','rejected'].includes(detail.status)) && <p>처리자 <span data-approval-person="decider">{personLabel(detail.decided_by_display)}</span></p>}
       {detail.decision_note && <p>처리 의견: {detail.decision_note}</p>}
     </section>}
     {detail && <section aria-label="첨부 원본"><h3>첨부 원본</h3><ul>{detail.attachment_snapshot.map(file => <li key={file.file_id}><Button tone="neutral" disabled={busy} onClick={() => void operation(signal => download(file.file_id,signal))}>{file.filename} 원본 다운로드</Button><small>{file.size_bytes} bytes · SHA-256 {file.checksum_sha256}</small></li>)}</ul>{!detail.attachment_snapshot.length && <p>연결된 원본 첨부가 없습니다.</p>}</section>}
@@ -207,6 +211,6 @@ function ApprovalRecord({ session, adapter, id, identity, canRequest, canDecide,
       <p>결재 결과만 기록합니다. 계정·역할 변경이나 송금은 실행하지 않습니다.</p>
     </fieldset>}
     {detail && own && canRequest && <div className="approvals-actions">{detail.status === 'pending' && <Button tone="neutral" disabled={busy} onClick={() => void operation(signal => transition('withdraw',signal))}>요청 철회</Button>}{['rejected','withdrawn'].includes(detail.status) && <Button disabled={busy} onClick={() => void operation(signal => transition('resubmit',signal))}>새 초안으로 재상신</Button>}</div>}
-    {detail && <section id="approval-history" aria-label="기록된 이력"><h3>기록된 이력</h3><p>서버에 실제 기록된 이벤트만 표시합니다. 이전 요청의 이력은 원본 링크에서 확인합니다.</p>{history?.length === 0 && <p>기록된 이벤트가 없습니다.</p>}<ol>{history?.map((event,index) => <li key={event.id ?? `legacy-${index}`}><time>{event.created_at}</time> · {actionLabels[event.action] ?? event.action} · {statusLabels[event.status] ?? event.status} · 처리자 {event.actor_id ?? '기록 없음'}{event.comment && <p>{event.comment}</p>}{event.snapshot == null ? <p>이전 결정 기록: 당시 본문·양식·첨부 snapshot 없음</p> : <details><summary>기록 당시 snapshot</summary><pre>{JSON.stringify(event.snapshot,null,2)}</pre></details>}</li>)}</ol></section>}
+    {detail && <section id="approval-history" aria-label="기록된 이력"><h3>기록된 이력</h3><p>서버에 실제 기록된 이벤트만 표시합니다. 이전 요청의 이력은 원본 링크에서 확인합니다.</p>{history?.length === 0 && <p>기록된 이벤트가 없습니다.</p>}<ol>{history?.map((event,index) => <li key={event.id ?? `legacy-${index}`}><time>{event.created_at}</time> · {actionLabels[event.action] ?? event.action} · {statusLabels[event.status] ?? event.status} · 처리자 <span data-approval-person="actor">{personLabel(event.actor_display)}</span>{event.comment && <p>{event.comment}</p>}<details><summary>기록 당시 원본과 식별 정보</summary><p>처리자 ID: {event.actor_id ?? '기록 없음'}</p>{event.snapshot == null ? <p>당시 본문·양식·첨부 정보가 남아 있지 않습니다.</p> : <pre>{JSON.stringify(event.snapshot,null,2)}</pre>}</details></li>)}</ol></section>}
   </section>;
 }

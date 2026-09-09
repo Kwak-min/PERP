@@ -6,6 +6,7 @@ import { resolvePgCompanyPrincipal } from '../middleware/pgAccess.js';
 import { BUILTIN_APPROVAL_FORMS, approvalBody, initialApprovalFormRevision, normalizeApprovalFields, validateApprovalSubmission } from '../services/approval-forms.service.js';
 import { consumePgReceipts } from '../services/pg-receipt-files.service.js';
 import { canReadPgApproval } from '../services/pg-approval-read-policy.service.js';
+import { pgApprovalPeople, personDisplay } from '../services/approval-person-display.service.js';
 import { ApiError, notFound } from '../utils/errors.js';
 
 const idSchema = z.string().regex(/^[1-9]\d*$/);
@@ -187,8 +188,9 @@ export async function getPgApproval(req, res) {
   const row = await pgTransaction(async client => { const fresh = await freshPrincipal(client, principal); const found = await requestRow(client, fresh, id);
     if (!canReadPgApproval(fresh, found)) throw notFound('approval');
     if (!found.workflow_locked) found.attachment_snapshot = await attachments(client, fresh, id);
-    return found; });
-  res.json(view(row));
+    const people = await pgApprovalPeople(client.query.bind(client), fresh.companyId, [found.requester_id, found.decided_by]);
+    return { ...view(found), requester_display: personDisplay(people, found.requester_id), decided_by_display: personDisplay(people, found.decided_by) }; });
+  res.json(row);
 }
 
 export async function pgApprovalHistory(req, res) {
@@ -202,7 +204,8 @@ export async function pgApprovalHistory(req, res) {
         action: row.status === 'approved' ? 'decision.approve' : 'decision.reject', status: row.status,
         snapshot: null, created_at: row.decided_at, comment: row.decision_note, origin: 'legacy_decision' });
     }
-    return recorded; });
+    const people = await pgApprovalPeople(client.query.bind(client), fresh.companyId, recorded.map(item => item.actor_id));
+    return recorded.map(item => ({ ...item, actor_display: personDisplay(people, item.actor_id) })); });
   res.json({ items });
 }
 
