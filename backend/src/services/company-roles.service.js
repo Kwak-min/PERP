@@ -5,7 +5,8 @@ import { bumpVersion, insert, newId, nowIso, softDelete } from '../models/base.j
 import * as audit from './audit.service.js';
 import { ApiError } from '../utils/errors.js';
 
-export const permissionCatalog = COMPANY_PERMISSIONS.map(code => ({ code,
+const RETIRED_PRODUCT_PERMISSIONS = new Set(['menu.recruitment', 'recruitment.manage']);
+export const permissionCatalog = COMPANY_PERMISSIONS.filter(code => !RETIRED_PRODUCT_PERMISSIONS.has(code)).map(code => ({ code,
   label: MENU_CATALOG.find(menu => menu.code === code)?.label ?? ({ 'approval.decide': '결재 승인/반려', 'role.assign': '역할 생성/배정', 'reservation.manage': '예약 공간 관리' }[code] ?? code),
   kind: code.startsWith('menu.') ? 'menu' : 'action' }));
 export const isAdministrator = (permissions, scope) => scope === 'all' &&

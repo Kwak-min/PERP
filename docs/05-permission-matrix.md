@@ -54,7 +54,7 @@
 | reservation.create | A | A | A | D | - | - | P | S | - | - |
 | attendance.read | A | A | A | D | - | A | - | S | - | R |
 | leave.approve | A | A | A | D | - | A | - | - | - | - |
-| recruitment.* | A | A | A | - | - | A | - | - | - | R |
+| recruitment.* (서버 호환 보존, 제품 설정에서 숨김) | A | A | A | - | - | A | - | - | - | R |
 | document.read | A | A | A | D | - | - | P | 권한부여분 | 공유분 | R |
 | document.write | A | A | A | D | - | - | P | 권한부여분 | - | - |
 | meeting.write | A | A | A | D | - | - | P | 참석자 | - | - |

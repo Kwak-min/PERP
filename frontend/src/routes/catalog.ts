@@ -86,7 +86,6 @@ const screenCatalog: readonly ScreenDefinition[] = [
   { id: "HR-001", path: "/hr/members/:memberId", label: "인사 프로필", description: "구성원의 소속, 근태와 온보딩 상태를 확인합니다.", section: "people", endpoint: null, module: "hr" },
   { id: "HR-002", path: "/hr/attendance", label: "근태", description: "출근·지각·결근·원격 기록과 활동시간을 관리합니다.", section: "people", endpoint: "/pg/hr/attendance", module: "hr", nav: true },
   { id: "HR-003", path: "/hr/leave", label: "휴가", description: "휴가 잔여일과 승인 요청을 관리합니다.", section: "people", endpoint: "/pg/hr/leaves", module: "hr", nav: true },
-  { id: "HR-004", path: "/hr/recruitment", label: "모집", description: "공고, 지원자 단계와 합격자 온보딩을 관리합니다.", section: "people", endpoint: "/pg/hr/postings", module: "hr", nav: false },
   { id: "DOC-001", path: "/documents", label: "문서", description: "조직 문서와 위키를 공간별로 정리합니다.", section: "knowledge", endpoint: "/pg/documents", module: "documents", nav: true, create: { endpoint: "/pg/documents", fields: [{ name: "project_id", label: "프로젝트", type: "select", required: true, optionsEndpoint: "/pg/projects/options" }, { name: "title", label: "제목", type: "text", required: true }, { name: "content_md", label: "본문", type: "textarea" }] } , deleteResource: "documents" , editResource: "documents" },
   { id: "DOC-002", path: "/documents/:documentId", label: "문서 편집", description: "문서 본문, 버전과 검토 상태를 관리합니다.", section: "knowledge", endpoint: null, module: "documents" },
   { id: "DOC-003", path: "/documents/meetings/:meetingId", label: "회의록", description: "회의 결정사항을 검토하고 후속 업무로 확정합니다.", section: "knowledge", endpoint: null, module: "documents" },
@@ -119,7 +118,7 @@ const screenCatalog: readonly ScreenDefinition[] = [
 
 const menuById: Readonly<Record<string, string>> = {
   'DASH-001': 'home', 'DASH-002': 'analytics', 'ORG-001': 'organization', 'ORG-004': 'roles', 'ORG-005': 'organization',
-  'HR-001': 'members', 'HR-002': 'attendance', 'HR-003': 'leave', 'HR-004': 'recruitment',
+  'HR-001': 'members', 'HR-002': 'attendance', 'HR-003': 'leave',
   'DOC-004': 'knowledge', 'VLT-001': 'vault', 'VLT-002': 'vault_graph',
   'SET-001': 'approvals', 'SET-002': 'api_keys', 'SET-003': 'settings',
   'ADM-001': 'settings', 'ADM-002': 'organization', 'ADM-003': 'organization', 'ADM-004': 'imports', 'ADM-005': 'organization',

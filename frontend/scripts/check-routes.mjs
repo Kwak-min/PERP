@@ -37,7 +37,6 @@ const expected = [
   "/hr/attendance",
   "/hr/leave",
   "/hr/members/:memberId",
-  "/hr/recruitment",
   "/invitations",
   "/login",
   "/members",

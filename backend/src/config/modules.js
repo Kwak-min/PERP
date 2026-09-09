@@ -49,9 +49,9 @@ export const MODULE_CATALOG = [
   },
   {
     "key": "calendar",
-    "label": "일정·행사",
+    "label": "캘린더",
     "core": false,
-    "description": "개인·조직 캘린더, 행사, 참석 관리."
+    "description": "개인·조직 일정, 행사와 참석 관리."
   },
   {
     "key": "documents",
@@ -85,9 +85,9 @@ export const MODULE_CATALOG = [
   },
   {
     "key": "hr",
-    "label": "인사·채용",
+    "label": "인사",
     "core": false,
-    "description": "모집, 지원자 관리와 온보딩. 근태·휴가는 별도 기능으로 선택합니다."
+    "description": "구성원 인사 정보 관리. 근태·휴가는 별도 기능으로 선택합니다."
   },
   {
     "key": "agent",

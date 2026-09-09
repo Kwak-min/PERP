@@ -9,7 +9,7 @@ import { chromium } from '@playwright/test';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
 import { startDeadlineServer, createDeadlineFixture } from '../../backend/tests/deadline-fixture.js';
-import { COMPANY_PERMISSIONS } from '../../backend/src/config/rbac.js';
+import { permissionCatalog } from '../../backend/src/services/company-roles.service.js';
 import { initializeDeadlineSession } from './deadline-browser-session.mjs';
 import { networkAudit, protectedPorts } from '../../scripts/deadline-isolation-guard.mjs';
 import { actionPermissionLabels } from '../src/screens/action-permission-labels.ts';
@@ -112,7 +112,7 @@ async function close(page) {
 }
 let api, vite, server, browser, nativeFixture;
 try {
-  check('finite action metadata keys', Object.keys(actionPermissionLabels), () => assert.deepEqual(Object.keys(actionPermissionLabels).sort(), COMPANY_PERMISSIONS.filter(code => !code.startsWith('menu.'))));
+  check('finite action metadata keys', Object.keys(actionPermissionLabels), () => assert.deepEqual(Object.keys(actionPermissionLabels).sort(), permissionCatalog.filter(item => item.kind === 'action').map(item => item.code).sort()));
   api = await startDeadlineServer(); result.resources.push(api.resource);
   const fixture = result.native ? await (async () => { nativeFixture = await (await import('./deadline-role-native.fixture.mjs')).nativeRoleFixture(api); return nativeFixture.fixture; })() : await createDeadlineFixture(api);
   vite = await createServer({ configFile: false, root: path.join(root, 'frontend'), envDir: process.env.DEADLINE_TEMP_ROOT, cacheDir: path.join(process.env.DEADLINE_TEMP_ROOT, 'vite-ui-fixes'), plugins: [react()], server: { host: '127.0.0.1', port: 0, proxy: { '/api': new URL(api.baseUrl).origin }, watch: { ignored: ['**/.omo/**', '**/dist/**'] } } });

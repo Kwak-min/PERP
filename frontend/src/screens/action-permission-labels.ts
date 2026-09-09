@@ -36,7 +36,6 @@ export const actionPermissionLabels: Readonly<Record<string, string>> = {
   'organization.settings': '조직 설정 관리',
   'project.read': '프로젝트 조회',
   'project.write': '프로젝트 등록/수정',
-  'recruitment.manage': '채용 관리',
   'reservation.create': '예약 생성',
   'reservation.manage': '예약 공간 관리',
   'retention.manage': '자료 보존 정책 관리',
