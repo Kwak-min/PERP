@@ -33,8 +33,19 @@ export const documentAnalysisSchema = z.object({
   reason: z.string().optional(),
   version: z.number().int().positive(),
   model: z.string().nullable(),
-  local_only: z.literal(true),
+  local_only: z.boolean(),
 });
+
+export const DOCUMENT_AI_REASON: Readonly<Record<string, string>> = {
+  embedding_model_not_configured: '관리자에게 ORBITFLOW_DOCUMENT_OPENROUTER_EMBEDDING_MODEL 설정을 요청하세요. 채팅 모델은 임베딩에 사용하지 않습니다.',
+  embedding_model_unsupported: '설정한 모델이 OpenRouter 임베딩 목록에 없습니다. 지원되는 임베딩 모델을 설정하세요.',
+  embedding_context_limit: '임베딩 모델의 입력 한도를 초과했습니다. 더 큰 입력을 지원하는 모델을 설정하세요.',
+  model_not_configured: '로컬 전용 분석에 ORBITFLOW_DOCUMENT_EMBEDDING_MODEL 설정이 필요합니다.',
+  local_endpoint_required: '로컬 전용 분석에는 루프백 Ollama 주소가 필요합니다.',
+  inference_unavailable: 'AI 연결 설정의 키 권한·잔액과 모델·네트워크를 확인한 뒤 다시 분석하세요.',
+  invalid_embeddings: '공급자가 올바른 임베딩 벡터를 반환하지 않았습니다. 모델 설정을 확인하세요.',
+  document_access_changed: '문서 버전·등급 또는 접근 권한이 변경되었습니다. 원본을 새로고침하세요.',
+};
 
 export const knowledgeEdgeSchema = graphEndpointSchema.and(z.object({
   kind: z.enum(["space", "link", "ai_similarity"]),

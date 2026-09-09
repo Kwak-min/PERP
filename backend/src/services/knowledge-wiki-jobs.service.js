@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { withKnowledgeTransaction, withKnowledgeJobTransaction, withKnowledgeQueryDraftTransaction, retireUnauthorizedWikiJob } from './knowledge-wiki-store.service.js';
 import { canonical, sha256, citationFor, wikiError, WIKI_CONTRACT } from './knowledge-wiki-contract.service.js';
-import { localModelConfiguration, createLocalWikiCompiler, compilerInstructions, compilerOutputSchema, contextAccounting } from './knowledge-wiki-compiler.service.js';
+import { wikiModelConfiguration, openRouterWikiConfiguration, createOpenRouterWikiCompiler, createLocalWikiCompiler, compilerInstructions, compilerOutputSchema, contextAccounting } from './knowledge-wiki-compiler.service.js';
+import { knowledgeCloudAllowed, knowledgeKeyConfigured } from './knowledge-ai.service.js';
 
 const fail = (code,status=409) => { throw wikiError(code,status); };
 export const WIKI_JOB_POLICY = Object.freeze({attempts:3,lease_ms:120000,heartbeat_ms:30000,queue:20});
@@ -94,7 +95,7 @@ function* admissionInputs(tx,request) {
     {kind:'instruction',supplied_text:compilerInstructions(request.operation),classification:'public',provenance:{compiler_version:'wiki-local-v1',operation:request.operation}},
     {kind:'catalog',supplied_text:canonical(catalog),classification:'internal',source_revision_ids:[...raw].sort(),provenance:{format:'wiki-evidence-catalog-v1'}},
     ...revisions.map(r=>({kind:r.artifact_kind,revision_id:r.id,supplied_text:r.content ?? r.markdown,classification:'internal',provenance:{title:r.title}})),
-    ...(request.operation==='query' ? [{kind:'question',supplied_text:request.question,classification:'personal'}] : []),
+    ...(request.operation==='query' ? [{kind:'question',supplied_text:request.question,classification:tx.context.scope==='company' ? 'internal' : 'personal'}] : []),
   ];
   return {manifest:yield* tx.manifest(inputs),coverage,targets,issues,anchors};
 }
@@ -104,12 +105,15 @@ function dto(job,attempts=[]) {
 export async function admitWikiJob(context,input,idempotencyKey,configuration=null) {
   const request = wikiJobRequestSchema.parse(input);
   if (typeof idempotencyKey !== 'string' || !/^[\x21-\x7e]{1,200}$/.test(idempotencyKey)) fail('VALIDATION_ERROR',400);
-  const config = configuration === null ? null : localModelConfiguration(configuration), requestHash = sha256(canonical(request));
+  const localConfig = configuration === null ? null : wikiModelConfiguration(configuration), requestHash = sha256(canonical(request));
   return withKnowledgeJobTransaction(context,{operation:request.operation},function*(tx) {
     const old = (yield* tx.all('job',{where:{actor_id:context.actorId,idempotency_key:idempotencyKey}}))[0];
     if (old) { if (old.request_hash !== requestHash) fail('IDEMPOTENCY_CONFLICT'); yield* fresh(tx,old); return {created:false,job:dto(old)}; }
     yield* capacity(tx);
     const inputs = yield* admissionInputs(tx,request);
+    const permitted=context.scope==='company' && inputs.manifest.inputs.every(input=>knowledgeCloudAllowed(input.classification));
+    const config=permitted && knowledgeKeyConfigured(context) ? openRouterWikiConfiguration() : localConfig;
+    if (config?.provider==='openrouter' && !permitted) fail('EXTERNAL_DATA_BLOCKED',503);
     if (config) contextAccounting(inputs.manifest,config);
     const instant = yield* tx.clock();
     const job = yield* tx.insert('job',{operation:request.operation,request_json:canonical(request),request_hash:requestHash,actor_id:context.actorId,idempotency_key:idempotencyKey,state:'queued',fence:0,source_vector_json:canonical({...inputs,configuration:config}),target_vector_json:canonical(inputs.targets),schema_revision_id:tx.wiki.active_schema_id,config_version:sha256(canonical(config)),created_at:instant,updated_at:instant});
@@ -312,7 +316,7 @@ async function executeWikiJob(context,id,{signal,owner=randomUUID()}={}) {
     if (noEvidence) modelSnapshot={model_version:config?.model ?? 'unconfigured',configuration:config,context_verification:'no_evidence_not_dispatched'};
     else {
       if (!config) fail('MODEL_UNAVAILABLE',503);
-      compiler=createLocalWikiCompiler(config); modelSnapshot=await compiler.inspect(signal);
+      compiler=config.provider==='openrouter' ? createOpenRouterWikiCompiler(config,context) : createLocalWikiCompiler(config); modelSnapshot=await compiler.inspect(signal);
     }
   } catch(error) {
     errorBeforeClaim=error;

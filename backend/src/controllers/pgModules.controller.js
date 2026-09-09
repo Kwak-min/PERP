@@ -304,6 +304,7 @@ const toPgDocument = (row) => ({
   project_name: row.project_name,
   title: row.title,
   content: row.content_md ?? "",
+  sensitivity: 'internal',
   file_id: row.file_id == null ? null : String(row.file_id),
   author_id: row.author_id == null ? null : String(row.author_id),
   version: Number(row.version),
