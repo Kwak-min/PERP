@@ -106,7 +106,7 @@ Pretendard → Noto Sans KR → system-ui.
 
 - 카드는 서버가 준 `state`를 상태 라벨로 그대로 표현한다. ready "조회 완료", empty "데이터 없음", forbidden "원천 권한 없음", disabled "기능 꺼짐", unavailable은 라벨과 함께 `reason` 설명(`SOURCE_UNSUPPORTED`, `MIXED_CURRENCY` 등)을 텍스트와 코드로 보인다. 어떤 상태도 0이나 대시로 대체하지 않는다.
 - 금액은 서버 문자열과 `unit`을 그대로 표시한다. PG는 `ledger_decimal`, legacy는 실제 통화다. '원'을 하드코딩하지 않는다.
-- `series`가 비어 있으면 추세 화살표·스파크라인을 그리지 않는다. 기준 라벨은 current_snapshot "현재 상태 (과거 말일 상태 아님)", period_flow "선택 기간 흐름 [시작, 종료)"처럼 basis 코드와 함께 표기한다.
+- `series[0]`의 실제 기간 수입·비용·차액을 최대 366구간의 차트와 정확한 문자열 표로 표시한다. 키보드 구간 선택을 제공하고, forbidden/disabled/unavailable이면 차트와 가짜 0을 그리지 않는다. 이전 기간 비교를 합성하지 않는다. 기준 라벨은 current_snapshot "현재 상태 (과거 말일 상태 아님)", period_flow "선택 기간 흐름 [시작, 종료)"처럼 basis 코드와 함께 표기한다.
 - export 영역은 "다운로드할 때 저장된 필터와 현재 권한으로 원천 데이터를 다시 조회합니다"를 안내하고, 413은 기간을 좁히라는 문구로 표시한다. 5,000행 절단 같은 조용한 축소는 없다.
 
 ## 지식 그래프·LLM Wiki

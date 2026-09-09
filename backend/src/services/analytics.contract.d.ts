@@ -26,12 +26,33 @@ type Result<K extends MetricKey> =
     : K extends MoneyMetricKey ? { value: string }
     : { value: string; not_applicable?: never } | { value: null; not_applicable: true }));
 export type AnalyticsMetric = { [K in MetricKey]: MetricMetadata<K> & Result<K> }[MetricKey];
+export interface AnalyticsSeriesPoint {
+  from: string;
+  to: string;
+  state: 'ready' | 'empty';
+  revenue: string;
+  expense: string;
+  net: string;
+}
+export interface AnalyticsFinanceSeries {
+  key: 'finance';
+  state: AnalyticsMetricState;
+  unit: string;
+  currency: string | null;
+  basis: 'period_flow';
+  date_basis: 'posted_entry_date';
+  scope: AnalyticsScope & { rows: AnalyticsRowScope };
+  granularity: 'day' | 'calendar_day_group';
+  bucket_days: number;
+  reason?: AnalyticsReason;
+  points: AnalyticsSeriesPoint[];
+}
 export interface AnalyticsKpis {
   scope: AnalyticsScope;
   period: AnalyticsPeriod;
   generated_at: string;
   metrics: AnalyticsMetric[];
-  series: [];
+  series: [AnalyticsFinanceSeries];
 }
 export type AnalyticsReportKey = 'members' | 'tasks' | 'transactions' | 'budgets' | 'approvals_created' | 'approvals_decided';
 export interface AnalyticsExportInput { reportKey: AnalyticsReportKey; filter?: AnalyticsFilter }

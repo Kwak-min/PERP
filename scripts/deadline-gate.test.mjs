@@ -69,6 +69,27 @@ test('every delivered native file and root test is explicit, with separate Reser
   assert.deepEqual(requiredFiles(manifest.targets).sort(), integrationFiles.filter(file => !existsSync(path.join(root, file))).sort());
 });
 
+test('bundle repair is mandatory once in native and root inventories; chart repairs reuse existing targets', () => {
+  assert.equal(new Set(manifest.targets.map(target => target.id)).size, manifest.targets.length);
+  const id = 'native:deadline-wiki-bundle-native';
+  const source = 'backend/tests/deadline-wiki-bundle-native.integration.mjs';
+  const scenarios = 'backend/tests/deadline-wiki-bundle-scenarios.js';
+  const target = manifest.targets.find(target => target.id === id);
+  assert.deepEqual(target, { id, suite: 'native', command: 'node', args: ['--test', source], required: [source, scenarios], coverage: [id], capabilities: ['pg18'] });
+  for (const args of [[], ['--suite', 'native'], ['--target', id]]) {
+    assert.equal(selectTargets(args).selected.filter(target => target.id === id).length, 1);
+  }
+  const rootTarget = manifest.targets.find(target => target.id === 'root:parallel');
+  for (const file of ['backend/tests/deadline-wiki-bundle.test.js', scenarios, 'backend/tests/deadline-analytics.test.js']) {
+    assert.equal(rootTarget.required.filter(required => required === file).length, 1);
+  }
+  assert.deepEqual(rootTarget.args, ['test']);
+  for (const id of ['native:deadline-analytics-native', 'native:deadline-analytics-feature-failure-native', 'unit:frontend/scripts/deadline-analytics-model.test.mjs', 'browser:analytics', 'browser:analytics-pg']) {
+    assert.equal(selectTargets([]).selected.filter(target => target.id === id).length, 1);
+  }
+  assert.ok(manifest.requiredScenarioSources.includes('frontend/scripts/deadline-analytics.e2e.mjs'));
+});
+
 test('current direct tests, dispatcher imports and shipped runtime prerequisites cannot drift from preflight', () => {
   const browser = selectTargets(['--suite', 'browser']).selected;
   const sources = new Set([...manifest.requiredScenarioSources, ...browser.flatMap(target => target.required)]);

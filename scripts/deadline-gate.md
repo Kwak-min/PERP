@@ -128,11 +128,20 @@ claim that real-model browser run occurred.
 
 ## Integration handoff
 
-The mandatory final inventory is **94 gate targets**, not the earlier 89:
-25 individually isolated native integration files plus the native Wiki revision
+The mandatory final inventory is **95 gate targets**:
+26 individually isolated native integration files plus the native Wiki revision
 smoke, 29 browser leaves, 33 unit targets, root-parallel, frontend build, three
-Reservation targets, and the real-model smoke. The three new root test files are
-required inventory within the existing root target, not three extra gate targets.
+Reservation targets, and the real-model smoke. The bundle repair adds
+`native:deadline-wiki-bundle-native`; its SQLite counterpart
+`backend/tests/deadline-wiki-bundle.test.js` is required within `root:parallel`,
+not an extra target. Both require the shared `deadline-wiki-bundle-scenarios.js`.
+The three runtime root test files below also remain required inventory within
+the existing root target, not three extra gate targets.
+
+The finance chart repair extends the existing root analytics test, both native
+analytics targets, the analytics model unit target, and `browser:analytics` /
+`browser:analytics-pg`. No duplicate chart targets are added. Earlier 94-target
+execution receipts remain historical evidence, not verification of this inventory.
 
 These exact runtime/UI deliveries are already mandatory in the manifest, but are
 absent from this gate's base `9928186`. Do not copy product code into this worktree
@@ -168,7 +177,7 @@ carefully; re-run the final matrix after these runtime/UI deliveries land.
 
 The following six checks are mandatory **separate executions** on the final
 integrated tree. They are not implicitly performed by `test:deadline` and are not
-included in its 94-target count. The machine contract is `mandatoryFinalChecks`.
+included in its 95-target count. The machine contract is `mandatoryFinalChecks`.
 
 ```text
 node scripts/run_deadline_isolated.mjs npm run build --prefix Reservation/backend

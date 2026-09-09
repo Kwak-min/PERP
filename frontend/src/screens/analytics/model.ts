@@ -35,8 +35,44 @@ const metricSchema = z.object({
     (available && (count ? typeof metric.value !== 'number' : ratio ? !(typeof metric.value === 'string' && !metric.not_applicable || metric.value === null && metric.not_applicable) : typeof metric.value !== 'string')) ||
     (!ratio && metric.not_applicable)) context.addIssue({ code: 'custom', message: 'Invalid metric value/unit/state combination' });
 }).transform(value => value as AnalyticsMetric);
-const kpisSchema = z.object({ scope: scopeSchema, period: periodSchema, generated_at: z.iso.datetime({ offset: true }), metrics: z.array(metricSchema).length(16), series: z.tuple([]) }).superRefine((data, context) => {
+const exactMoney = z.string().regex(/^-?\d+\.\d{2}$/);
+const seriesSchema = z.object({
+  key: z.literal('finance'), state: z.enum(['ready', 'empty', 'forbidden', 'disabled', 'unavailable']),
+  unit: z.string().min(1), currency: z.string().min(1).nullable(), basis: z.literal('period_flow'), date_basis: z.literal('posted_entry_date'),
+  scope: scopeSchema.extend({ rows: z.enum(['company', 'self', 'project', 'department']) }),
+  granularity: z.enum(['day', 'calendar_day_group']), bucket_days: z.number().int().positive().safe(),
+  reason: z.enum(['SOURCE_UNSUPPORTED', 'SOURCE_QUERY_FAILED', 'MIXED_CURRENCY', 'CURRENCY_MISMATCH']).optional(),
+  points: z.array(z.object({ from: date, to: date, state: z.enum(['ready', 'empty']), revenue: exactMoney, expense: exactMoney, net: exactMoney }).strict()).max(366),
+}).strict().transform(({ reason, ...series }) => ({ ...series, ...(reason ? { reason } : {}) }));
+const dayNumber = (value: string) => Date.parse(value + 'T00:00:00Z') / 86400000;
+export function seriesMinor(value: string): bigint { return BigInt(value.replace('.', '')); }
+const kpisSchema = z.object({ scope: scopeSchema, period: periodSchema, generated_at: z.iso.datetime({ offset: true }), metrics: z.array(metricSchema).length(16), series: z.tuple([seriesSchema]) }).superRefine((data, context) => {
   if (new Set(data.metrics.map(metric => metric.key)).size !== 16 || data.metrics.some(metric => metric.scope.source !== data.scope.source || metric.scope.org_id !== data.scope.org_id)) context.addIssue({ code: 'custom', message: 'Invalid metric keys or scope' });
+  const series = data.series[0], finance = data.metrics.find(metric => metric.key === 'finance.revenue');
+  const available = series.state === 'ready' || series.state === 'empty';
+  const days = dayNumber(data.period.to) - dayNumber(data.period.from), bucketDays = Math.ceil(days / 366);
+  const totals = { revenue: 0n, expense: 0n, net: 0n };
+  let boundary = data.period.from;
+  let invalid = series.scope.source !== data.scope.source || series.scope.org_id !== data.scope.org_id || series.scope.rows !== finance?.scope.rows ||
+    series.state !== finance?.state || series.unit !== finance?.unit || series.reason !== (finance && 'reason' in finance ? finance.reason : undefined) ||
+    series.currency !== (['ledger_decimal', 'mixed_currency'].includes(series.unit) ? null : series.unit) ||
+    series.bucket_days !== bucketDays || series.granularity !== (bucketDays === 1 ? 'day' : 'calendar_day_group') ||
+    series.points.length !== (available ? Math.ceil(days / bucketDays) : 0);
+  for (const point of series.points) {
+    invalid ||= point.from !== boundary || dayNumber(point.to) !== Math.min(dayNumber(data.period.to), dayNumber(point.from) + bucketDays) ||
+      seriesMinor(point.net) !== seriesMinor(point.revenue) - seriesMinor(point.expense) ||
+      point.state === 'empty' && [point.revenue, point.expense, point.net].some(value => value !== '0.00');
+    for (const key of ['revenue', 'expense', 'net'] as const) totals[key] += seriesMinor(point[key]);
+    boundary = point.to;
+  }
+  if (available) {
+    invalid ||= boundary !== data.period.to || (series.state === 'empty') !== series.points.every(point => point.state === 'empty');
+    for (const key of ['revenue', 'expense', 'net'] as const) {
+      const metric = data.metrics.find(metric => metric.key === `finance.${key}`);
+      invalid ||= typeof metric?.value !== 'string' || !exactMoney.safeParse(metric.value).success || seriesMinor(metric.value) !== totals[key];
+    }
+  }
+  if (invalid) context.addIssue({ code: 'custom', message: 'Invalid finance series scope/state/coverage/exact totals' });
 });
 export function samePeriod(a: AnalyticsPeriod, b: AnalyticsPeriod): boolean { return a.from === b.from && a.to === b.to && a.tz === b.tz; }
 function assertScope(actual: AnalyticsScope, expected: AnalyticsScope): void {

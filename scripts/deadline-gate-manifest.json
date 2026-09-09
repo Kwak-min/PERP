@@ -156,6 +156,8 @@
         "backend/tests/deadline-project-read-access.test.js",
         "backend/tests/deadline-receipts.test.js",
         "backend/tests/deadline-roles.test.js",
+        "backend/tests/deadline-wiki-bundle.test.js",
+        "backend/tests/deadline-wiki-bundle-scenarios.js",
         "backend/tests/deadline-wiki-consumer.test.js",
         "backend/tests/deadline-wiki-integration.test.js",
         "backend/tests/deadline-wiki-jobs.test.js",
@@ -947,6 +949,25 @@
       ],
       "coverage": [
         "native:deadline-roles-native"
+      ],
+      "capabilities": [
+        "pg18"
+      ]
+    },
+    {
+      "id": "native:deadline-wiki-bundle-native",
+      "suite": "native",
+      "command": "node",
+      "args": [
+        "--test",
+        "backend/tests/deadline-wiki-bundle-native.integration.mjs"
+      ],
+      "required": [
+        "backend/tests/deadline-wiki-bundle-native.integration.mjs",
+        "backend/tests/deadline-wiki-bundle-scenarios.js"
+      ],
+      "coverage": [
+        "native:deadline-wiki-bundle-native"
       ],
       "capabilities": [
         "pg18"

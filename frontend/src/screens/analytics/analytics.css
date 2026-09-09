@@ -8,7 +8,7 @@
 .analytics-screen input, .analytics-screen select { min-height: 44px; max-width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid #bec8d7; border-radius: 8px; background: white; color: inherit; font: inherit; }
 .analytics-filters > p { flex-basis: 100%; margin: 0; font-size: .875rem; }
 .analytics-screen .button { min-height: 44px; white-space: normal; }
-.analytics-period, .analytics-reports { margin: 16px 0; padding: 20px; border: 1px solid #d5dce7; border-radius: 12px; background: white; }
+.analytics-period, .analytics-reports, .analytics-series { margin: 16px 0; padding: 20px; border: 1px solid #d5dce7; border-radius: 12px; background: white; }
 .analytics-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 16px; }
 .analytics-metric { min-width: 0; border: 1px solid #d5dce7; background: white; border-radius: 12px; padding: 20px; }
 .analytics-value { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
@@ -27,10 +27,18 @@
 .analytics-table table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .analytics-table th, .analytics-table td { padding: 10px; border-bottom: 1px solid #d5dce7; text-align: left; min-width: 90px; }
 .analytics-table td { overflow-wrap: anywhere; }
+.analytics-series-chart { display: block; width: 100%; height: auto; min-height: 160px; }
+.analytics-series-legend { display: flex; flex-wrap: wrap; gap: 16px; padding: 0; list-style: none; }
+.analytics-series-legend li { display: flex; align-items: center; gap: 8px; }
+.analytics-series-axis { display: flex; justify-content: space-between; gap: 12px; font-size: .875rem; }
+.analytics-series-detail dl { display: flex; flex-wrap: wrap; gap: 16px; font-variant-numeric: tabular-nums; }
+.analytics-series-detail dd { margin: 4px 0; }
+.analytics-series-table caption { text-align: left; padding: 12px 0; }
+.analytics-series-table tr[aria-current="true"] { background: #edf3fc; }
 .analytics-screen :focus-visible { outline: 3px solid #386dd5; outline-offset: 3px; }
 @media (max-width: 600px) {
   .analytics-screen { padding: 16px 12px; }
   .analytics-filters > label, .analytics-filters > button { width: 100%; }
-  .analytics-period, .analytics-reports, .analytics-metric { padding: 16px; }
+  .analytics-period, .analytics-reports, .analytics-metric, .analytics-series { padding: 16px; }
   .analytics-value strong { font-size: 1.4rem; }
 }
