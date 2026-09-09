@@ -6,6 +6,7 @@ export type NavPref = Readonly<{
   version: 1;
   favoriteScreenIds: readonly string[];
   collapsedSectionIds: readonly ScreenSection[];
+  hiddenScreenIds: readonly string[];
 }>;
 export type NavPrefRead =
   | Readonly<{ status: 'ready' | 'empty' | 'invalid'; value: NavPref }>
@@ -13,8 +14,10 @@ export type NavPrefRead =
 
 export const NAV_PREF_NOTICE = '이 브라우저에만 저장됩니다. 다른 기기와 동기화되지 않습니다.';
 const knownScreens = new Set(screens.map(screen => screen.id));
+// 홈은 개인 숨김으로도 제거하지 않아 복원 진입점을 유지한다.
+const hideableScreens = new Set(screens.filter(screen => screen.nav && screen.path !== '/').map(screen => screen.id));
 const knownSections = new Set<ScreenSection>(Object.keys(sectionLabels) as ScreenSection[]);
-const empty = (): NavPref => ({ version: 1, favoriteScreenIds: [], collapsedSectionIds: [] });
+const empty = (): NavPref => ({ version: 1, favoriteScreenIds: [], collapsedSectionIds: [], hiddenScreenIds: [] });
 
 export function navPrefKey(scope: NavPrefScope): string {
   if (!scope || typeof scope.userId !== 'string' || !scope.userId.trim()
@@ -42,6 +45,7 @@ export function normalizeNavPref(input: unknown): NavPref {
     version: 1,
     favoriteScreenIds: ids(input.favoriteScreenIds, knownScreens),
     collapsedSectionIds: ids(input.collapsedSectionIds, knownSections),
+    hiddenScreenIds: ids(input.hiddenScreenIds, hideableScreens),
   };
 }
 
@@ -78,8 +82,9 @@ export function updateNavPref(scope: NavPrefScope, update: (current: NavPref) =>
 export function selectNavFavorites(value: NavPref, visibleNavigation: readonly Pick<ScreenDefinition, 'id'>[]): readonly ScreenDefinition[] {
   const allowed = new Set(visibleNavigation.map(screen => screen.id));
   const navigable = new Map(screens.filter(screen => screen.nav && allowed.has(screen.id)).map(screen => [screen.id, screen]));
-  return normalizeNavPref(value).favoriteScreenIds.flatMap(id => {
+  const normalized = normalizeNavPref(value);
+  return normalized.favoriteScreenIds.flatMap(id => {
     const screen = navigable.get(id);
-    return screen ? [screen] : [];
+    return screen && !normalized.hiddenScreenIds.includes(id) ? [screen] : [];
   });
 }

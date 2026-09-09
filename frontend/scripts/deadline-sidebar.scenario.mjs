@@ -36,9 +36,20 @@ const sidebarSignal = page => page.evaluate(() => window.__deadlineSidebarSignal
 const favoriteIds = page => page.locator('[data-testid="nav-favorites"] a').evaluateAll(links => links.map(link => link.dataset.screenId));
 
 async function pressAndWait(page, buttonName, selector, options) {
-  await armDom(page, selector, options);
-  await page.getByRole('button', { name: buttonName, exact: true }).focus();
-  await page.keyboard.press('Enter');
+  const action = buttonName.match(/^(.*) (즐겨찾기에 추가|위로 이동)$/);
+  if (action) {
+    const list = action[2] === '위로 이동' ? '.nav-favorites' : '.nav-group';
+    const pin = page.locator(list).getByRole('button', { name: `${action[1]} 메뉴 동작`, exact: true });
+    if (await pin.getAttribute('aria-expanded') !== 'true') {
+      await armDom(page, '.nav-action-popup'); await pin.press('Enter'); await sidebarSignal(page);
+    }
+    await armDom(page, selector, options);
+    await page.locator(`[data-nav-action="${action[2] === '위로 이동' ? 'up' : 'favorite'}"]`).press('Enter');
+  } else {
+    await armDom(page, selector, options);
+    await page.getByRole('button', { name: buttonName, exact: true }).focus();
+    await page.keyboard.press('Enter');
+  }
   await sidebarSignal(page);
 }
 
@@ -126,7 +137,9 @@ export async function sidebar({ surface, api, fixture, result, attempt, evidence
     assert.deepEqual(await favoriteIds(page), ['PRJ-001', 'CAL-001', 'AST-001']);
     assert.equal(await page.locator('.nav-group a[href="/projects"]').count(), 1, 'favorite keeps original group link');
 
-    await pressAndWait(page, '즐겨찾기 편집', '.nav-favorite-actions:not([hidden])', { count: 3 });
+    await armDom(page, '.nav-action-popup');
+    await page.locator('.nav-favorites [data-favorite-screen-id="AST-001"]').press('Enter');
+    await sidebarSignal(page);
     await pressAndWait(page, '자산 위로 이동', '[data-testid="nav-favorites"]', { attribute: 'data-order', value: 'PRJ-001,AST-001,CAL-001' });
     assert.deepEqual(await favoriteIds(page), ['PRJ-001', 'AST-001', 'CAL-001']);
     await pressAndWait(page, '자산 위로 이동', '[data-testid="nav-favorites"]', { attribute: 'data-order', value: 'AST-001,PRJ-001,CAL-001' });
@@ -219,14 +232,21 @@ export async function sidebar({ surface, api, fixture, result, attempt, evidence
       assert.equal(await page.locator('#nav-section-work a[href="/projects"]').isVisible(), true);
       const pin = page.locator('#nav-section-work .nav-entry').filter({ has: page.locator('a[href="/calendar"]') }).locator('.nav-pin');
       const originalUrl = page.url(), originalHistory = await page.evaluate(() => history.length);
-      // 같은 버튼의 직접 클릭과 기본 키보드 동작은 탐색 없이 즐겨찾기만 바꾼다.
+      // 말줄임은 팝업만 열고 명시적 동작 선택만 저장값을 바꾼다.
       for (const [action, pressed] of [['click', false], ['click', true], ['click', false], ['Space', true], ['Enter', false], ['Enter', true]]) {
         const order = pressed ? 'AST-001,PRJ-001,CAL-001' : 'AST-001,PRJ-001';
-        await armDom(page, '[data-testid="nav-favorites"]', { attribute: 'data-order', value: order });
-        if (action === 'click') await pin.click();
+        const beforeIds = await favoriteIds(page);
+        await armDom(page, '.nav-action-popup');
+        if (action === 'click') { await pin.locator('..').hover(); await pin.click(); }
         else { await pin.focus(); await page.keyboard.press(action); }
         await sidebarSignal(page);
-        assert.equal(await pin.getAttribute('aria-pressed'), String(pressed));
+        assert.equal(await pin.getAttribute('aria-expanded'), 'true');
+        assert.deepEqual(await favoriteIds(page), beforeIds);
+        await armDom(page, '[data-testid="nav-favorites"]', { attribute: 'data-order', value: order });
+        const favoriteAction = page.locator('[data-nav-action="favorite"]');
+        if (action === 'click') await favoriteAction.click(); else await favoriteAction.press(action);
+        await sidebarSignal(page);
+        assert.equal(await pin.getAttribute('data-favorite'), String(pressed));
         assert.equal(page.url(), originalUrl);
         assert.equal(await page.evaluate(() => history.length), originalHistory);
         if (width < 1100) assert.equal(await page.locator('.sidebar.sidebar--open').count(), 1);
@@ -244,7 +264,7 @@ export async function sidebar({ surface, api, fixture, result, attempt, evidence
         await pressAndWait(page, '메뉴 열기', '.sidebar.sidebar--open');
         await sidebarAnimations(page);
       }
-      assert.equal(await pin.getAttribute('aria-pressed'), 'true');
+      assert.equal(await pin.getAttribute('data-favorite'), 'true');
       (result.sidebarFavoriteActions ??= []).push({ width, clickAppend: true, secondClickRemove: true, space: true, enter: true, reloadPersists: true, navigationUnchanged: true });
       await page.locator('[aria-controls="nav-section-work"]').focus();
       await page.keyboard.press('Tab');

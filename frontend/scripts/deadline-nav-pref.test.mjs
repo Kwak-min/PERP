@@ -9,7 +9,7 @@ registerHooks({ resolve(specifier, context, next) {
 const pref = await import('../src/store/navPref.ts');
 const { screens } = await import('../src/routes/catalog.ts');
 const A = { userId: 'actor-a', source: 'legacy', orgId: 'company-a' };
-const value = (favorites = [], collapsed = []) => ({ version: 1, favoriteScreenIds: favorites, collapsedSectionIds: collapsed });
+const value = (favorites = [], collapsed = [], hidden = []) => ({ version: 1, favoriteScreenIds: favorites, collapsedSectionIds: collapsed, hiddenScreenIds: hidden });
 let values;
 beforeEach(() => {
   values = new Map();
@@ -101,6 +101,29 @@ test('storage access and quota failures are explicit and never claim a successfu
   const quota = new DOMException('full', 'QuotaExceededError');
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, writable: true, value: { getItem: () => null, setItem() { throw quota; } } });
   assert.throws(() => pref.writeNavPref(A, value(['PRJ-001'])), error => error === quota);
+});
+
+test('old version-one bytes upgrade only on explicit writes and retain favorites and collapse order', () => {
+  const old = JSON.stringify({ version: 1, favoriteScreenIds: ['CAL-001', 'PRJ-001'], collapsedSectionIds: ['people', 'work'] });
+  values.set(pref.navPrefKey(A), old);
+  assert.deepEqual(pref.readNavPref(A).value, value(['CAL-001', 'PRJ-001'], ['people', 'work']));
+  assert.equal(values.get(pref.navPrefKey(A)), old);
+  pref.updateNavPref(A, current => ({ ...current, hiddenScreenIds: ['PRJ-001'] }));
+  assert.deepEqual(pref.readNavPref(A).value, value(['CAL-001', 'PRJ-001'], ['people', 'work'], ['PRJ-001']));
+  assert.deepEqual(pref.selectNavFavorites(pref.readNavPref(A).value, screens).map(screen => screen.id), ['CAL-001']);
+  pref.updateNavPref(A, current => ({ ...current, hiddenScreenIds: [] }));
+  assert.deepEqual(pref.selectNavFavorites(pref.readNavPref(A).value, screens).map(screen => screen.id), ['CAL-001', 'PRJ-001']);
+});
+
+test('personal hiding validates navigable IDs, keeps home safe and remains scope-local', () => {
+  const home = screens.find(screen => screen.path === '/');
+  const input = value(['PRJ-001'], ['work'], ['PRJ-001', home.id, 'PRJ-002', 'removed', null, 'PRJ-001']);
+  pref.writeNavPref(A, input);
+  assert.deepEqual(pref.readNavPref(A).value, value(['PRJ-001'], ['work'], ['PRJ-001']));
+  assert.deepEqual(pref.readNavPref({ ...A, orgId: 'company-b' }).value.hiddenScreenIds, []);
+  assert.deepEqual(pref.readNavPref({ ...A, source: 'pg' }).value.hiddenScreenIds, []);
+  assert.deepEqual(pref.readNavPref({ ...A, userId: 'actor-b' }).value.hiddenScreenIds, []);
+  assert.deepEqual(pref.normalizeNavPref({ ...input, hiddenScreenIds: {} }).hiddenScreenIds, []);
 });
 
 test('read values have no shared mutable default state', () => {
