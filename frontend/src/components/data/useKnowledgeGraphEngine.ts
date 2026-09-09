@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { NodeObject } from "3d-force-graph";
 
 import { isOrbitControls, isRenderLink, isRenderNode, type ActiveGraph, type GraphEngineController, type GraphEngineRequest, type OrbitControls, type StageGraph } from "./knowledgeGraphRuntime.ts";
 import { prepareKnowledgeGraph, relationClass, type KnowledgeGraphStageNode } from "./knowledgeGraphStageModel.ts";
 
 export function useKnowledgeGraphEngine(request: GraphEngineRequest): GraphEngineController {
-  const { data, scopeKey, reducedMotion, onNodeSelect } = request;
+  const { data, scopeKey, reducedMotion, onNodeSelect, hiddenRelations } = request;
+  const hiddenRef = useRef(hiddenRelations);
+  hiddenRef.current = hiddenRelations;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const activeRef = useRef<ActiveGraph | null>(null);
   const callbackRef = useRef(onNodeSelect);
@@ -27,8 +30,38 @@ export function useKnowledgeGraphEngine(request: GraphEngineRequest): GraphEngin
 
   const paint = useCallback((): void => {
     const active = activeRef.current;
-    if (active) active.graph.renderer().render(active.graph.scene(), active.graph.camera());
+    if (active) {
+      active.graph.renderer().render(active.graph.scene(), active.graph.camera()); active.updateLabels();
+      if (hostRef.current) {
+        hostRef.current.dataset.paintedSize = `${active.graph.width()}:${active.graph.height()}`;
+        hostRef.current.dataset.paintedAspect = String(active.graph.camera().aspect);
+      }
+    }
   }, []);
+
+  const fitGraph = useCallback((graph: StageGraph, duration = 0): void => {
+    if (graph.graphData().nodes.length === 1) {
+      const camera = graph.cameraPosition(), ratio = 160 / Math.hypot(camera.x, camera.y, camera.z);
+      graph.cameraPosition({ x: camera.x * ratio, y: camera.y * ratio, z: camera.z * ratio }, { x: 0, y: 0, z: 0 }, duration);
+    } else graph.zoomToFit(duration, 48);
+  }, []);
+
+  const refreshGraph = useCallback((): void => {
+    const active = activeRef.current;
+    if (!active) return;
+    // 색 갱신으로 mesh를 재생성하면 hover 직후 click의 raycast 대상이 사라진다.
+    active.settled = false;
+    active.graph.nodeColor(node => active.colorNode(node));
+    active.graph.resumeAnimation();
+    setRenderState("active");
+  }, []);
+
+  useEffect(() => {
+    const active = activeRef.current;
+    if (!active) return;
+    active.graph.linkVisibility(link => !isRenderLink(link) || !hiddenRelations?.includes(link.kind));
+    refreshGraph();
+  }, [hiddenRelations, refreshGraph]);
 
   const focusNode = useCallback((rendererId: string): void => {
     const active = activeRef.current;
@@ -49,8 +82,8 @@ export function useKnowledgeGraphEngine(request: GraphEngineRequest): GraphEngin
     setSelectedRendererId(node.renderer_id);
     callbackRef.current?.(node);
     focusNode(node.renderer_id);
-    activeRef.current?.graph.refresh();
-  }, [focusNode]);
+    refreshGraph();
+  }, [focusNode, refreshGraph]);
 
   // OrbitControls disconnects from domElement.getRootNode(). Layout cleanup must
   // dispose the engine before React detaches that root (including StrictMode replay).
@@ -66,7 +99,7 @@ export function useKnowledgeGraphEngine(request: GraphEngineRequest): GraphEngin
       return;
     }
 
-    let mounted = true;
+    let mounted = true, fitted = false, resizeFrame = false;
     let observer: ResizeObserver | null = null;
     let canvasSizeObserver: MutationObserver | null = null;
     let canvas: HTMLCanvasElement | null = null;
@@ -83,8 +116,9 @@ export function useKnowledgeGraphEngine(request: GraphEngineRequest): GraphEngin
       canvasSizeObserver?.disconnect();
       canvas?.removeEventListener("webglcontextlost", fail);
       if (renderOnce) {
-        canvas?.removeEventListener("pointermove", renderOnce);
-        canvas?.removeEventListener("pointerdown", renderOnce);
+        host.removeEventListener("pointermove", renderOnce);
+        host.removeEventListener("pointerdown", renderOnce);
+        host.removeEventListener("pointerup", renderOnce);
       }
       if (controls) {
         if (controlChange) controls.removeEventListener("change", controlChange);
@@ -139,7 +173,47 @@ export function useKnowledgeGraphEngine(request: GraphEngineRequest): GraphEngin
         citation: computed.getPropertyValue("--of-graph-citation").trim(),
         derived: computed.getPropertyValue("--of-graph-derived").trim(),
       };
-      const current: ActiveGraph = { graph: instance, controls: candidateControls, nodes: renderNodes, settled: false, wakeFrame: 0 };
+      const colorNode = (node: NodeObject): string => {
+        if (!isRenderNode(node)) return colors.document;
+        if (node.render_id === selectedRef.current) return colors.selected;
+        if (node.title === hoveredRef.current && hoveredRef.current) return colors.hover;
+        if (node.kind === "space" || node.kind === "source") return colors.space;
+        if (node.kind === "concept" || node.kind === "note") return colors.note;
+        if (node.kind === "entity") return colors.ai;
+        return colors.document;
+      };
+      const labelLayer = document.createElement("div");
+      labelLayer.className = "knowledge-graph-stage__labels";
+      host.append(labelLayer);
+      const labels = new Map<string, HTMLSpanElement>();
+      const updateLabels = (): void => {
+        if (!mounted) return;
+        const priority = prepared.nodes.filter(node => node.render_id === selectedRef.current || node.title === hoveredRef.current);
+        const candidates = [...new Map([...priority, ...prepared.nodes.slice(0, 40)].map(node => [node.render_id, node])).values()];
+        for (const label of labels.values()) label.hidden = true;
+        const occupied: { x: number; y: number; width: number; height: number }[] = [];
+        for (const node of candidates) {
+          const position = instance.graph2ScreenCoords(node.x ?? 0, node.y ?? 0, node.z ?? 0);
+          if (position.x < 0 || position.y < 0 || position.x > host.clientWidth || position.y > host.clientHeight) continue;
+          let label = labels.get(node.render_id);
+          if (!label) {
+            label = document.createElement("span"); label.className = "knowledge-graph-stage__label";
+            label.textContent = node.title || "제목 없음"; label.dataset.rendererId = node.render_id;
+            labelLayer.append(label); labels.set(node.render_id, label);
+          }
+          label.hidden = false;
+          const width = label.offsetWidth, height = label.offsetHeight;
+          const placements = ([[12, -height - 12], [-width - 12, -height - 12], [12, 12], [-width - 12, 12]] as const).map(([dx, dy]) => ({
+            x: Math.max(4, Math.min(position.x + dx, host.clientWidth - width - 4)),
+            y: Math.max(4, Math.min(position.y + dy, host.clientHeight - height - 36)), width, height,
+          }));
+          const placement = placements.find(({ x, y }) => !occupied.some(box => x < box.x + box.width + 4 && x + width + 4 > box.x && y < box.y + box.height + 4 && y + height + 4 > box.y));
+          if (!placement) { label.hidden = true; continue; }
+          label.style.transform = `translate(${placement.x}px, ${placement.y}px)`;
+          occupied.push(placement);
+        }
+      };
+      const current: ActiveGraph = { graph: instance, controls: candidateControls, nodes: renderNodes, updateLabels, colorNode, settled: false, wakeFrame: 0 };
       activeRef.current = current;
       renderOnce = (): void => {
         if (!mounted || spinRef.current || !current.settled) return;
@@ -153,19 +227,14 @@ export function useKnowledgeGraphEngine(request: GraphEngineRequest): GraphEngin
           }
         });
       };
-      controlChange = (): void => { if (mounted && current.settled && !spinRef.current) paint(); };
+      controlChange = (): void => { if (!mounted) return; if (current.settled && !spinRef.current) paint(); else updateLabels(); };
       controls.addEventListener("change", controlChange);
       instance.width(Math.max(1, host.clientWidth)).height(Math.max(1, host.clientHeight)).backgroundColor("rgba(0,0,0,0)")
         .showNavInfo(false).nodeId("render_id").linkSource("render_source").linkTarget("render_target")
+        .linkVisibility(link => !isRenderLink(link) || !hiddenRef.current?.includes(link.kind))
         .nodeLabel(() => "").linkLabel(() => "")
         .nodeVal((node) => isRenderNode(node) && node.kind === "space" ? 9 : 5)
-        .nodeColor((node) => {
-          if (!isRenderNode(node)) return colors.document;
-          if (node.render_id === selectedRef.current) return colors.selected;
-          if (node.title === hoveredRef.current && hoveredRef.current) return colors.hover;
-          if (node.kind === "space") return colors.space;
-          return node.kind === "note" ? colors.note : colors.document;
-        })
+        .nodeColor(colorNode)
         .nodeOpacity(0.94).linkColor((link) => isRenderLink(link) ? colors[relationClass(link.kind)] : colors.wiki)
         .linkWidth((link) => isRenderLink(link) && relationClass(link.kind) === "ai" ? 1.7 : 1.1)
         .linkOpacity(0.72).linkCurvature("curvature")
@@ -177,59 +246,56 @@ export function useKnowledgeGraphEngine(request: GraphEngineRequest): GraphEngin
           const title = node && isRenderNode(node) ? prepared.identityMap.get(node.render_id)?.title ?? "" : "";
           hoveredRef.current = title;
           setHoveredTitle(title);
-          instance.refresh();
+          refreshGraph();
         })
         .onNodeClick((node) => {
           if (!mounted || !isRenderNode(node)) return;
           const original = prepared.identityMap.get(node.render_id);
           if (original) selectNode(original);
         })
-        .onEngineTick(() => { if (mounted && !reducedMotion) setEngineState("ready"); })
+        .onEngineTick(() => { if (mounted && !reducedMotion) { updateLabels(); setEngineState("ready"); } })
         .onEngineStop(() => {
           if (!mounted) return;
-          current.settled = true;
-          if (!reducedMotion) setEngineState("ready");
-          if (!spinRef.current) {
-            instance.pauseAnimation();
-            if (!reducedMotion) setRenderState("idle");
-          }
+          // onEngineStop는 mesh 위치 반영 전이다. 해당 tick이 끝난 뒤 맞추고 멈춘다.
+          queueMicrotask(() => {
+            if (!mounted) return;
+            current.settled = true;
+            if (!fitted || resizeFrame) { if (resizeFrame || !selectedRef.current) fitGraph(instance); fitted = true; resizeFrame = false; }
+            if (!spinRef.current) { instance.pauseAnimation(); setRenderState("idle"); }
+            paint();
+            setEngineState("ready");
+          });
         }).graphData({ nodes: prepared.nodes, links: prepared.links });
       if (renderOnce) {
-        canvas?.addEventListener("pointermove", renderOnce, { passive: true });
-        canvas?.addEventListener("pointerdown", renderOnce, { passive: true });
+        // 엔진 내부 container가 pointer 좌표를 먼저 반영한 뒤 raycast를 깨운다.
+        host.addEventListener("pointermove", renderOnce, { passive: true });
+        host.addEventListener("pointerdown", renderOnce, { passive: true });
+        host.addEventListener("pointerup", renderOnce, { passive: true });
       }
       // Kapsule applies width/height asynchronously. Repaint after the actual
       // drawing-buffer resize, not before the deferred update clears it.
       canvasSizeObserver = new MutationObserver(() => {
-        if (mounted && current.settled && !spinRef.current) paint();
+        if (!mounted || !current.settled) return;
+        if (resizeFrame) { fitGraph(instance); resizeFrame = false; }
+        paint();
       });
       canvasSizeObserver.observe(instanceCanvas, { attributes: true, attributeFilter: ["width", "height"] });
       observer = new ResizeObserver(() => {
         if (!mounted) return;
-        instance.width(Math.max(1, host.clientWidth)).height(Math.max(1, host.clientHeight));
+        const width = Math.max(1, host.clientWidth), height = Math.max(1, host.clientHeight);
+        if (instance.width() === width && instance.height() === height) return;
+        resizeFrame = true;
+        instance.width(width).height(height);
       });
       observer.observe(host);
-      if (reducedMotion) {
-        current.settled = true;
-        current.wakeFrame = requestAnimationFrame(() => {
-          current.wakeFrame = requestAnimationFrame(() => {
-            current.wakeFrame = 0;
-            if (!mounted) return;
-            instance.pauseAnimation();
-            instance.zoomToFit(0, 48);
-            paint();
-            setEngineState("ready");
-            setRenderState("idle");
-          });
-        });
-      } else {
+      if (!reducedMotion) {
         setEngineState("ready");
         setRenderState("active");
       }
     }).catch(fail);
 
     return releaseGraph;
-  }, [data, paint, reducedMotion, scopeKey, selectNode]);
+  }, [data, fitGraph, paint, reducedMotion, refreshGraph, scopeKey, selectNode]);
 
   useEffect(() => {
     const active = activeRef.current;
@@ -258,7 +324,7 @@ export function useKnowledgeGraphEngine(request: GraphEngineRequest): GraphEngin
     if (transition === 0) paint();
   };
   const fit = (): void => {
-    activeRef.current?.graph.zoomToFit(reducedMotion || !spinRef.current ? 0 : 240, 48);
+    if (activeRef.current) fitGraph(activeRef.current.graph, reducedMotion || !spinRef.current ? 0 : 240);
     if (!spinRef.current) paint();
   };
   return { hostRef, engineState, renderState, autoRotate, selectedRendererId, hoveredTitle, selectNode, moveCamera, fit, toggleAutoRotate: () => setAutoRotate((current) => !current) };

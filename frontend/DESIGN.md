@@ -123,7 +123,12 @@ Pretendard → Noto Sans KR → system-ui.
 - 개인 Vault와 회사 문서 그래프는 같은 `KnowledgeGraphStage`(pinned `3d-force-graph@1.80.0`, `three@0.185.1`)와 legend·필터·색 규칙을 공유한다. 조직도·결재 diagram은 force graph로 바꾸지 않는다.
 - 관계는 citation(directed), manual, ai_derived, ai_similarity, space/membership을 서로 다른 시각 규칙과 provenance로 구분한다. parallel edge와 방향을 합치지 않으며 AI 파생 근거를 AI 유사도로 표시하지 않는다.
 - WebGL 불가·엔진 import 실패·context loss는 정직한 오류 문구와 키보드 semantic 목록으로 대체한다. `prefers-reduced-motion`이면 autorotate·layout animation·camera tween을 끈다. route unmount 때 renderer/RAF/listener/objectURL을 정리한다.
-- 레이아웃·camera는 reload 시 초기화되는 기본 계약이고, 내용·링크만 서버가 유지한다. "모든 링크가 영구 저장"이라고 쓰지 않는다.
+- 레이아웃·camera는 reload 시 초기화되는 기본 계약이고, 내용·링크만 서버가 유지한다. "모든 링크가 영구 저장"이라고 쓰지 않는다. 같은 scope의 관계 필터와 제목 검색은 renderer·시점·선택을 유지한다. scope 변경은 검색·필터·선택을 초기화한다. 화면 크기 변경은 실제 drawing buffer·camera aspect 반영 후 전체 노드를 다시 맞추며 선택은 보존한다.
+- 그래프는 실제 엔진의 배치 완료 이후 화면 맞춤을 한다. reduced motion도 mesh 위치가 반영된 정적 3D를 보여준 뒤 RAF를 중지한다. 캔버스 아래 유형 범례(원본=본문색, 개념=AI색, 대상=성공색, 위키=주요색), 제목 검색, 방향·관계 의미를 읽을 수 있는 연결 목록을 둔다. 로딩·빈 상태에서는 시점 버튼을 비활성화한다. 실제 3D 좌표를 투영한 DOM 제목 라벨을 캔버스 위에 붙이며 선택·hover를 우선한다. 겹침을 피하고 기본 40개 범위를 표시하되 모든 전체 제목은 검색 목록에서 접근한다. 라벨은 안전한 textContent이며 12px, 최대 176px 말줄임을 사용한다. 모바일 캔버스는 280px로 줄이고 터치 버튼 크기는 유지한다. 단일 노드는 화면 전체를 채우도록 확대하지 않고 camera 거리 160으로 표시한다.
+- 게시 위키가 있고 진행 작업·검토가 없으면 자료 등록·조사 패널은 요약 행으로 접는다. 원본 수·선택 수를 표시하고 사용자가 명시적으로 펼칠 수 있다. 처음 사용하는 빈 위키와 진행 작업에서는 조사 패널을 펼쳐 흐름을 유지한다.
+- 원본 상세는 supporting-pane 구조(https://raw.githubusercontent.com/changeroa/StyleGallery/main/patterns/split-sidebar/supporting-pane.md)를 유지한다. 페이지가 스크롤을 소유하고 노드/관계 목록만 208px 상한으로 내부 스크롤한다. 좁은 그래프 컨테이너에서는 목록을 세로 배치하며 모바일 조작·범례 label은 44px이다.
+- 개인 클라우드 전송 확인은 입력별 실제 제목·유형·존재하는 판·등급을 먼저 보여준다. compiler 지침·schema·catalog·질문은 각각의 입력 유형으로 표시하며 문서 제목이나 버전을 합성하지 않는다. 입력 요약과 정확한 전체 scope JSON은 각각 320px 내부 스크롤을 가지며 전체 scope는 기본 접힘이다. 요약은 13px 제목/11px 메타, 기존 보더·경고색·44px 모바일 제어를 사용한다. actor·만료·scope hash·미체크 승인·취소를 유지하며 전송 동의는 게시 승인과 분리한다. 미리보기 패널은 조사 접기 영역 바깥에 둔다.
+- 인용 버튼은 출처 제목과 고정 판 열기를 우선하고, revision/hash/UTF-8 byte 위치는 접힌 검증 정보로 유지한다. 인용 내용은 검증한 정확한 구간만 강조한다. 게시 digest는 검토 화면에서 계속 직접 표시한다. 네이티브 체크박스·focus-visible을 사용하며 새 모션 라이브러리는 추가하지 않는다(beui.dev checkbox의 상태·비활성·접근성 계약 참고).
 - Wiki 화면은 원본 → 검토 전 조사 → 초안 검토 → 명시적 게시 순서를 상단에 고정 문구로 보인다. 결과에는 "검토 전 모델 생성 결과"와 인용 상태(`인용 위치 확인됨 · 사실 검증 아님` / `근거 없음`)를 함께 표시한다.
 - job 상태는 접수됨/조사 중/완료·검토 전/실패/사용 불가로 표시한다. 모델 부재의 "사용 불가"는 답변이나 게시물이 아니며 게시된 위키 읽기와 원본 등록은 계속 가능하다는 문구를 유지한다.
 - 게시 버튼은 서버 digest를 사용자가 확인(체크)하고 freshness가 `current`일 때만 활성화한다. 초안은 일반 목록·그래프에 나오지 않고 검토 영역에만 보인다. `stale`/`unavailable`(`SOURCE_REVOKED`)은 배지 텍스트로 구분한다.

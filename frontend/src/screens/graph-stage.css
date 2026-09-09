@@ -1,5 +1,10 @@
 /* 3D 그래프 화면 공용 레이아웃 (Vault 그래프 · 조직 지식 그래프) */
-.graph-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+.graph-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+.graph-loading { min-height: 180px; display: grid; align-items: center; margin: 0; color: var(--of-text-muted); }
+.graph-meta-summary { color: var(--of-text-muted); font-size: 12px; }
+.graph-detail-empty { color: var(--of-text-muted); line-height: 1.7; word-break: keep-all; }
+.graph-detail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; }
+.graph-detail-actions a { display: inline-flex; align-items: center; min-height: 44px; font-size: 12px; color: var(--of-primary); }
 
 .graph-stage {
   position: relative;

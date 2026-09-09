@@ -1,21 +1,55 @@
-.wiki-workspace { display: grid; gap: 24px; min-width: 0; margin-top: 24px; }
-.wiki-workspace > section, .wiki-workspace > header, .wiki-workspace__columns > section { min-width: 0; padding: 20px; border: 1px solid var(--of-border); border-radius: var(--r-md); background: var(--of-card); }
+.wiki-workspace { display: grid; gap: 16px; min-width: 0; margin-top: 24px; font-size: 13px; }
+.wiki-workspace h2 { font-size: 20px; letter-spacing: -0.02em; }
+.wiki-workspace h3 { font-size: 16px; }
+.wiki-workspace :is(p, label, h2, h3, h4, button, summary) { word-break: keep-all; overflow-wrap: anywhere; }
+.wiki-research > summary { color: var(--of-text); font-size: 13px; font-weight: 700; }
+.wiki-research > summary small { margin-left: 8px; color: var(--of-text-muted); font-size: 11px; font-weight: 500; }
+.wiki-research .wiki-workspace__columns > section { border: 0; padding: 16px 0 0; }
+.wiki-jobs--empty { display: grid; gap: 4px; }
+.wiki-jobs--empty h3, .wiki-jobs--empty p { margin: 0; }
+.wiki-workspace__steps { display: flex; flex-wrap: wrap; gap: 8px 20px; list-style: none; padding: 0; margin: 16px 0; color: var(--of-text); }
+.wiki-workspace__steps li { display: flex; align-items: center; gap: 8px; }
+.wiki-workspace__steps b { display: grid; place-items: center; width: 24px; height: 24px; border: 1px solid var(--of-border); border-radius: var(--r-sm); background: var(--of-surface-muted); color: var(--of-primary); font-size: 12px; }
+.wiki-workspace summary { cursor: pointer; color: var(--of-text-muted); font-size: 12px; padding: 8px 0; }
+.wiki-workspace summary:focus-visible { outline: 2px solid var(--of-primary); outline-offset: 2px; }
+.wiki-workspace button:disabled { cursor: not-allowed; opacity: 0.56; }
+.wiki-workspace button:not(:disabled):hover { border-color: var(--of-primary); }
+.wiki-workspace .button + .button { margin-left: 8px; margin-top: 8px; }
+.wiki-freshness { display: inline-block; padding: 2px 6px; border-radius: var(--r-sm); background: var(--of-surface-muted); color: var(--of-text-muted); font-size: 11px; }
+.wiki-workspace [data-freshness="stale"] { color: var(--of-warning); }
+.wiki-workspace [data-freshness="unavailable"] { color: var(--of-danger); }
+.wiki-pages { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 8px; margin: 12px 0; padding: 0; list-style: none; }
+.wiki-pages button { display: grid; gap: 8px; width: 100%; text-align: left; }
+.wiki-pages span { color: var(--of-text-muted); font-size: 11px; }
+.wiki-projections { margin-bottom: 16px; }
+.wiki-revision__verification { margin-bottom: 16px; border-bottom: 1px solid var(--of-border); }
+.wiki-revision .md-body { margin: 16px 0; }
+.wiki-revision mark { background: var(--of-surface-muted); color: var(--of-text); text-decoration: underline; text-decoration-color: var(--of-warning); text-decoration-thickness: 2px; }
+.wiki-review__links { padding-left: 20px; color: var(--of-text-muted); line-height: 1.6; }
+.wiki-workspace > section, .wiki-workspace > header, .wiki-workspace > .wiki-research, .wiki-workspace__columns > section { min-width: 0; padding: 16px; border: 1px solid var(--of-border); border-radius: var(--r-md); background: var(--of-card); }
 .wiki-workspace h2, .wiki-workspace h3, .wiki-workspace h4 { margin-top: 0; }
 .wiki-workspace p { color: var(--of-text-muted); line-height: 1.6; }
 .wiki-workspace__columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; min-width: 0; }
 .wiki-workspace input:not([type=checkbox]), .wiki-workspace textarea { display: block; width: 100%; max-width: 100%; box-sizing: border-box; }
 .wiki-workspace textarea { min-height: 100px; }
 .wiki-workspace input[type=checkbox] { width: 18px; height: 18px; min-height: 18px; display: inline-block; vertical-align: middle; margin-right: 8px; }
-.wiki-workspace .form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.wiki-workspace .form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.wiki-workspace .form-actions > label { min-width: 0; max-width: 100%; }
+.wiki-workspace .form-actions .button { margin: 0; }
+.wiki-workspace label:has(input[type=checkbox]) { min-height: 32px; display: inline-flex; flex-wrap: wrap; align-items: center; }
 .wiki-workspace button:not(.button) { padding: 6px 10px; border: 1px solid var(--of-border-strong); border-radius: var(--r-sm); background: var(--of-card); color: var(--of-text); }
 .wiki-workspace button { max-width: 100%; min-height: 36px; cursor: pointer; white-space: normal; overflow-wrap: anywhere; }
 .wiki-workspace button:focus-visible, .wiki-workspace input:focus-visible, .wiki-workspace mark:focus-visible { outline: 2px solid var(--of-primary); outline-offset: 3px; }
 .wiki-workspace code, .wiki-workspace pre { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .wiki-workspace pre { max-height: 420px; overflow: auto; }
 .wiki-workspace article { margin-top: 16px; padding: 12px; border: 1px solid var(--of-border); border-radius: var(--r-sm); }
-.wiki-sources { max-height: 420px; overflow: auto; padding-left: 20px; }
-.wiki-sources li { display: grid; gap: 6px; margin-bottom: 16px; overflow-wrap: anywhere; }
-.wiki-citations li { margin-bottom: 8px; }
+.wiki-sources { max-height: 420px; overflow: auto; margin: 16px 0 0; padding: 0; list-style: none; }
+.wiki-sources li { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; padding-top: 12px; border-top: 1px solid var(--of-border); overflow-wrap: anywhere; }
+.wiki-sources li > label:first-child { width: 100%; gap: 4px; }
+.wiki-citations { padding: 0; list-style: none; }
+.wiki-citations li { margin-bottom: 8px; padding: 8px; border-left: 3px solid var(--of-primary); background: var(--of-surface); }
+.wiki-citations button { text-align: left; }
+.wiki-citations summary { font-size: 11px; }
 .wiki-citations code { display: block; }
 .wiki-review { border-left: 4px solid var(--of-warning) !important; }
-@media (max-width: 768px) { .wiki-workspace__columns { grid-template-columns: minmax(0, 1fr); } .wiki-workspace button { min-height: 44px; } .wiki-workspace > section, .wiki-workspace > header, .wiki-workspace__columns > section { padding: 12px; } }
+@media (max-width: 768px) { .wiki-workspace summary, .wiki-workspace label:has(input[type=checkbox]) { min-height: 44px; box-sizing: border-box; } .wiki-workspace__columns { grid-template-columns: minmax(0, 1fr); } .wiki-workspace button { min-height: 44px; } .wiki-workspace > section, .wiki-workspace > header, .wiki-workspace__columns > section { padding: 12px; } }

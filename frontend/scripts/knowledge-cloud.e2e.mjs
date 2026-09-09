@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, copyFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 import { preview } from 'vite';
 import { exerciseKnowledgeCloud } from '../../backend/tests/knowledge-cloud-scenarios.js';
+import { captureGraphSurface, observeGraphRendering } from './graph-ui-capture.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const mode=process.argv[2] ?? 'legacy';
@@ -34,6 +35,7 @@ await exerciseKnowledgeCloud(mode,{surface:async(f,wire)=>{
     await context.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort('blockedbyclient'));
     await context.addInitScript(session=>{sessionStorage.setItem('orbitflow.session.v1',JSON.stringify(session));localStorage.setItem('orbitflow.demoMode','0');},
       {token:f.a.token,orgId:f.a.orgId,name:'Synthetic browser',email:'synthetic@example.invalid',mustChangePassword:false,organizations:[]});
+    await observeGraphRendering(context);
     const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));
     const graphResponse=page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1${f.prefix}/documents/graph`,{timeout:20000});
     await page.goto(origin+'/documents/graph',{waitUntil:'domcontentloaded'});assert.equal((await graphResponse).status(),200);
@@ -63,18 +65,35 @@ await exerciseKnowledgeCloud(mode,{surface:async(f,wire)=>{
     assert.equal((await f.api.request(f.a,`${f.prefix}/documents/${uploaded.id}/analysis?wait=1`)).state,'ready');
     await arm(page,'[data-document-analysis]');
     await page.locator('.graph-layout .knowledge-graph-stage__nodes').getByRole('button',{name:/Browser embeddings/}).click();await done(page);
-    // 업로드 직후 그래프 응답은 pending일 수 있다. 버튼의 실제 완료 응답으로 상태를 갱신한다.
-    const analyzed=page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1${f.prefix}/documents/${uploaded.id}/analysis`&&r.request().method()==='POST',{timeout:20000});
-    await page.getByRole('button',{name:'유사도 다시 분석',exact:true}).click();assert.equal((await(await analyzed).json()).state,'ready');
+    // 기존 ready/unavailable이 아니라 이 POST와 후속 GET으로 생긴 새 canvas를 기다린다.
+    async function reanalyze(expected) {
+      await page.evaluate(expected=>{
+        const previous=document.querySelector('.graph-layout canvas');
+        window.__analysisResultPaint=new Promise((resolve,reject)=>{
+          const observer=new MutationObserver(check),timer=setTimeout(()=>{observer.disconnect();reject(new Error('analysis generation deadline'));},20000);
+          function check(){const stage=document.querySelector('.graph-layout .knowledge-graph-stage'),canvas=stage?.querySelector('canvas'),analysis=document.querySelector('[data-document-analysis]');
+            if(canvas&&canvas!==previous&&stage.dataset.engineState==='ready'&&stage.dataset.renderState==='idle'&&analysis?.getAttribute('data-document-analysis')===expected&&!analysis.nextElementSibling.disabled){clearTimeout(timer);observer.disconnect();resolve();}}
+          observer.observe(document.documentElement,{childList:true,subtree:true,attributes:true});check();
+        });
+      },expected);
+      const analyzed=page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1${f.prefix}/documents/${uploaded.id}/analysis`&&r.request().method()==='POST',{timeout:20000});
+      const refreshed=page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1${f.prefix}/documents/graph`&&r.request().method()==='GET',{timeout:20000});
+      await page.getByRole('button',{name:'유사도 다시 분석',exact:true}).click();
+      assert.equal((await(await analyzed).json()).state,expected);
+      assert.equal((await(await refreshed).json()).analysis.find(item=>item.id===uploaded.id).state,expected);
+      await page.evaluate(()=>window.__analysisResultPaint);
+    }
+    await reanalyze('ready');
     delete process.env.ORBITFLOW_DOCUMENT_OPENROUTER_EMBEDDING_MODEL;
-    await arm(page,'[data-document-analysis="unavailable"]');await page.getByRole('button',{name:'유사도 다시 분석',exact:true}).click();await done(page);
+    await reanalyze('unavailable');
     assert.ok((await page.locator('[data-document-analysis]').textContent()).includes('ORBITFLOW_DOCUMENT_OPENROUTER_EMBEDDING_MODEL'));
     process.env.ORBITFLOW_DOCUMENT_OPENROUTER_EMBEDDING_MODEL='synthetic-embedding';
-    await arm(page,'[data-document-analysis="ready"]');await page.getByRole('button',{name:'유사도 다시 분석',exact:true}).click();await done(page);
+    await reanalyze('ready');
     assert.ok(wire.calls.some(c=>c.path==='/embeddings'&&c.authorization==='Bearer synthetic-browser-personal'&&JSON.stringify(c.body).includes('SYNTHETIC_BROWSER_EMBEDDING')));
-    await page.screenshot({path:path.join(evidence,mode+'.png'),fullPage:true,animations:'disabled'});
+    const captures=await captureGraphSurface(page,evidence,mode+'-graph-ready');
+    await copyFile(path.join(evidence,captures[0].file),path.join(evidence,mode+'.png'));
     assert.deepEqual(errors,[]);
-    const result={mode,browser:browser.version(),surface:'built SPA /documents/graph',wiki:'cloud query, exact citation, unreviewed draft, publish disabled without confirmation',documents:'cloud embeddings, actionable missing-model result, explicit retry',errors};
+    const result={mode,browser:browser.version(),surface:'built SPA /documents/graph',wiki:'cloud query, exact citation, unreviewed draft, publish disabled without confirmation',documents:'cloud embeddings, actionable missing-model result, explicit retry',captures,errors};
     await writeFile(path.join(evidence,mode+'.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
   } finally {await browser?.close();await worker?.stop();if(web)await new Promise((resolve,reject)=>{web.httpServer.close(error=>error?reject(error):resolve());web.httpServer.closeAllConnections();});}
 }});

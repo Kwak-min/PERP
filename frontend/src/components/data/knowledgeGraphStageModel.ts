@@ -97,6 +97,20 @@ export function relationLabel(kind: KnowledgeGraphRelation): string {
   }
 }
 
+export function nodeKindLabel(kind: StageGraphIdentity["kind"]): string {
+  return { note: "개인 노트", document: "문서", space: "프로젝트·공간", source: "원본", page: "위키", entity: "대상", concept: "개념" }[kind];
+}
+
+export function predicateLabel(predicate: unknown): string | null {
+  switch (predicate) {
+    case "related": return "관련 있음";
+    case "supports": return "뒷받침함";
+    case "contradicts": return "상충함";
+    case "supersedes": return "대체함";
+    default: return null;
+  }
+}
+
 export function prepareKnowledgeGraph(data: KnowledgeGraphStageData): PreparedKnowledgeGraph {
   const identityMap = new Map(data.nodes.map((node) => [node.renderer_id, node]));
   const nodes = data.nodes.map((node): KnowledgeGraphRenderNode => ({

@@ -44,7 +44,7 @@ try {
   const space=mode==='legacy'?await f.api.request(f.a,'/documents/spaces','POST',{name:'Task28 typed space'},201):null;
   const document=await f.api.request(f.a,prefix+'/documents','POST',{title:'Task28 원본 문서',...(project?{project_id:project.id,content_md:originalText}:{visibility:'org',content:originalText,space_id:space.id})},201);
   const roles={};
-  for(const [name,permissions] of Object.entries({reader:['menu.documents','document.read'],writer:['menu.documents','document.read','document.write'],denied:['menu.home']})) roles[name]=await f.api.request(f.a,'/settings/roles','POST',{name:'Task28 '+name,scope:'all',permissions},201);
+  for(const [name,permissions] of Object.entries({reader:['menu.documents','menu.knowledge','document.read'],writer:['menu.documents','menu.knowledge','document.read','document.write'],denied:['menu.home']})) roles[name]=await f.api.request(f.a,'/settings/roles','POST',{name:'Task28 '+name,scope:'all',permissions},201);
   let reader;
   if(mode==='pg') {
     const user=await f.api.request(f.a,'/pg/members','POST',{email:'task28-reader@example.invalid',name:'Task28 reader',password:'password-1234'},201);
@@ -164,7 +164,7 @@ try {
   async function reloadPublished(expected) {
     await page.reload({waitUntil:'domcontentloaded'});
     await arm(page,`[data-wiki-workspace][data-loading="false"] [data-page-id="${expected.id}"][data-page-revision-id="${expected.revision_id}"]`);await done(page);
-    await after(page,`.wiki-revision[data-revision-id="${expected.revision_id}"]`,()=>page.getByRole('button',{name:/한글 · page · 게시됨/}).click());
+    await after(page,`.wiki-revision[data-revision-id="${expected.revision_id}"]`,()=>page.locator(`[data-page-id="${expected.id}"]`).click());
   }
   await reloadPublished(published);
   await page.getByRole('button',{name:'게시 이력 보기',exact:true}).click();
@@ -181,12 +181,28 @@ try {
   await reloadPublished(manualPublished);
   assert.ok((await page.locator('.wiki-revision').innerText()).includes('Task28 사용자가 수정한 누적 위키'));
   await capture(page,'published');result.checks.push('reload published graph; published history; manual edit produces review draft; explicit republish and reload');
-  await page.getByRole('button',{name:'위키 수동 편집',exact:true}).click();await page.getByLabel('위키 편집 본문').fill('TASK28-STALE-DRAFT');await page.getByRole('button',{name:'수동 변경을 검토 초안으로 저장'}).click();await arm(page,'[data-review-id]');await done(page);
-  const staleId=await page.locator('[data-review-id]').getAttribute('data-review-id');const currentPage=await f.api.request(reader,`${f.root}/pages/${published.id}`);
+  await page.getByRole('button',{name:'위키 수동 편집',exact:true}).click();await page.getByLabel('위키 편집 본문').fill('TASK28-STALE-DRAFT');
+  const staleDraftResponse=page.waitForResponse(r=>new URL(r.url()).pathname===`/api/v1${f.root}/pages/${published.id}/change-sets`&&r.request().method()==='POST');
+  await page.getByRole('button',{name:'수동 변경을 검토 초안으로 저장'}).click();
+  const staleId=(await(await staleDraftResponse).json()).id;await arm(page,`[data-review-id="${staleId}"]`);await done(page);
+  const currentPage=await f.api.request(reader,`${f.root}/pages/${published.id}`);
   const competitor=await f.api.request(reader,`${f.root}/pages/${published.id}/change-sets`,'POST',{expected_version:currentPage.version,title:currentPage.title,markdown:currentPage.markdown},201);
   const competitorReview=await f.api.request(reader,`${f.root}/change-sets/${competitor.id}`);
+  // Hold the actual reviewed request before the competitor commits; do not race SSE invalidation.
+  const staleRequestHeld=Promise.withResolvers(),staleRequestRelease=Promise.withResolvers();
+  await research.context.route(`**/wiki/change-sets/${staleId}/publish`,async route=>{staleRequestHeld.resolve();await bounded(staleRequestRelease.promise,'stale publication release');await route.continue();},{times:1});
+  await page.getByLabel('이 정확한 변경 묶음 게시 확인').check();
+  const stalePublish=page.waitForResponse(r=>r.url().endsWith(`/change-sets/${staleId}/publish`));
+  await page.getByRole('button',{name:'명시적으로 게시'}).click();await bounded(staleRequestHeld.promise,'reviewed publication held');
   const competing=await fetch(f.api.baseUrl+`${f.root}/change-sets/${competitor.id}/publish`,{method:'POST',headers:{Authorization:`Bearer ${reader.token}`,'X-Org-Id':reader.orgId,'Content-Type':'application/json','Idempotency-Key':randomUUID()},body:JSON.stringify({manifest_hash:competitorReview.manifest_hash,confirmed:true}),signal:AbortSignal.timeout(10000)});assert.equal(competing.status,200);
-  await page.getByLabel('이 정확한 변경 묶음 게시 확인').check();const stalePublish=page.waitForResponse(r=>r.url().endsWith(`/change-sets/${staleId}/publish`));await page.getByRole('button',{name:'명시적으로 게시'}).click();assert.equal((await stalePublish).status(),409);
+  staleRequestRelease.resolve();const staleResponse=await stalePublish;assert.equal(staleResponse.status(),409);
+  assert.equal((await staleResponse.json()).error.code,'SOURCE_REVOKED');
+  await arm(page,'[data-wiki-workspace]:not([data-access-epoch="0"])');await done(page);
+  assert.equal(await page.locator('[data-review-id]').count(),0,'SOURCE_REVOKED clears the private review projection');
+  // The immutable draft is still stored; explicitly reauthorize it instead of retaining revoked UI data.
+  const savedStale=await f.api.request(reader,`${f.root}/change-sets/${staleId}`);assert.equal(savedStale.proposed_revisions[0].markdown,'TASK28-STALE-DRAFT');
+  await page.getByText('저장한 작업·초안 다시 열기',{exact:true}).click();await page.getByLabel('저장한 초안 ID',{exact:true}).fill(staleId);
+  await after(page,`[data-review-id="${staleId}"]`,()=>page.getByRole('button',{name:'인가된 초안 다시 열기'}).click());
   assert.ok((await page.locator('[data-review-id]').innerText()).includes('TASK28-STALE-DRAFT'));
   const rejected=page.waitForResponse(r=>r.url().endsWith(`/change-sets/${staleId}/reject`));await page.getByRole('button',{name:'이 묶음 거절'}).click();assert.equal((await rejected).status(),200);
   assert.equal((await f.api.request(reader,`${f.root}/change-sets/${staleId}`)).state,'rejected');
@@ -239,13 +255,14 @@ try {
   await capture(page,'revoked-uncited');result.checks.push('uncited dependency withdrawal removes private result/draft/published title/body/graph; delayed old HTTP result cannot repopulate');
 
   await admin.page.reload({waitUntil:'domcontentloaded'});await arm(admin.page,'[data-wiki-workspace][data-loading="false"]');await done(admin.page);
+  if(await admin.page.locator('.wiki-research').getAttribute('open')===null)await admin.page.locator('.wiki-research > summary').click();
   await admin.page.getByLabel('조사 원본 Task28 합성 원본.md',{exact:true}).check();
   const compiledResponse=admin.page.waitForResponse(r=>r.url().endsWith('/wiki/jobs')&&r.request().method()==='POST');await admin.page.getByRole('button',{name:'선택 원본 위키 초안 생성'}).click();const compiled=await(await compiledResponse).json();
   await arm(admin.page,`[data-job-id="${compiled.id}"][data-job-state="succeeded"]`);await done(admin.page);await admin.page.getByRole('button',{name:'생성 초안 검토'}).click();await arm(admin.page,'[data-review-id]');await done(admin.page);
   const compiledId=await admin.page.locator('[data-review-id]').getAttribute('data-review-id');await admin.page.getByLabel('이 정확한 변경 묶음 게시 확인').check();const compiledPublish=admin.page.waitForResponse(r=>r.url().endsWith(`/change-sets/${compiledId}/publish`));await admin.page.getByRole('button',{name:'명시적으로 게시'}).click();assert.equal((await compiledPublish).status(),200);
   const publishedGraph=await f.api.request(f.a,f.root+'/graph');assert.ok(['source','page','entity','concept'].every(kind=>publishedGraph.nodes.some(n=>n.kind===kind)));
   const derived=publishedGraph.edges.filter(edge=>edge.type==='ai_derived');assert.equal(derived.length,4);assert.ok(derived.some(edge=>edge.direction==='undirected'));assert.equal(derived.filter(edge=>edge.predicate==='supports'||edge.predicate==='contradicts').length,2);
-  await admin.page.getByRole('button',{name:/Task28 entity · entity · 게시됨/}).click();await arm(admin.page,'.wiki-revision');await done(admin.page);
+  await admin.page.locator(`[data-page-id="${publishedGraph.nodes.find(node=>node.kind==='entity').page_id}"]`).click();await arm(admin.page,'.wiki-revision');await done(admin.page);
   await admin.page.getByRole('button',{name:'위키 수동 편집',exact:true}).click();await admin.page.getByLabel('위키 편집 본문').fill('Task28 editable entity');const entityDraft=admin.page.waitForResponse(r=>r.url().endsWith('/change-sets')&&r.request().method()==='POST');await admin.page.getByRole('button',{name:'수동 변경을 검토 초안으로 저장'}).click();const entityId=(await(await entityDraft).json()).id;await arm(admin.page,`[data-review-id="${entityId}"]`);await done(admin.page);
   assert.equal((await f.api.request(f.a,`${f.root}/change-sets/${entityId}`)).proposed_revisions[0].kind,'entity');
   await capture(admin.page,'typed-directed-parallel');result.checks.push('actual HTTP compiler creates source/page/entity/concept graph; AI-derived directed/undirected parallel relations retained; entity is editable Wiki page');
@@ -254,7 +271,7 @@ try {
   restarted.stderr.on('data',chunk=>console.error(chunk.toString()));
   const ready=await ipc(restarted,'ready');assert.notEqual(ready.pid,process.pid);assert.ok(!protectedPorts.has(ready.port));proxyOptions.target=`http://127.0.0.1:${ready.port}`;
   const opened=ipc(restarted,'stream-open');await page.reload({waitUntil:'domcontentloaded'});const firstStream=await opened;assert.equal(firstStream.hasBearer,true);
-  await page.getByRole('button',{name:/한글 · page · 게시됨/}).click();await arm(page,'.wiki-revision');await done(page);
+  await page.locator(`[data-page-id="${published.id}"]`).click();await arm(page,'.wiki-revision');await done(page);
   assert.ok((await page.locator('.wiki-revision').innerText()).includes('Task28 사용자가 수정한 누적 위키'));
   await arm(page,'[data-wiki-workspace][data-loading="false"]');await done(page);
   const reconnected=ipc(restarted,'stream-open');restarted.send({type:'close-streams'});const nextStream=await reconnected;

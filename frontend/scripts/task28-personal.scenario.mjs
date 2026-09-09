@@ -86,13 +86,13 @@ export async function personalWikiScenario({ f, mode, open, arm, done, after, ca
   }
   async function loaded() { await arm(page, '[data-wiki-workspace][data-loading="false"]'); await done(page); }
   async function reopen(kind, id) {
-    const details = page.locator('[data-wiki-workspace] details').first();
+    const details = page.locator('[data-wiki-workspace] details').filter({ has: page.getByLabel('저장한 작업 ID', { exact: true }) });
     if (await details.getAttribute('open') === null) await details.locator('summary').click();
     await page.getByLabel(kind === 'job' ? '저장한 작업 ID' : '저장한 초안 ID', { exact: true }).fill(id);
     await after(page, kind === 'job' ? `[data-job-id="${id}"][data-job-state="succeeded"]` : `[data-review-id="${id}"]`, () => page.getByRole('button', { name: kind === 'job' ? '인가된 작업 다시 열기' : '인가된 초안 다시 열기' }).click());
   }
   async function selectPublished(revision) {
-    await after(page, `.wiki-revision[data-revision-id="${revision}"]`, () => page.getByRole('button', { name: new RegExp(`${title} · page · 게시됨`) }).click());
+    await after(page, `.wiki-revision[data-revision-id="${revision}"]`, () => page.locator(`[data-page-revision-id="${revision}"]`).click());
   }
   async function publish(review) {
     assert.equal(await page.locator('[data-review-digest]').textContent(), review.manifest_hash);

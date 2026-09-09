@@ -1,7 +1,7 @@
 import type { ForceGraph3DInstance, LinkObject, NodeObject } from "3d-force-graph";
 import type { RefObject } from "react";
 
-import type { KnowledgeGraphRenderLink, KnowledgeGraphRenderNode, KnowledgeGraphStageData, KnowledgeGraphStageNode } from "./knowledgeGraphStageModel.ts";
+import type { KnowledgeGraphRelation, KnowledgeGraphRenderLink, KnowledgeGraphRenderNode, KnowledgeGraphStageData, KnowledgeGraphStageNode } from "./knowledgeGraphStageModel.ts";
 
 export type OrbitControls = {
   autoRotate: boolean;
@@ -20,6 +20,8 @@ export type ActiveGraph = {
   readonly graph: StageGraph;
   readonly controls: OrbitControls;
   readonly nodes: ReadonlyMap<string, KnowledgeGraphRenderNode>;
+  readonly updateLabels: () => void;
+  readonly colorNode: (node: NodeObject) => string;
   settled: boolean;
   wakeFrame: number;
 };
@@ -28,6 +30,7 @@ export type GraphEngineRequest = {
   readonly data: KnowledgeGraphStageData;
   readonly scopeKey: string;
   readonly reducedMotion: boolean;
+  readonly hiddenRelations?: readonly KnowledgeGraphRelation[];
   readonly onNodeSelect?: (node: KnowledgeGraphStageNode) => void;
 };
 

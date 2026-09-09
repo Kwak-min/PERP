@@ -120,6 +120,8 @@ try{
   assert.equal(snapshot.contextsCreated,snapshot.controlsDisposed);
  });
  await render(1);await settled();
+ result.singletonCamera=await page.evaluate(()=>window.current.graph.cameraPosition());
+ assert.ok(Math.abs(Math.hypot(result.singletonCamera.x,result.singletonCamera.y,result.singletonCamera.z)-160)<1e-6,'singleton framing must use the readable camera distance');
  result.runtime={threeRevision:await page.evaluate(()=>window.threeRevision),enginePackage:JSON.parse(await readFile(path.join(root,'node_modules/3d-force-graph/package.json'),'utf8')).version};
  await page.getByRole('button',{name:'자동 회전 끄기'}).click();
  let pos=await page.evaluate(()=>window.current.graph.cameraPosition());await page.getByRole('button',{name:'왼쪽으로 회전'}).click();let pos2=await page.evaluate(()=>window.current.graph.cameraPosition());assert.notDeepEqual(pos,pos2);
@@ -129,6 +131,7 @@ try{
  await page.evaluate(()=>window.armControlChange());await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width/2+90,box.y+box.height/2+30);await page.mouse.up();await page.evaluate(()=>window.controlSignal);let drag=await page.evaluate(()=>window.current.graph.cameraPosition());assert.notDeepEqual(pos3,drag);
  await page.evaluate(()=>window.armControlChange());await page.mouse.wheel(0,-100);await page.evaluate(()=>window.controlSignal);let wheel=await page.evaluate(()=>window.current.graph.cameraPosition());assert.notDeepEqual(drag,wheel);
  await page.getByRole('button',{name:'화면 맞춤'}).click();
+ result.singletonPick=await page.evaluate(()=>{const g=window.current.graph,n=g.graphData().nodes[0];return {node:{x:n.x,y:n.y,z:n.z},camera:g.cameraPosition(),screen:g.graph2ScreenCoords(n.x,n.y,n.z),width:g.width(),height:g.height()};});
  await page.evaluate(()=>{window.pickSignal=window.bounded(new Promise(r=>window.addEventListener('review-pick',r,{once:true})));});
  await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.click(box.x+box.width/2,box.y+box.height/2);await page.evaluate(()=>window.pickSignal);
  assert.equal(await page.evaluate(()=>window.selections.at(-1)===window.snapshots[0].data.nodes[0]),true);
