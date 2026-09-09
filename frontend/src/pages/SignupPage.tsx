@@ -1,19 +1,27 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { Button } from "../components/ui/Button";
 import { userMessageOf } from "../services/api";
 import { signup } from "../services/auth";
+import { captureAuthTransition, readAuthTransition } from "../services/authTransition";
 import { sessionStore } from "../store/session";
 
 export function SignupPage() {
   const navigate = useNavigate();
-  const invitation = new URLSearchParams(useLocation().search).get("invite");
+  const location = useLocation();
+  const [invitation, setInvitation] = useState(() => readAuthTransition().invite);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const mismatch = confirm.length > 0 && password !== confirm;
+
+  useEffect(() => {
+    captureAuthTransition(location.search);
+    setInvitation(readAuthTransition().invite);
+    if (location.search) navigate(location.pathname, { replace: true });
+  }, [location.pathname, location.search, navigate]);
 
   async function submit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -38,10 +46,9 @@ export function SignupPage() {
         String(form.get("email")),
         name,
         String(form.get("password")),
-        invitation ?? undefined,
       );
       sessionStore.set(session);
-      navigate(session.orgId ? "/" : "/welcome", { replace: true });
+      navigate("/welcome", { replace: true, state: { accountCreated: true } });
     } catch (caught) {
       setError(userMessageOf(caught));
     } finally {
@@ -52,7 +59,7 @@ export function SignupPage() {
   return (
     <section className="auth-card" aria-labelledby="signup-title">
       <span className="eyebrow">{invitation ? "INVITATION" : "GET STARTED"}</span>
-      <h2 id="signup-title">{invitation ? "조직 초대 수락" : "계정 만들기"}</h2>
+      <h2 id="signup-title">{invitation ? "초대 참여를 위한 계정 만들기" : "계정 만들기"}</h2>
       <p className="auth-card__intro">계정을 만든 뒤 새 조직을 만들거나 초대 링크로 참여할 수 있습니다.</p>
       {error && <div className="form-error" role="alert">{error}</div>}
       <form className="form-stack" onSubmit={submit}>

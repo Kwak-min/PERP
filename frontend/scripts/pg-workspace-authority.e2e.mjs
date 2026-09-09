@@ -95,16 +95,17 @@ try {
     await page.route('**/api/v1/pg/auth/workspace', route => route.fulfill({ status: 503, json: { error: { code: 'SERVICE_UNAVAILABLE', message: 'isolated workspace unavailable' } } }));
     assert.equal((await signIn(page, user.email)).status(), 200);
     await expect(page.getByRole('alert')).toBeVisible();
-    assert.equal(new URL(page.url()).pathname, '/login');
-    assert.equal(await stored(page), null);
+    assert.equal(new URL(page.url()).pathname, '/welcome');
+    assert.equal((await stored(page)).organizationStatus, 'loading');
+    assert.equal(typeof (await stored(page)).token, 'string');
     assert.equal(requests.includes('/api/v1/auth/me'), false);
     assert.equal(requests.includes('/api/v1/auth/login'), false);
   });
-  await scenario('invalid-password-never-falls-back', async (page, requests) => {
+  await scenario('credential-rejection-checks-both-stores', async (page, requests) => {
     assert.equal((await signIn(page, user.email, null, 'wrong-password')).status(), 401);
     await expect(page.getByRole('alert')).toBeVisible();
     assert.equal(await stored(page), null);
-    assert.equal(requests.includes('/api/v1/auth/login'), false);
+    assert.equal(requests.includes('/api/v1/auth/login'), true);
     assert.equal(requests.includes('/api/v1/pg/auth/workspace'), false);
   });
   await scenario('native-signup-creates-account-only', async (page, requests) => {

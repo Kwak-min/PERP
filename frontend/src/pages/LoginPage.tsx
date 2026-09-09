@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { Button } from "../components/ui/Button";
 import { login } from "../services/auth";
+import { captureAuthTransition } from "../services/authTransition";
 import { userMessageOf } from "../services/api";
 import { sessionStore } from "../store/session";
 
@@ -12,6 +13,11 @@ export function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    captureAuthTransition(location.search);
+    if (location.search) navigate(location.pathname, { replace: true });
+  }, [location.pathname, location.search, navigate]);
+
   async function submit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -20,15 +26,8 @@ export function LoginPage() {
     try {
       const session = await login(String(form.get("email")), String(form.get("password")));
       sessionStore.set(session, form.get("remember") !== null);
-      const requested = new URLSearchParams(location.search).get("next");
-      const safeRequested =
-        requested?.startsWith("/") && !requested.startsWith("//")
-          ? requested
-          : null;
       navigate(
-        session.mustChangePassword
-          ? "/change-password"
-          : safeRequested ?? (session.orgId ? "/" : "/welcome"),
+        session.mustChangePassword ? "/change-password" : "/welcome",
         { replace: true },
       );
     } catch (caught) {

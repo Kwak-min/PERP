@@ -75,32 +75,40 @@ export async function organizationsOf(token: string): Promise<readonly Organizat
   return parsed.organizations;
 }
 
-async function toSessionState(
+function toSessionState(
   token: string,
-  user: z.infer<typeof pgUserSchema>,
-): Promise<SessionState> {
-  // PG 회사/직책/관리자 값은 운영 조직 소속이나 역할이 아니다.
-  const organizations = await organizationsOf(token);
+  user: Readonly<{ name: string; email: string }>,
+  mustChangePassword = false,
+): SessionState {
+  const previous = sessionStore.getSnapshot();
+  // 인증 성공과 소속 조회는 별도 단계다. 생성된 토큰부터 화면에서 저장한다.
   return {
     token,
-    // 한 곳뿐이면 바로 들어가고, 없거나 여러 곳이면 /welcome 에서 고르게 한다.
-    orgId: organizations.length === 1 ? (organizations[0] as Organization).org_id : null,
+    orgId: null,
     name: user.name,
     email: user.email,
-    mustChangePassword: false,
-    organizations: [...organizations],
+    mustChangePassword,
+    organizations: [],
+    organizationStatus: "loading",
+    preferredOrgId: previous?.email.toLowerCase() === user.email.toLowerCase() ? previous.orgId : null,
   };
 }
 
-function withLoginOrganization(session: SessionState): SessionState {
-  const previous = sessionStore.getSnapshot();
-  const selected = previous?.email.toLowerCase() === session.email.toLowerCase() ? previous.orgId : null;
-  // 저장된 선택은 힌트일 뿐이다. 새로 검증된 소속에 있을 때만 보존한다.
-  return {
-    ...session,
-    orgId: session.organizations.find((org) => org.org_id === selected)?.org_id
-      ?? session.organizations[0]?.org_id ?? null,
-  };
+/** 실패하면 인증 상태를 유지하고, 재시도는 소속만 조회한다. */
+export async function loadSessionOrganizations(token: string): Promise<readonly Organization[]> {
+  const organizations = await organizationsOf(token);
+  const current = sessionStore.getSnapshot();
+  // 로그아웃/다른 계정 로그인 뒤 도착한 응답은 새 세션에 적용하지 않는다.
+  if (current?.token === token) {
+    sessionStore.patch({
+      organizations: [...organizations],
+      orgId: organizations.find((org) => org.org_id === current.preferredOrgId)?.org_id
+        ?? organizations[0]?.org_id ?? null,
+      organizationStatus: "ready",
+      preferredOrgId: null,
+    });
+  }
+  return organizations;
 }
 
 export async function login(email: string, password: string): Promise<SessionState> {
@@ -110,52 +118,30 @@ export async function login(email: string, password: string): Promise<SessionSta
       await apiRequest("/pg/auth/login", { method: "POST", body: { email, password } }),
     );
   } catch (error) {
-    if (!(error instanceof ApiError && error.code === "SERVICE_UNAVAILABLE")) {
+    if (!(error instanceof ApiError && error.status === 401 && error.code === "UNAUTHENTICATED")) {
       throw error;
     }
-    // PG 장애 때도 레거시 계정은 별도 비밀번호 검증을 통과해야 한다.
+    // 두 저장소 계약: PG의 계정 없음/비밀번호 불일치(401 UNAUTHENTICATED)만
+    // 레거시 자격 증명 검증을 허용한다. 장애·차단·응답 오류는 전파한다.
     const payload = legacyLoginSchema.parse(
       await apiRequest("/auth/login", { method: "POST", body: { email, password } }),
     );
-    return withLoginOrganization({
-      token: payload.access_token,
-      orgId: null,
-      name: payload.user.name,
-      email: payload.user.email,
-      mustChangePassword: payload.must_change_password,
-      organizations: [...await organizationsOf(payload.access_token)],
-    });
+    return toSessionState(payload.access_token, payload.user, payload.must_change_password);
   }
-  // 소속 조회 장애는 PG 로그인 장애가 아니며 다른 인증 저장소로 전환하지 않는다.
-  return withLoginOrganization(await toSessionState(payload.token, payload.user));
+  return toSessionState(payload.token, payload.user);
 }
 
 export async function signup(
   email: string,
   name: string,
   password: string,
-  invitationToken?: string,
 ): Promise<SessionState> {
-  const body: Record<string, string> = { email, name, password };
-  if (invitationToken) body.invitation_token = invitationToken;
+  const body = { email, name, password };
   const payload = pgLoginSchema.parse(
     await apiRequest("/pg/auth/signup", { method: "POST", body }),
   );
-  let session = await toSessionState(payload.token, payload.user);
-  if (invitationToken) {
-    await apiRequest("/auth/invitations/accept", {
-      method: "POST",
-      session: { token: payload.token, orgId: null },
-      body: { token: invitationToken },
-    });
-    const organizations = await organizationsOf(payload.token);
-    session = {
-      ...session,
-      organizations: [...organizations],
-      orgId: organizations.length === 1 ? organizations[0]!.org_id : null,
-    };
-  }
-  return session;
+  // 초대 확인/수락은 인증 후 별도 화면에서 명시적으로 실행한다.
+  return toSessionState(payload.token, payload.user);
 }
 
 export async function logout(token: string, orgId: string | null): Promise<void> {

@@ -34,7 +34,7 @@ async function signup(page, email, invite = '') {
   await page.getByRole('button', { name: '계정 만들기', exact: true }).click();
   const saved = await response;
   assert.equal(saved.status(), 201);
-  assert.deepEqual(saved.request().postDataJSON(), { email, name: '계정 전용 QA', password, ...(invite ? { invitation_token: invite } : {}) });
+  assert.deepEqual(saved.request().postDataJSON(), { email, name: '계정 전용 QA', password });
   const payload = await saved.json();
   assert.equal(payload.user.company, null);
   assert.equal(payload.user.department, null);
@@ -134,16 +134,22 @@ try {
       body: { email: mismatch ? 'intended-other@example.invalid' : email, roles: ['member'] } });
     assert.equal(invite.status, 201);
     const before = orgSnapshot();
-    const accepted = page.waitForResponse(r => r.url().endsWith('/auth/invitations/accept'));
     const payload = await signup(page, email, invite.body.token);
-    assert.equal((await accepted).status(), mismatch ? 400 : 201);
+    await page.waitForURL(origin + '/invitations');
+    const [verified] = await Promise.all([page.waitForResponse(r => r.url().endsWith('/auth/invitations/verify')),
+      page.getByRole('button', { name: '초대 확인', exact: true }).click()]);
+    assert.equal((await verified.json()).valid, true);
+    const [accepted] = await Promise.all([page.waitForResponse(r => r.url().endsWith('/auth/invitations/accept')),
+      page.locator('.invite-manual__actions').getByRole('button', { name: /참여하기/ }).click()]);
+    assert.equal(accepted.status(), mismatch ? 400 : 201);
     assert.deepEqual(orgSnapshot(), before);
     if (mismatch) {
       await page.getByRole('alert').waitFor();
-      assert.equal(new URL(page.url()).pathname, '/signup');
+      assert.equal(new URL(page.url()).pathname, '/invitations');
+      assert.equal((await stored(page)).token, payload.token);
       const me = await api(server.baseUrl, '/auth/me', { token: payload.token });
       assert.deepEqual(me.body.organizations, []);
-      await login(page, email, '/welcome');
+      await login(page, email, '/invitations');
     } else {
       // Acceptance persists in SQLite, but cannot become authority for a PG session.
       await page.waitForURL(origin + '/welcome');
