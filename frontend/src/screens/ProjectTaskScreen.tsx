@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { z } from "zod";
 import type { ScreenDefinition } from "../routes/catalog";
 import { apiRequest, ApiError, userMessageOf, type ApiSession } from "../services/api";
@@ -48,7 +48,13 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
   const projectView = screen.id === "PRJ-001" || screen.id === "PRJ-002";
   const [revision, setRevision] = useState(0);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set(projectId ? [projectId] : []));
-  const [query, setQuery] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const query = searchParams.get('q') ?? '';
+  function setQuery(value: string): void {
+    const next = new URLSearchParams(searchParams);
+    if (value) next.set('q', value); else next.delete('q');
+    setSearchParams(next, { replace: true });
+  }
   const [permissions, setPermissions] = useState<readonly string[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [memberResult, setMemberResult] = useState<AssignmentResult | null>(null);

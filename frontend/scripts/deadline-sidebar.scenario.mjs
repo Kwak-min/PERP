@@ -126,6 +126,7 @@ export async function sidebar({ surface, api, fixture, result, attempt, evidence
     assert.deepEqual(await favoriteIds(page), ['PRJ-001', 'CAL-001', 'AST-001']);
     assert.equal(await page.locator('.nav-group a[href="/projects"]').count(), 1, 'favorite keeps original group link');
 
+    await pressAndWait(page, '즐겨찾기 편집', '.nav-favorite-actions:not([hidden])', { count: 3 });
     await pressAndWait(page, '자산 위로 이동', '[data-testid="nav-favorites"]', { attribute: 'data-order', value: 'PRJ-001,AST-001,CAL-001' });
     assert.deepEqual(await favoriteIds(page), ['PRJ-001', 'AST-001', 'CAL-001']);
     await pressAndWait(page, '자산 위로 이동', '[data-testid="nav-favorites"]', { attribute: 'data-order', value: 'AST-001,PRJ-001,CAL-001' });
@@ -255,7 +256,7 @@ export async function sidebar({ surface, api, fixture, result, attempt, evidence
       const geometry = await page.evaluate(() => ({ documentWidth: document.documentElement.scrollWidth, viewport: innerWidth,
         controls: [...document.querySelectorAll('.nav-pref-control')].filter(node => node.getClientRects().length > 0).map(node => ({ width: node.getBoundingClientRect().width, height: node.getBoundingClientRect().height })) }));
       assert.equal(geometry.documentWidth, geometry.viewport);
-      if (width === 375) assert.ok(geometry.controls.every(control => control.width >= 44 && control.height >= 44));
+      if (width <= 1100) assert.ok(geometry.controls.every(control => control.width >= 44 && control.height >= 44));
       const screenshot = path.join(attempt, `sidebar-${width}.png`);
       await page.screenshot({ path: screenshot, fullPage: true, animations: 'disabled' });
       result.surfaces.push({ name: 'sidebar-open', width, screenshot: path.relative(evidence, screenshot), geometry });

@@ -15,6 +15,10 @@ import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 const mobilePaths = ['/', '/projects', '/calendar', '/settings'];
 const sidebarMedia = '(max-width: 1100px)';
+const searchCategories = [
+  { path: '/members', label: '구성원' }, { path: '/documents', label: '문서' },
+  { path: '/tasks', label: '업무' }, { path: '/projects', label: '프로젝트' },
+];
 const canFocus = (node: HTMLElement) => node.isConnected && !node.closest('[inert]') && !node.matches(':disabled') && node.checkVisibility({ visibilityProperty: true });
 const sidebarControls = (panel: HTMLElement) => [...panel.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]')]
   .filter(node => node.tabIndex >= 0 && canFocus(node));
@@ -37,7 +41,11 @@ export function AppShell() {
   const sidebarOpener = useRef<HTMLButtonElement | null>(null);
   const sidebarFocused = useRef<HTMLElement | null>(null);
   const modalSidebar = responsiveSidebar && sidebarOpen;
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => new URLSearchParams(location.search).get('q') ?? '');
+  const [searchCategory, setSearchCategory] = useState('');
+  const [editingFavorites, setEditingFavorites] = useState(false);
+  const favoriteEditor = useRef<HTMLButtonElement>(null);
+  useEffect(() => { setSearch(new URLSearchParams(location.search).get('q') ?? ''); }, [location.search]);
   const [identity, setIdentity] = useState<Readonly<{ token: string; userId: string | null; error: string | null }>>({ token: '', userId: null, error: null });
   const [navState, setNavState] = useState<NavState>({ key: '', status: 'loading', value: emptyNavPref, error: null });
   const access = useWorkspaceAccess(session, location.pathname);
@@ -109,6 +117,7 @@ export function AppShell() {
     orgId: session.orgId,
   } : null;
   const scopeKey = scope ? navPrefKey(scope) : '';
+  useEffect(() => { setEditingFavorites(false); }, [scopeKey, location.pathname]);
 
   useEffect(() => {
     if (!scope || !access.data) return;
@@ -135,6 +144,8 @@ export function AppShell() {
     .sort((a, b) => b.path.length - a.path.length)[0];
   const allowed = Boolean(accessData && currentScreen && canOpenScreen(accessData, currentScreen));
   const canOpen = (path: string) => Boolean(accessData && screens.some(screen => screen.path === path && canOpenScreen(accessData, screen)));
+  const availableSearchCategories = searchCategories.filter(category => canOpen(category.path));
+  const searchPath = availableSearchCategories.some(category => category.path === searchCategory) ? searchCategory : '';
   const activePath = visibleNavigation.reduce((active, screen) =>
     matchPath({ path: screen.path, end: screen.path === "/" }, location.pathname) && screen.path.length > active.length ? screen.path : active, "");
   const activeSection = visibleNavigation.find(screen => screen.path === activePath)?.section;
@@ -203,16 +214,27 @@ export function AppShell() {
         }}>
         <div className="sidebar__brand"><WorkspaceSwitcher session={activeSession} /></div>
         <nav aria-label="주 메뉴">
-          {favorites.length > 0 && <section className="nav-favorites" data-testid="nav-favorites" data-order={favorites.map(screen => screen.id).join(',')} aria-labelledby="nav-favorites-label">
-            <p id="nav-favorites-label">즐겨찾기</p>
+          {favorites.length > 0 && <section className="nav-favorites" data-testid="nav-favorites" data-order={favorites.map(screen => screen.id).join(',')} aria-labelledby="nav-favorites-label" onKeyDown={event => {
+              if (event.key === 'Escape' && editingFavorites) { event.preventDefault(); event.stopPropagation(); setEditingFavorites(false); favoriteEditor.current?.focus(); }
+            }}>
+            <div className="nav-favorites__heading"><p id="nav-favorites-label">즐겨찾기</p><button ref={favoriteEditor} type="button" className="nav-pref-control nav-favorites__edit" aria-label="즐겨찾기 편집" aria-pressed={editingFavorites} onClick={() => setEditingFavorites(value => !value)}>편집</button></div>
+            <div>
             {favorites.map((screen, index) => <div className="nav-entry nav-entry--favorite" key={screen.id}>
               <NavLink to={screen.path} end={screen.path !== activePath} data-screen-id={screen.id} onClick={() => setSidebarOpen(false)} className={({ isActive }) => isActive ? "active" : ""}>
                 <span className="nav-mark" aria-hidden="true">{screen.label.slice(0, 1)}</span><span className="nav-label">{screen.label}</span>{screen.ai && <span className="nav-ai">AI</span>}
               </NavLink>
+              <div className="nav-favorite-actions" hidden={!editingFavorites}>
               <button type="button" className="nav-pref-control" onClick={() => moveFavorite(screen.id, -1)} disabled={!prefReady || index === 0} aria-label={`${screen.label} 위로 이동`} title={`${screen.label} 위로 이동`}><span aria-hidden="true">↑</span></button>
               <button type="button" className="nav-pref-control" onClick={() => moveFavorite(screen.id, 1)} disabled={!prefReady || index === favorites.length - 1} aria-label={`${screen.label} 아래로 이동`} title={`${screen.label} 아래로 이동`}><span aria-hidden="true">↓</span></button>
-              <button type="button" className="nav-pref-control" onClick={() => toggleFavorite(screen.id)} disabled={!prefReady} aria-label={`${screen.label} 즐겨찾기에서 제거`} title={`${screen.label} 즐겨찾기에서 제거`}><span aria-hidden="true">×</span></button>
+              <button type="button" className="nav-pref-control" onClick={() => {
+                const panel = sidebarRef.current!;
+                const original = panel.querySelector<HTMLElement>(`[data-favorite-screen-id="${screen.id}"]`);
+                const target = favorites.length > 1 ? favoriteEditor.current : original && canFocus(original) ? original : sidebarControls(panel)[0];
+                target?.focus(); toggleFavorite(screen.id);
+              }} disabled={!prefReady} aria-label={`${screen.label} 즐겨찾기에서 제거`} title={`${screen.label} 즐겨찾기에서 제거`}><span aria-hidden="true">×</span></button>
+              </div>
             </div>)}
+            </div>
           </section>}
           <div className="nav-personalization" data-testid="nav-personalization" data-pref-status={prefStatus}>
             <p>{NAV_PREF_NOTICE}</p>
@@ -232,7 +254,7 @@ export function AppShell() {
                   <NavLink to={screen.path} end={screen.path !== activePath} data-screen-id={screen.id} onClick={() => setSidebarOpen(false)} className={({ isActive }) => isActive ? "active" : ""}>
                     <span className="nav-mark" aria-hidden="true">{screen.label.slice(0, 1)}</span><span className="nav-label">{screen.label}</span>{screen.ai && <span className="nav-ai">AI</span>}
                   </NavLink>
-                  <button type="button" className="nav-pref-control nav-pin" aria-pressed={pref.favoriteScreenIds.includes(screen.id)} disabled={!prefReady} onClick={() => toggleFavorite(screen.id)} aria-label={`${screen.label} 즐겨찾기${pref.favoriteScreenIds.includes(screen.id) ? '에서 제거' : '에 추가'}`} title={`${screen.label} 즐겨찾기${pref.favoriteScreenIds.includes(screen.id) ? '에서 제거' : '에 추가'}`}><span aria-hidden="true">…</span></button>
+                  <button type="button" data-favorite-screen-id={screen.id} className="nav-pref-control nav-pin" aria-pressed={pref.favoriteScreenIds.includes(screen.id)} disabled={!prefReady} onClick={() => toggleFavorite(screen.id)} aria-label={`${screen.label} 즐겨찾기${pref.favoriteScreenIds.includes(screen.id) ? '에서 제거' : '에 추가'}`} title={`${screen.label} 즐겨찾기${pref.favoriteScreenIds.includes(screen.id) ? '에서 제거' : '에 추가'}`}><span aria-hidden="true">…</span></button>
                 </div>)}
               </div>
             </div>;
@@ -244,8 +266,10 @@ export function AppShell() {
       <div className="app-main">
         <header className="topbar">
           <Button className="menu-button" tone="neutral" size="small" onClick={event => { sidebarOpener.current = event.currentTarget; setSidebarOpen(true); }} aria-label="메뉴 열기" aria-expanded={modalSidebar} aria-controls="app-sidebar" aria-haspopup="dialog">메뉴</Button>
-          <form className="global-search" onSubmit={(event) => { event.preventDefault(); const term = search.trim(); if (!term) return; const target = term.includes("@") ? "/members" : /문서|자료|규정|계약/.test(term) ? "/documents" : "/projects"; navigate(`${target}?q=${encodeURIComponent(term)}`); }}>
-            <label><span className="sr-only">전역 검색</span><input type="search" placeholder="업무, 문서, 구성원 검색 후 Enter" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
+          <form className="global-search" role="search" aria-label="메뉴별 검색" onSubmit={event => { event.preventDefault(); const term = search.trim(); if (!term || !searchPath) return; navigate(`${searchPath}?q=${encodeURIComponent(term)}`); }}>
+            <label className="global-search__category"><span className="sr-only">검색 범위</span><select required value={searchPath} onChange={event => setSearchCategory(event.target.value)}><option value="" disabled>검색 범위</option>{availableSearchCategories.map(category => <option key={category.path} value={category.path}>{category.label}</option>)}</select></label>
+            <label className="global-search__query"><span className="sr-only">전역 검색</span><input type="search" required placeholder="검색어" value={search} onChange={event => setSearch(event.target.value)} /></label>
+            <button type="submit" className="global-search__submit" disabled={!searchPath || !search.trim()}>검색</button>
           </form>
           <div className="topbar__actions">{canOpen('/notifications') && <NavLink className="icon-link" to="/notifications" aria-label="알림">알림</NavLink>}{canOpen('/agent') && <Button tone="ai" size="small" onClick={toggleAgent}>AI Agent</Button>}</div>
         </header>

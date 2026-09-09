@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { z } from "zod";
 
@@ -36,7 +36,8 @@ function OrganizationWorkspace({ screen, session }: Readonly<{ screen: ScreenDef
   const [permissions, setPermissions] = useState<readonly string[]>([]);
   const [permissionState, setPermissionState] = useState("loading");
   const [permissionError, setPermissionError] = useState<string | null>(null);
-  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
+  const selectedMemberId = search.get('member');
+  const detailRef = useRef<HTMLElement>(null);
   const [setupSeat, setSetupSeat] = useState<OrgSeat | null>(null);
   const [busy, setBusy] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);
@@ -102,7 +103,20 @@ function OrganizationWorkspace({ screen, session }: Readonly<{ screen: ScreenDef
   }
   const seats = useMemo(() => state.chart ? flattenSeats(state.chart.roots) : [], [state.chart]);
   const selectedMember = state.members.find(member => member.membership_id === selectedMemberId) ?? null;
-  function selectMember(id: string): void { setSelectedMemberId(id); setSetupSeat(null); }
+  useLayoutEffect(() => {
+    // 선택한 사람의 상세로 이동한다. 같은 사람의 권한/자료 재조회는 포커스를 빼앗지 않는다.
+    if (selectedMember) detailRef.current?.focus();
+  }, [selectedMember?.membership_id]);
+  function selectMember(id: string | null): void {
+    const next = new URLSearchParams(search);
+    if (id) next.set('member', id); else next.delete('member');
+    setSearch(next); setSetupSeat(null);
+  }
+  function changeFilter(name: 'q' | 'department' | 'status', value: string): void {
+    const next = new URLSearchParams(search);
+    if (value) next.set(name, value); else next.delete(name);
+    next.delete('member'); setSearch(next, { replace: true }); setSetupSeat(null);
+  }
   function reload(): void { setSetupSeat(null); setRevision(value => value + 1); }
 
   async function saveSeat(input: Readonly<{ leaderUserId: string | null; assigned: readonly string[] }>): Promise<void> {
@@ -158,12 +172,12 @@ function OrganizationWorkspace({ screen, session }: Readonly<{ screen: ScreenDef
     {state.status === "loading" && !state.chart ? <p className="orgchart__empty" role="status">구성원과 조직도를 불러오는 중입니다…</p>
       : state.error ? <div className="form-error" role="alert">{state.error}</div>
       : <div className="orgchart-layout" aria-busy={state.status === "loading"} inert={state.status === "loading"}><div className="orgchart-main">
-        <MemberDirectory members={state.members} seats={seats} selectedMemberId={selectedMemberId} initialQuery={search.get("q") ?? ""} onSelect={selectMember} />
+        <MemberDirectory members={state.members} seats={seats} selectedMemberId={selectedMemberId} query={search.get('q') ?? ''} department={search.get('department') ?? ''} status={search.get('status') ?? ''} onFilterChange={changeFilter} onSelect={selectMember} />
         <SectionCard title="조직도" subtitle="부서 구조와 책임자" foot="직접 등록한 부서만 표시합니다">
-          <OrgChartTree roots={state.chart?.roots ?? []} selectedMemberId={selectedMemberId} selectedSeatId={setupSeat?.id ?? null} onSelectMember={selectMember} onSetupSeat={seat => { setSetupSeat(seat); setSelectedMemberId(null); }} busy={busy} canSetup={canSetup} canAdd={can("department.write")} onAddChild={(seat, name) => void addChild(seat, name)} />
+          <OrgChartTree roots={state.chart?.roots ?? []} selectedMemberId={selectedMemberId} selectedSeatId={setupSeat?.id ?? null} onSelectMember={selectMember} onSetupSeat={seat => { selectMember(null); setSetupSeat(seat); }} busy={busy} canSetup={canSetup} canAdd={can("department.write")} onAddChild={(seat, name) => void addChild(seat, name)} />
           {Boolean(state.chart?.unassigned.length) && <div className="orgchart__unassigned"><h3>미배정 인원 {state.chart?.unassigned.length}명</h3><div className="orgchart__members">{state.chart?.unassigned.map(member => <button key={member.membership_id} type="button" className={member.membership_id === selectedMemberId ? "orgchart__chip orgchart__chip--on" : "orgchart__chip"} onClick={() => selectMember(member.membership_id)}>{member.name}</button>)}</div></div>}
         </SectionCard>
-      </div><aside className="orgchart-aside" aria-live="polite">
+      </div><aside ref={detailRef} className="orgchart-aside" aria-label="구성원 상세" aria-live="polite" tabIndex={-1}>
         {setupSeat && canSetup ? <SeatSetupPanel key={setupSeat.id} seat={setupSeat} members={state.members.filter(member => member.status === "active")} busy={busy} onCancel={() => setSetupSeat(null)} onSave={input => void saveSeat(input)} />
           : selectedMember ? <MemberDetailPanel member={selectedMember} departmentName={seats.find(seat => seat.id === selectedMember.department_id)?.name ?? selectedMember.department_id ?? "미배정"} busy={busy} canAssign={canAssign && selectedMember.status === "active"} session={session} onChangeTitle={(member, title) => void changeTitle(member, title)} />
           : <p className="orgchart__hint">목록이나 조직도에서 이름을 선택하면 이메일·부서·전화번호와 인사 프로필을 확인할 수 있습니다.</p>}
