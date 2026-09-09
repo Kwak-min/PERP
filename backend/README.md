@@ -9,9 +9,18 @@ Vite 요구 조건 때문에 Node.js 22.12+를 사용합니다.
 
 - `ORBITFLOW_DATABASE_FILE`: 대부분의 ERP 업무 데이터를 저장하는 SQLite 파일.
   기동 시 `src/config/migrate.js`가 schema와 additive migration을 적용합니다.
+  `src/config/migrations.js`는 번호 Set으로 적용 여부를 판단하므로 비연속 번호가
+  허용됩니다. 이번 기능군: 9 역할 CAS, 10 원증빙·실지출, 11 결재 workflow, 12 Wiki
+  저장, 13 CSV 가져오기, 14 Wiki 무효화.
+- `ORBITFLOW_UPLOAD_DIR`: 원증빙 원본(`receipts/<uuid>.<ext>`)과 문서 원본 저장 경로.
+  기본값은 `src/uploads/`이며 운영에서는 영속·백업 대상 volume을 지정합니다. 소비된
+  원본과 DB link는 trigger로 수정·삭제가 거부되며 자동 삭제 정책은 없습니다.
 - `DATABASE_URL` 또는 `PG_*`: PostgreSQL 18 `perp_db` 인증 슬라이스. 기본 예시는
   SSH 터널의 `127.0.0.1:55432`를 가리킵니다. SQLite와 병행 사용됩니다. PG subject와
-  운영 사용자의 연결은 SQLite migration v5 `auth_identity`가 소유합니다.
+  운영 사용자의 연결은 SQLite migration v5 `auth_identity`가 소유합니다. 앱은 PG DDL을
+  적용하지 않으며 `db/perp_additions_v11` → v12(`expenses` 다음 `expense_writer`) →
+  v13(enum, 독립 commit) → v14 → v15 → v16 → v17 → v18을 DBA가 순서대로 한 번씩
+  적용합니다.
 - `Reservation/backend`: 별도 프로세스와 별도 PostgreSQL을 쓰며 이 workspace에
   포함되지 않습니다.
 
@@ -32,7 +41,7 @@ npm run dev
 `127.0.0.1:8000`입니다.
 
 - Liveness: `GET /health`
-- Route catalog: `GET /api/v1/routes` (현재 19개 그룹)
+- Route catalog: `GET /api/v1/routes` (현재 21개 그룹)
 - PostgreSQL connectivity: `GET /api/v1/pg/health`
 - API prefix: `/api/v1`
 
@@ -54,6 +63,61 @@ PG 세션 만료는 기존 `auth.sessions.login_at`과 `ORBITFLOW_SESSION_TTL`�
 `.env.example`의 `OPENROUTER_API_KEY`, `ORBITFLOW_WEBHOOK_SECRET`, `PG_PASSWORD`
 등 실제 값은 커밋, 이미지, 로그, frontend `VITE_*` 변수에 넣지 않습니다. 운영에서는
 개발 fallback 값에 의존하지 말고 Secret Manager에서 revision별로 주입합니다.
+
+## 도메인 계약 문서
+
+| 문서 | 내용 |
+|---|---|
+| `src/services/expenses.contract.md` | KRW 실지출 입력, 기존 장부 원천, metadata |
+| `src/services/receipt-files.contract.md` | 원증빙 업로드/소비/다운로드, 불변 guard, cleanup, 보안 pin과 LGPL 고지 |
+| `src/services/expense-import.contract.md` | CSV upload/preview/rows/commit, identity, 24시간 만료와 cleanup |
+| `src/services/analytics.contract.md` (+ `.d.ts`) | KPI/보고서/export DTO, 상태 코드, 단위(`ledger_decimal`), 100,000행 한도 |
+| `docs/knowledge-wiki-jobs-contract.md` | Wiki job/worker/strict local provider (최종 통합 산출물 필수) |
+| `docs/knowledge-wiki-publication-interface.md` | change-set 검토·게시·무효화·SSE (최종 통합 산출물 필수) |
+
+### 정리 작업
+
+CSV 가져오기 원본과 원증빙 staging 정리는 `server.js`에 내장된 **하나의** timer가 실행하며 두
+종류 모두 **기본 비활성**입니다. 활성화 전 코드·설정·종료 검증이 필요하며 운영 활성화는 배포
+gate입니다.
+
+```bash
+ORBITFLOW_IMPORT_CLEANUP_STORES=legacy,perp_db    # CSV job. 빈 값 = 비활성
+ORBITFLOW_RECEIPT_CLEANUP_STORES=legacy,perp_db   # 원증빙 staging job. CSV와 독립, 빈 값 = 비활성
+ORBITFLOW_IMPORT_CLEANUP_INTERVAL_MS=3600000      # 두 종류 공유 cadence, 1000..2147483647
+ORBITFLOW_IMPORT_CLEANUP_TIMEOUT_MS=30000         # 두 종류 공유 job별 worker 한도, 100..interval
+ORBITFLOW_UPLOAD_DIR=/abs/existing/upload/root    # 원증빙 선택 시 필수, API와 같은 절대 경로
+
+# 수동 one-shot (timer와 별개, CSV만)
+node scripts/cleanup_expense_imports.mjs legacy     # {store,deleted,redacted}
+node scripts/cleanup_expense_imports.mjs perp_db
+```
+
+한 프로세스만 선택 변수를 설정합니다. legacy는 절대 경로 `ORBITFLOW_DATABASE_FILE`, perp_db는
+완전한 `DATABASE_URL` 또는 `PG_HOST/PG_PORT/PG_DATABASE/PG_USER`가 필요하며 기본값을 빌리지
+않습니다. tick마다 CSV store → 원증빙 store 순으로 최대 4개 job이 순차 실행되고 job마다 전용
+worker thread가 기존 `cleanupLegacyExpenseImports()`/`cleanupPgExpenseImports()` 또는
+`cleanupLegacyReceipts()`/`cleanupPgReceipts()`만 호출합니다.
+
+결과는 stdout JSON `event=expense_import_cleanup`로만 남습니다. 기동 `status`, `stores`,
+`receipt_stores`; job별 `kind: imports|receipts`, `store`, `started/succeeded/failed/cancelled`;
+CSV 건수 `deleted,redacted`; 원증빙 건수 `deleted,failed,shared`(`failed>0`은 `unlink_failed`로
+다음 tick 재시도, `shared>0`은 공유 참조 보존이므로 운영자 검토); 전역 `skipped/overlap`, `stopped`.
+수집·알림·보존은 배포 환경이 담당합니다. 실패는 즉시 재시도 없이 다음 tick, `SQLITE_BUSY`는
+성공이 아닙니다.
+
+두 정리는 24시간 만료된 임시 입력만 지우며 장부·결재·소비된 원증빙 원본·공유 파일·identity
+claim·감사는 건드리지 않습니다. 원증빙 파일 삭제는 DB rollback으로 복원되지 않고, 이 정리는
+DB/WAL/backup의 forensic 소거나 법적 보존 충족이 아닙니다. `.env.example`의 두 opt-in 빈 기본값과
+주석 예시, `WIKI_LOCAL_MODEL_CONFIG` 예시는 백엔드 단위가 관리합니다.
+
+### LLM Wiki 로컬 모델
+
+`WIKI_LOCAL_MODEL_CONFIG`(JSON: `base_url`, `model`, `context_tokens`, `output_tokens`,
+`timeout_ms`, `temperature`)만 Wiki 컴파일·조사에 사용됩니다. `base_url`은 numeric
+loopback origin만 허용되고 `ORBITFLOW_AI_PROVIDER`/Echo/OpenRouter를 상속하지 않습니다.
+설정이 없으면 job은 `unavailable`이며 원본 등록과 게시된 위키 읽기는 계속 동작합니다.
+`server.js`가 worker를 기동·종료하며 lease 판정은 DB 시각입니다.
 
 ## 개인 AI API 키
 
@@ -118,6 +182,11 @@ npm test
 # repository root: 임시 SQLite/임의 포트 실제 기동 후 자체 정리
 node scripts/check_local_startup.mjs
 ```
+
+기능별 격리 테스트(`tests/deadline-*.test.js`, `*-native.integration.mjs`)는 루트의
+`node scripts/run_deadline_isolated.mjs node --test <파일>`로 실행합니다. runner는
+`DATABASE_URL`/`PG_*`/provider key/`NODE_OPTIONS`를 비우고 임시 DB·포트만 넘깁니다.
+native PostgreSQL 검증은 `--pg-bin <pgsql/bin>`으로 격리 인스턴스를 지정합니다.
 
 Backend 테스트는 격리된 임시 SQLite를 사용합니다. 테스트 개수는 변경될 수 있으므로
 고정 개수 대신 명령의 단일 실행 exit code와 출력된 pass/fail을 릴리스 증거로
