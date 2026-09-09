@@ -8,6 +8,8 @@ import * as members from "../controllers/pgMembers.controller.js";
 import * as mod from "../controllers/pgModules.controller.js";
 import * as agent from "../controllers/pgAgent.controller.js";
 import * as expenses from '../controllers/pgExpenses.controller.js';
+import { pgSetup } from '../controllers/financeSetup.controller.js';
+import { createPgIncome } from '../controllers/incomes.controller.js';
 import * as analytics from '../controllers/pgAnalytics.controller.js';
 import * as corrections from '../controllers/pgDailyCorrections.controller.js';
 import * as projectMembers from '../controllers/projectMembers.controller.js';
@@ -34,6 +36,9 @@ pgRouter.get('/analytics/reports/:reportKey', asyncRoute(pgRoute(analytics.repor
 pgRouter.post('/analytics/exports', asyncRoute(pgRoute(analytics.createExport, 'analytics.read', 'analytics')));
 pgRouter.get('/analytics/exports', asyncRoute(pgRoute(analytics.listExports, 'analytics.read', 'analytics')));
 pgRouter.get('/analytics/exports/:exportId/download', asyncRoute(pgRoute(analytics.downloadExport, 'analytics.read', 'analytics')));
+pgRouter.get('/finance/setup', asyncRoute(pgRoute(pgSetup, 'transaction.read', 'finance')));
+pgRouter.post('/finance/setup', asyncRoute(pgRoute(pgSetup, ['transaction.read', 'organization.settings'], 'finance')));
+pgRouter.post('/finance/incomes', asyncRoute(pgRoute(createPgIncome, 'transaction.write', 'finance')));
 pgRouter.post('/finance/expenses', asyncRoute(pgRoute(expenses.createExpense, 'transaction.write', 'finance')));
 pgRouter.post('/finance/transactions/:id/receipts', asyncRoute(pgRoute(expenses.appendReceipts, 'transaction.write', 'finance')));
 pgRouter.get('/finance/transactions/:id', asyncRoute(pgRoute(expenses.transactionDetail, 'transaction.read', 'finance')));

@@ -227,9 +227,15 @@ export async function financeTransactions(req, res) {
             e.counterparty,e.occurred_at,e.input_currency,e.no_receipt_reason,e.budget_id,
             COALESCE(SUM(l.debit), 0) AS 차변,
             COALESCE(SUM(l.credit), 0) AS 대변,
+            COALESCE(SUM(CASE WHEN a.account_type='revenue' THEN l.credit-l.debit ELSE 0 END),0)::text AS income_amount,
+            COALESCE(SUM(CASE WHEN a.account_type='expense' THEN l.debit-l.credit ELSE 0 END),0)::text AS expense_amount,
+            CASE WHEN BOOL_OR(a.account_type='revenue') AND NOT BOOL_OR(a.account_type='expense') THEN 'income'
+                 WHEN BOOL_OR(a.account_type='expense') AND NOT BOOL_OR(a.account_type='revenue') THEN 'expense'
+                 ELSE 'journal' END AS kind,
             CASE WHEN e.posted THEN 'confirmed' ELSE 'pending' END AS status, e.version AS __version
        FROM accounting.journal_entries e
        LEFT JOIN accounting.journal_lines l ON l.entry_id = e.id
+       LEFT JOIN accounting.accounts a ON a.id=l.account_id AND a.company_id=e.company_id
       WHERE e.company_id = $1
       GROUP BY e.id
       ORDER BY e.entry_date DESC, e.id DESC`,

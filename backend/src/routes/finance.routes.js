@@ -3,6 +3,8 @@ import { expenseImportsRouter } from './expenseImports.routes.js';
 
 import * as controller from "../controllers/finance.controller.js";
 import * as expenses from '../controllers/legacyExpenses.controller.js';
+import { legacySetup } from '../controllers/financeSetup.controller.js';
+import { createLegacyIncome } from '../controllers/incomes.controller.js';
 import { asyncRoute } from "../middleware/error.js";
 
 import { authorizeReceiptUpload, receiptRaw, uploadReceipt, downloadReceipt } from '../controllers/receiptFiles.controller.js';
@@ -15,6 +17,9 @@ financeRouter.get('/transactions/:id/receipts/:fileId', asyncRoute(downloadRecei
 financeRouter.post("/accounts", asyncRoute(controller.createAccount));
 financeRouter.get("/accounts", asyncRoute(controller.listAccounts));
 
+financeRouter.get('/setup', asyncRoute(legacySetup));
+financeRouter.post('/setup', asyncRoute(legacySetup));
+financeRouter.post('/incomes', asyncRoute(createLegacyIncome));
 financeRouter.post('/expenses', asyncRoute(expenses.createExpense));
 financeRouter.post('/transactions/:id/receipts', asyncRoute(expenses.appendReceipts));
 financeRouter.get('/transactions/:id', asyncRoute(expenses.transactionDetail));

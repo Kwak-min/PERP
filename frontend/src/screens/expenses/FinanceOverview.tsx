@@ -31,7 +31,8 @@ export function FinanceOverview({ rows, pg, session, loadedAt }: Readonly<{ rows
   const totals = pg ? summary ? [{ currency: '장부 금액', income: summary.수입, expense: summary.지출, balance: summary.잔액 }] : [] : legacyTotals(rows);
   return <section className="expense-panel" aria-label="확정 장부 요약"><header><div><h2>확정 장부 요약</h2><p>전체 기간 · {pg ? '게시된 분개의 계정 방향 기준' : '확정 거래의 통화별 합계'} · {loadedAt} 조회</p></div><Link to="/finance/transactions">전체 거래·상세·CSV 내보내기</Link></header>
     {error && <p role="alert">{error}</p>}{pg && !summary && !error && <p role="status">장부 합계를 불러오는 중...</p>}
-    {totals.map(total => <div key={total.currency}><h3>{total.currency}</h3><dl className="expense-summary"><div><dt>수입</dt><dd>{total.income}</dd></div><div><dt>지출</dt><dd>{total.expense}</dd></div><div><dt>수지 차액</dt><dd>{total.balance}</dd></div></dl></div>)}
+    {totals.map(total => <div key={total.currency}><h3>{total.currency}</h3><dl className="expense-summary"><div><dt>수입</dt><dd>{total.income}</dd></div><div><dt>지출</dt><dd>{total.expense}</dd></div><div><dt>기록한 수입 − 지출</dt><dd>{total.balance}</dd></div></dl></div>)}
+    <p>장부에 기록한 금액의 차이이며 실제 현금·은행 잔액이 아닙니다. 통화를 입력하지 않은 과거 PG 기록은 장부 단위로 표시합니다.</p>
     {!pg && totals.length === 0 && <p>확정된 거래가 없습니다.</p>}
   </section>;
 }

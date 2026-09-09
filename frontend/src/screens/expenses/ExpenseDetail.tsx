@@ -50,7 +50,7 @@ export function ExpenseDetail({ id, session, canWrite, onClose, onChanged }: Rea
       if (!controller.signal.aborted) { pending.current = null; setSlots([]); setUncertain(false); setMessage('영수증 추가가 감사 이력과 함께 저장되었습니다.'); setRevision(n => n + 1); onChanged(); }
     } catch (caught: unknown) {
       if (!controller.signal.aborted) {
-        const definite = caught instanceof ApiError && caught.status < 500;
+        const definite = caught instanceof ApiError && caught.status >= 400 && caught.status < 500 && !['HTTP_ERROR', 'INVALID_RESPONSE'].includes(caught.code);
         if (definite) pending.current = null;
         setUncertain(!definite); setError(userMessageOf(caught));
       }
@@ -63,15 +63,15 @@ export function ExpenseDetail({ id, session, canWrite, onClose, onChanged }: Rea
     {detail && <><dl className="expense-facts">
       <div><dt>전표 ID</dt><dd>{detail.id}</dd></div><div><dt>상태</dt><dd>{statusLabel(detail.status)}</dd></div>
       <div><dt>장부 금액</dt><dd data-detail-amount>{detail.amount ?? '금액 없음'} {detail.input_currency ?? detail.currency ?? ''}</dd></div>
-      <div><dt>사용일</dt><dd>{detail.expense_date}</dd></div>
-      <div><dt>사용처</dt><dd>{detail.counterparty ?? '기존 기록 · 사용처 정보 없음'}</dd></div>
+      <div><dt>거래일</dt><dd>{detail.expense_date}</dd></div>
+      <div><dt>상대방</dt><dd>{detail.counterparty ?? '기존 기록 · 상대방 정보 없음'}</dd></div>
       <div><dt>사용 시각 (서울)</dt><dd>{detail.occurred_at ? new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'medium', hour12: false }).format(new Date(detail.occurred_at)) : '시각 정보 없음'}</dd></div>
       <div><dt>계정 ID</dt><dd data-detail-account>{detail.account_id ?? '단일 계정 없음 · 아래 분개 확인'}</dd></div>
       <div><dt>예산 ID</dt><dd>{detail.budget_id ?? '없음'}</dd></div>
       <div><dt>메모</dt><dd>{detail.memo || '없음'}</dd></div><div><dt>생성 당시 미첨부 사유</dt><dd>{detail.no_receipt_reason ?? '기록 없음'}</dd></div>
     </dl>
     {detail.input_currency === null && <p data-old-record>기존 기록입니다. 새 지출 입력 정보를 추측하지 않습니다.</p>}
-    {detail.lines && <div className="expense-table-wrap"><table><caption>실제 장부 분개</caption><thead><tr><th>계정 ID</th><th>계정 유형</th><th>차변</th><th>대변</th></tr></thead><tbody>{detail.lines.map(line => <tr key={line.id}><td>{line.account_id}</td><td>{line.account_type}</td><td>{line.debit}</td><td>{line.credit}</td></tr>)}</tbody></table></div>}
+    {detail.lines && <details><summary>회계 상세 (원본 분개)</summary><div className="expense-table-wrap"><table><caption>실제 장부 분개</caption><thead><tr><th>계정 ID</th><th>계정 유형</th><th>차변</th><th>대변</th></tr></thead><tbody>{detail.lines.map(line => <tr key={line.id}><td>{line.account_id}</td><td>{line.account_type}</td><td>{line.debit}</td><td>{line.credit}</td></tr>)}</tbody></table></div></details>}
     <h3>원본 영수증 ({detail.receipts.length})</h3><ul className="expense-files">{detail.receipts.map(file => <li key={file.file_id}><span>{file.filename} · {file.mime} · {file.size_bytes.toLocaleString()} bytes</span><Button tone="neutral" data-receipt-download={file.file_id} disabled={downloading !== null} onClick={() => void download(file)}>{downloading === file.file_id ? '다운로드 중...' : '원본 다운로드'}</Button></li>)}</ul>
     {!detail.receipts.length && <p>첨부된 원본이 없습니다.</p>}
     <p>확정된 금액·내용은 덮어쓰지 않습니다. 사후 영수증 추가는 원본을 보존하며 감사 이력을 남깁니다.</p>

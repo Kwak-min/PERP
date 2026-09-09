@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { z } from "zod";
+import { clearMoneyAttempts } from '../services/money-attempts';
 
 const membershipSchema = z.object({
   org_id: z.string(),
@@ -38,6 +39,7 @@ function restore(): SessionState | null {
 }
 
 let current: SessionState | null = typeof window === "undefined" ? null : restore();
+if (typeof window !== 'undefined' && !current) clearMoneyAttempts();
 let currentPersistent =
   typeof window !== "undefined" && localStorage.getItem(STORAGE_KEY) !== null;
 
@@ -73,6 +75,7 @@ export const sessionStore = {
     currentPersistent = false;
     localStorage.removeItem(STORAGE_KEY);
     sessionStorage.removeItem(STORAGE_KEY);
+    clearMoneyAttempts();
     emit();
   },
 };
@@ -81,6 +84,7 @@ if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     if (event.key !== STORAGE_KEY) return;
     current = restore();
+    if (!current) clearMoneyAttempts();
     currentPersistent = localStorage.getItem(STORAGE_KEY) !== null;
     emit();
   });

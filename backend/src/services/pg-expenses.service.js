@@ -27,7 +27,8 @@ export async function postPgTransaction(client, req, payload) {
   const accountId = idSchema.parse(payload.account_id);
   const { rows: [account] } = await client.query(`SELECT id,account_type FROM accounting.accounts
     WHERE id=$1 AND company_id=$2 AND is_active=true AND account_type IN ('revenue','expense') FOR SHARE`, [accountId, companyId]);
-  if (!account || (payload.input_currency && account.account_type !== 'expense')) throw new ApiError('VALIDATION_ERROR', '현재 회사의 활성 지출 계정을 선택하세요.');
+  const strictAccountType = payload.kind === 'income' ? 'revenue' : 'expense';
+  if (!account || (payload.input_currency && account.account_type !== strictAccountType)) throw new ApiError('VALIDATION_ERROR', payload.kind === 'income' ? '현재 회사의 활성 수입 계정을 선택하세요.' : '현재 회사의 활성 지출 계정을 선택하세요.');
   if (payload.budget_id) {
     idSchema.parse(payload.budget_id);
     const { rows: [budget] } = await client.query("SELECT id,account_id FROM accounting.budgets WHERE id=$1 AND company_id=$2 AND status='active' FOR SHARE", [payload.budget_id, companyId]);
