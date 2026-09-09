@@ -7,7 +7,7 @@ import { navigation, screens, sectionLabels, type ScreenDefinition, type ScreenS
 import { authenticatedUserId, logout as revokeSession } from "../../services/auth";
 import { userMessageOf } from "../../services/api";
 import { isPgWorkspace } from "../../services/workspace";
-import { NAV_PREF_NOTICE, navPrefKey, readNavPref, selectNavFavorites, updateNavPref, type NavPref, type NavPrefScope } from "../../store/navPref";
+import { navPrefKey, readNavPref, selectNavFavorites, updateNavPref, type NavPref, type NavPrefScope } from "../../store/navPref";
 import { sessionStore, useSession } from "../../store/session";
 import { Button } from "../ui/Button";
 import { AgentPanel } from "./AgentPanel";
@@ -251,7 +251,6 @@ export function AppShell() {
             <div className="nav-items">{favorites.map(screen => renderEntry(screen, 'favorite'))}</div>
           </section>}
           <div className="nav-personalization" data-testid="nav-personalization" data-pref-status={prefStatus}>
-            <p>{NAV_PREF_NOTICE}</p>
             {prefError && <p role="alert" data-testid="nav-pref-error">{prefError}</p>}
             <button ref={hiddenManager} type="button" className="nav-pref-control nav-hidden-manager" disabled={!prefReady} aria-expanded={managingHidden} aria-controls="nav-hidden-items"
               onClick={() => { setOpenAction(null); setManagingHidden(value => !value); }}>숨긴 메뉴 관리</button>
