@@ -7,7 +7,7 @@ export const analysisSchema = z.object({
   reason: z.string().optional(),
   version: versionTokenSchema,
   model: z.string().nullable(),
-  local_only: z.literal(true),
+  local_only: z.boolean(),
   candidates: z.number().int().optional(),
   candidate_limit: z.number().int().optional(),
   truncated: z.boolean().optional(),

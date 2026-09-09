@@ -6,7 +6,9 @@ import { asyncRoute } from "../middleware/error.js";
 import { knowledgeWikiRouter } from './knowledge-wiki.routes.js';
 import { knowledgeWikiPublicationRouter } from './knowledge-wiki-publication.routes.js';
 
+import { personalCloudRouter } from './personal-cloud.routes.js';
 export const vaultRouter = Router();
+vaultRouter.use(personalCloudRouter('legacy'));
 vaultRouter.use('/wiki', knowledgeWikiPublicationRouter('legacy', 'personal'));
 vaultRouter.use('/wiki', knowledgeWikiRouter('legacy', 'personal'));
 

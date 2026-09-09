@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { canonical, deepFreeze, wikiError, WIKI_CONTRACT } from './knowledge-wiki-contract.service.js';
 import { env } from '../config/env.js';
 import { knowledgeCloudAllowed, knowledgeOpenRouterJson } from './knowledge-ai.service.js';
+import {assertPersonalReceipt,personalCloudAllowed} from './personal-cloud-consent.service.js';
 
 const fail = (code, status) => { throw wikiError(code, status); };
 const positive = z.number().int().positive();
@@ -134,22 +135,25 @@ function validatedCompletion(response,config,accounting) {
       return deepFreeze({output:parsed.data,model_version:config.model,accounting:{...accounting,actual_model:response.model,actual_prompt_tokens:usage.prompt_tokens,actual_completion_tokens:usage.completion_tokens}});
 }
 
-export function createOpenRouterWikiCompiler(configuration,context) {
+export function createOpenRouterWikiCompiler(configuration,context,consent=null) {
   const config=wikiModelConfiguration(configuration);
-  if (config.provider !== 'openrouter' || context.scope !== 'company') fail('OPENROUTER_MODEL_CONFIG',503);
+  if (config.provider !== 'openrouter') fail('OPENROUTER_MODEL_CONFIG',503);
+  if(context.scope==='personal')assertPersonalReceipt(context,consent);
   return Object.freeze({configuration:config,
     async inspect(signal) {
-      const metadata=await knowledgeOpenRouterJson(context,'/models',{signal,timeoutMs:config.timeout_ms});
+      const metadata=await knowledgeOpenRouterJson(context,'/models',{signal,consent,timeoutMs:config.timeout_ms});
       const model=metadata.data?.find(item=>item.id===config.model);
       if (!model || !model.supported_parameters?.includes('structured_outputs')) fail('OPENROUTER_STRUCTURED_OUTPUT_UNSUPPORTED',503);
       if (!Number.isSafeInteger(model.context_length) || model.context_length<config.context_tokens) fail('MODEL_CONTEXT_MISMATCH',503);
       return deepFreeze({model_version:config.model,configuration:config,context_verification:'openrouter_advertised_context',advertised_context_tokens:model.context_length});
     },
     async compile(manifest,signal) {
-      if (!manifest.inputs.every(input=>knowledgeCloudAllowed(input.classification))) fail('EXTERNAL_DATA_BLOCKED',503);
+      const allowed=context.scope==='personal'?personalCloudAllowed:knowledgeCloudAllowed;
+      if (!manifest.inputs.every(input=>allowed(input.classification))) fail('EXTERNAL_DATA_BLOCKED',503);
+      if(context.scope==='personal' && consent.manifest_hash!==manifest.hash)fail('CONSENT_SCOPE_CHANGED',409);
       const accounting=contextAccounting(manifest,config);
       const body={...compilerRequest(manifest,config),provider:{require_parameters:true}};
-      const response=await knowledgeOpenRouterJson(context,'/chat/completions',{body,signal,timeoutMs:config.timeout_ms,maxBytes:WIKI_CONTRACT.limits.outputBytes});
+      const response=await knowledgeOpenRouterJson(context,'/chat/completions',{body,signal,consent,timeoutMs:config.timeout_ms,maxBytes:WIKI_CONTRACT.limits.outputBytes});
       return validatedCompletion(response,config,{...accounting,provider:'openrouter'});
     },
   });

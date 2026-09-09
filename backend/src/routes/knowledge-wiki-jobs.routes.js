@@ -2,8 +2,10 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncRoute } from '../middleware/error.js';
 import { pgRoute } from '../middleware/pgAccess.js';
-import { admitWikiJob, getWikiJob, retryWikiJob, cancelWikiJob, draftWikiQuery } from '../services/knowledge-wiki-jobs.service.js';
+import { previewPersonalWiki, admitWikiJob, getWikiJob, retryWikiJob, cancelWikiJob, draftWikiQuery } from '../services/knowledge-wiki-jobs.service.js';
 import { configuredWikiModel } from '../services/knowledge-wiki-worker.service.js';
+import {revokePersonalConsent} from '../services/personal-cloud-consent.service.js';
+import {withKnowledgeTransaction} from '../services/knowledge-wiki-store.service.js';
 
 export function knowledgeWikiJobsRouter(store,scope,context) {
   const router=Router(),empty=z.object({}).strict();
@@ -16,6 +18,8 @@ export function knowledgeWikiJobsRouter(store,scope,context) {
   }
   // Admission/retry/cancel derive mutation authority from the validated or stored
   // operation inside the trusted job transaction. Only draft is always a write.
+  route('post','/cloud-preview',false,async(req,res,ctx)=>res.json(await previewPersonalWiki(ctx,req.body)));
+  route('delete','/cloud-preview',false,async(req,res,ctx)=>{await withKnowledgeTransaction(ctx,{},function*(){});res.json(revokePersonalConsent(ctx,req.body));});
   route('post','/',false,async(req,res,ctx)=>{
     const admitted=await admitWikiJob(ctx,req.body,req.get('Idempotency-Key'),configuredWikiModel());
     res.status(admitted.created ? 202 : 200).json(admitted.job);

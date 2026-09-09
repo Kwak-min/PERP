@@ -176,7 +176,7 @@ class WikiTransaction {
     if (!this.pg) {
       const row = yield* this.one(`SELECT * FROM ${kind === 'note' ? 'vault_note' : 'document'} WHERE id=? AND tenant_id=? AND org_id=? AND deleted_at IS NULL${kind === 'document' ? ' AND archived=0' : ''}`,[id,c.tenantId,c.companyId]);
       if (!row || (kind === 'note' ? row.owner_id !== c.actorId : !canReadDocument(this.authority,row))) return null;
-      return { title:row.title,content:row.content,version:String(row.version),restrictions:{ owner_id:row.owner_id,visibility:kind === 'note' ? 'private' : row.visibility,sensitivity:row.sensitivity } };
+      return { title:row.title,content:row.content,version:String(row.version),restrictions:{ owner_id:row.owner_id,visibility:kind === 'note' ? 'private' : row.visibility,sensitivity:row.sensitivity,...(kind==='note' ? {agent_enabled:Boolean(row.agent_enabled)} : {}) } };
     }
     if (!/^[1-9]\d*$/.test(id)) return null;
     const row = kind === 'note' ? yield* this.one(`SELECT n.title,COALESCE(n.content_md,'') AS content,n.xmin::text AS version FROM notes.notes n

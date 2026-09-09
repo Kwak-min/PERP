@@ -23,6 +23,7 @@ import { duesPaymentHistory, recordDuesPayment } from '../controllers/pgDuesPaym
 // 마운트 지점: /api/v1/pg
 import { receiptRaw, uploadReceipt, downloadReceipt } from '../controllers/receiptFiles.controller.js';
 import { knowledgeWikiRouter } from './knowledge-wiki.routes.js';
+import { personalCloudRouter } from './personal-cloud.routes.js';
 import { knowledgeWikiPublicationRouter } from './knowledge-wiki-publication.routes.js';
 
 export const pgRouter = Router();
@@ -39,6 +40,7 @@ pgRouter.post('/finance/transactions/receipt-uploads', (req, res, next) => async
 pgRouter.get('/finance/transactions/:id/receipts/:fileId', asyncRoute(pgRoute(downloadReceipt('perp_db', 'transaction'), 'transaction.read', 'finance')));
 pgRouter.post('/approvals/receipt-uploads', (req, res, next) => asyncRoute(pgRoute(withPgFeature('approvals', () => next()), 'approval.request', null))(req, res, next), receiptRaw, asyncRoute(uploadReceipt('perp_db', 'approval')));
 pgRouter.get('/approvals/:id/receipts/:fileId', asyncRoute(pgRoute(withPgFeature('approvals', downloadReceipt('perp_db', 'approval')))));
+pgRouter.use('/vault', personalCloudRouter('pg'));
 pgRouter.use('/vault/wiki', knowledgeWikiPublicationRouter('pg', 'personal'));
 pgRouter.use('/vault/wiki', knowledgeWikiRouter('pg', 'personal'));
 pgRouter.use('/documents/wiki', knowledgeWikiPublicationRouter('pg', 'company'));

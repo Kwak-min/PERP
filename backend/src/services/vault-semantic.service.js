@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 
-// 개인 노트 전용. 외부 공급자/echo/키워드 대체 경로는 없다.
+// 자동 분석은 로컬 전용. 클라우드 결과는 명시적 범위 동의와 최신 검증을 통과한 경우에만 수락한다.
 export const CANDIDATE_LIMIT = 32;
 const MAX_SCOPES = 64, MAX_NOTES = 512, MAX_JOBS = 64;
 const THRESHOLD = 0.82;
 export const legacyVaultScope = p => JSON.stringify(["sqlite", p.tenantId, p.orgId, p.userId]);
-export const pgVaultScope = identity => JSON.stringify(["pg", identity.companyId, identity.userId]);
+export const pgVaultScope = identity => JSON.stringify(["pg", identity.userId]);
 
 function configuration() {
   const model = process.env.ORBITFLOW_VAULT_EMBEDDING_MODEL?.trim();
@@ -71,13 +71,14 @@ class VaultSemanticService {
     const state = this.state(scope);
     boundedSet(state.versions, id, version);
     state.statuses.delete(id);
-    for (const [key, edge] of state.edges) if (edge.source === id || edge.target_id === id) state.edges.delete(key);
+    for(const [key,status] of state.statuses)if(status.scope_versions?.some(n=>n.id===id))state.statuses.delete(key);
+    for (const [key, edge] of state.edges) if (edge.source === id || edge.target_id === id || edge.provenance.scope_versions?.some(n=>n.id===id)) state.edges.delete(key);
     for (const [key, value] of state.vectors) if (value.id === id) state.vectors.delete(key);
   }
   status(scope, note) {
     const state = this.state(scope);
     const status = state.statuses.get(note.id);
-    return status?.version === note.version ? status : { state: state.config.reason ? "unavailable" : "not_analyzed", reason: state.config.reason ?? "cache_empty", version: note.version, model: state.config.model ?? null, local_only: true };
+    return status && String(status.version) === String(note.version) ? {...status,version:note.version} : { state: state.config.reason ? "unavailable" : "not_analyzed", reason: state.config.reason ?? "cache_empty", version: note.version, model: state.config.model ?? null, local_only: true };
   }
   schedule(scope, note, loadCandidates, disabled = false) {
     const state = this.state(scope), config = state.config;
@@ -143,9 +144,27 @@ class VaultSemanticService {
     try { await Promise.race([Promise.all(jobs.map(j => j.done.promise)), new Promise(resolve => { timer = setTimeout(resolve, 7000); })]); }
     finally { clearTimeout(timer); }
   }
+  acceptCloud(scope,approved,vectors,consent) {
+    // SQLite 판은 숫자, PG xmin은 문자열이다. 로컬 캐시와 같은 원본 타입을 유지한다.
+    const inputs=approved.inputs.map(n=>({...n,version:JSON.parse(scope)[0]==='sqlite'?Number(n.version):n.version}));
+    const state=this.state(scope),source=inputs[0],scope_versions=inputs.map(n=>({id:n.id,version:n.version}));
+    this.invalidate(scope,source.id,source.version);
+    for(const n of scope_versions)boundedSet(state.versions,n.id,n.version);
+    const matches=[];
+    inputs.slice(1).forEach((target,index)=>{
+      const score=Math.max(-1,Math.min(1,vectors[0].reduce((sum,v,i)=>sum+v*vectors[index+1][i],0)));
+      if(score>=THRESHOLD)matches.push({source:source.id,target_id:target.id,target_title:target.title,kind:'ai_similarity',score,
+        provenance:{provider:'openrouter',model:approved.model,method:'embedding_cosine',source_version:source.version,target_version:target.version,analyzed_at:new Date().toISOString(),scope_versions,consent}});
+    });
+    for(const edge of matches.sort((a,b)=>b.score-a.score).slice(0,5))boundedSet(state.edges,JSON.stringify([edge.source,edge.target_id].sort()),edge,MAX_NOTES*5);
+    const status={state:'ready',version:source.version,model:approved.model,local_only:false,candidates:approved.inputs.length-1,scope_versions,consent};
+    boundedSet(state.statuses,source.id,status);return status;
+  }
   graph(scope, notes) {
     const state = this.state(scope), known = new Map(notes.map(n => [n.id, n]));
-    const edges = [...state.edges.values()].filter(e => known.get(e.source)?.version === e.provenance.source_version && known.get(e.target_id)?.version === e.provenance.target_version);
+    const valid=versions=>!versions || versions.every(n=>String(known.get(n.id)?.version)===String(n.version));
+    for(const [id,status] of state.statuses)if(!valid(status.scope_versions))state.statuses.delete(id);
+    const edges = [...state.edges.values()].filter(e => String(known.get(e.source)?.version) === String(e.provenance.source_version) && String(known.get(e.target_id)?.version) === String(e.provenance.target_version) && valid(e.provenance.scope_versions));
     return { edges, analysis: notes.map(note => ({ id: note.id, ...this.status(scope, note) })) };
   }
 }

@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { withKnowledgeTransaction, withKnowledgeJobTransaction, withKnowledgeQueryDraftTransaction, retireUnauthorizedWikiJob } from './knowledge-wiki-store.service.js';
 import { canonical, sha256, citationFor, wikiError, WIKI_CONTRACT } from './knowledge-wiki-contract.service.js';
 import { wikiModelConfiguration, openRouterWikiConfiguration, createOpenRouterWikiCompiler, createLocalWikiCompiler, compilerInstructions, compilerOutputSchema, contextAccounting } from './knowledge-wiki-compiler.service.js';
-import { knowledgeCloudAllowed, knowledgeKeyConfigured } from './knowledge-ai.service.js';
+import { knowledgeCloudAllowed, knowledgeKeyConfigured, personalCloudConfigured } from './knowledge-ai.service.js';
+import {cloudApprovalSchema,preparePersonalConsent,approvePersonalConsent,assertPersonalReceipt,personalCloudAllowed} from './personal-cloud-consent.service.js';
 
 const fail = (code,status=409) => { throw wikiError(code,status); };
 export const WIKI_JOB_POLICY = Object.freeze({attempts:3,lease_ms:120000,heartbeat_ms:30000,queue:20});
@@ -26,6 +27,8 @@ function* owned(tx,id,lock=false) {
 function* fresh(tx,job) {
   const saved = snapshot(job).manifest, checked = yield* tx.manifest(saved.inputs);
   if (checked.hash !== saved.hash || tx.wiki.active_schema_id !== job.schema_revision_id) fail('MANIFEST_CONFLICT');
+  const consent=snapshot(job).consent;
+  if(consent){assertPersonalReceipt(tx.context,consent);if(consent.manifest_hash!==checked.hash)fail('CONSENT_SCOPE_CHANGED');yield* personalInputs(tx,checked);}
   if (job.current_attempt_id) {
     const stored = yield* tx.storedManifest(job.id,job.current_attempt_id);
     if (stored.hash !== checked.hash || job.input_manifest_hash !== stored.hash) fail('MANIFEST_CONFLICT');
@@ -102,21 +105,47 @@ function* admissionInputs(tx,request) {
 function dto(job,attempts=[]) {
   return {id:job.id,operation:job.operation,state:job.state,fence:job.fence,current_attempt_id:job.current_attempt_id,failure_code:job.failure_code,result:job.result_json ? JSON.parse(job.result_json) : null,input_manifest_hash:job.input_manifest_hash,created_at:job.created_at,updated_at:job.updated_at,attempts:attempts.map(a=>({id:a.id,ordinal:a.ordinal,fence:a.fence,model_version:a.model_version,configuration:JSON.parse(a.config_json),input_manifest_hash:a.input_manifest_hash,result_hash:a.result_hash,started_at:a.started_at,finished_at:a.finished_at,failure_code:a.failure_code}))};
 }
+function* personalInputs(tx,manifest) {
+ if(tx.context.scope!=='personal' || !manifest.inputs.every(i=>personalCloudAllowed(i.classification)))fail('EXTERNAL_DATA_BLOCKED',403);
+ for(const id of new Set(manifest.inputs.flatMap(i=>i.source_revision_ids))){
+  const revision=yield* tx.sourceRevision(id,{current:true});if(!revision)fail('CONSENT_SCOPE_CHANGED');
+  if(revision.source_identity.kind==='note'){
+   const origin=yield* tx.origin('note',revision.source_identity.opaque_id);
+   if(!origin || origin.restrictions.agent_enabled===false || !personalCloudAllowed(origin.restrictions.sensitivity))fail('CONSENT_SCOPE_CHANGED');
+  }
+ }
+}
+const consentScope=(request,inputs,config)=>({kind:'personal_wiki',request,model:config.model,configuration:config,inputs:inputs.manifest.inputs});
+export async function previewPersonalWiki(context,input) {
+ const request=wikiJobRequestSchema.parse(input),config=openRouterWikiConfiguration();
+ if(!personalCloudConfigured())fail('PERSONAL_SHARED_KEY_REQUIRED',503);
+ return withKnowledgeJobTransaction(context,{operation:request.operation},function*(tx){
+  const inputs=yield* admissionInputs(tx,request);yield* personalInputs(tx,inputs.manifest);contextAccounting(inputs.manifest,config);
+  return preparePersonalConsent(context,consentScope(request,inputs,config));
+ });
+}
 export async function admitWikiJob(context,input,idempotencyKey,configuration=null) {
-  const request = wikiJobRequestSchema.parse(input);
+  const {cloud_consent,...requested}=z.object({cloud_consent:cloudApprovalSchema.optional()}).passthrough().parse(input);
+  const approval=cloud_consent??null;
+  const request = wikiJobRequestSchema.parse(requested);
   if (typeof idempotencyKey !== 'string' || !/^[\x21-\x7e]{1,200}$/.test(idempotencyKey)) fail('VALIDATION_ERROR',400);
-  const localConfig = configuration === null ? null : wikiModelConfiguration(configuration), requestHash = sha256(canonical(request));
+  const localConfig = configuration === null ? null : wikiModelConfiguration(configuration), requestHash = sha256(canonical({...request,...(approval?{cloud_consent:approval}:{})}));
   return withKnowledgeJobTransaction(context,{operation:request.operation},function*(tx) {
     const old = (yield* tx.all('job',{where:{actor_id:context.actorId,idempotency_key:idempotencyKey}}))[0];
     if (old) { if (old.request_hash !== requestHash) fail('IDEMPOTENCY_CONFLICT'); yield* fresh(tx,old); return {created:false,job:dto(old)}; }
     yield* capacity(tx);
     const inputs = yield* admissionInputs(tx,request);
     const permitted=context.scope==='company' && inputs.manifest.inputs.every(input=>knowledgeCloudAllowed(input.classification));
-    const config=permitted && knowledgeKeyConfigured(context) ? openRouterWikiConfiguration() : localConfig;
-    if (config?.provider==='openrouter' && !permitted) fail('EXTERNAL_DATA_BLOCKED',503);
+    const config=approval || (permitted && knowledgeKeyConfigured(context)) ? openRouterWikiConfiguration() : localConfig;
+    let consent=null;
+    if(approval){
+      yield* personalInputs(tx,inputs.manifest);
+      consent={...approvePersonalConsent(context,approval,consentScope(request,inputs,config)),manifest_hash:inputs.manifest.hash};
+    }
+    if (config?.provider==='openrouter' && !permitted && !consent) fail('EXTERNAL_DATA_BLOCKED',503);
     if (config) contextAccounting(inputs.manifest,config);
     const instant = yield* tx.clock();
-    const job = yield* tx.insert('job',{operation:request.operation,request_json:canonical(request),request_hash:requestHash,actor_id:context.actorId,idempotency_key:idempotencyKey,state:'queued',fence:0,source_vector_json:canonical({...inputs,configuration:config}),target_vector_json:canonical(inputs.targets),schema_revision_id:tx.wiki.active_schema_id,config_version:sha256(canonical(config)),created_at:instant,updated_at:instant});
+    const job = yield* tx.insert('job',{operation:request.operation,request_json:canonical(request),request_hash:requestHash,actor_id:context.actorId,idempotency_key:idempotencyKey,state:'queued',fence:0,source_vector_json:canonical({...inputs,configuration:config,...(consent?{consent}:{})}),target_vector_json:canonical(inputs.targets),schema_revision_id:tx.wiki.active_schema_id,config_version:sha256(canonical(config)),created_at:instant,updated_at:instant});
     yield* tx.event('job.queued',{job_id:job.id});
     return {created:true,job:dto(yield* tx.get('job',job.id))};
   });
@@ -206,7 +235,7 @@ function* validateOutput(tx,job,manifest,envelope) {
   }
   const suggestions=[];
   for (const suggestion of output.suggestions) suggestions.push({kind:'model_suggestion',code:suggestion.code,message:suggestion.message,citations:yield* citations(suggestion.citations)});
-  return {proposed,heads,result:{result_revision_id:randomUUID(),operation:job.operation,review_state:'unreviewed',answer_md:output.answer_md ? safeMarkdown(output.answer_md) : null,citations:resultCitations,citation_validation:resultCitations.length || proposed.some(p=>p.citations.length) ? 'anchors_valid' : 'no_evidence',freshness:'current',input_manifest_hash:manifest.hash,provenance:{model_version:envelope.model_version,attempt_id:job.current_attempt_id,compiler_version:'wiki-local-v1',accounting:envelope.accounting ?? null,anchor_meaning:'traceability_not_verified_truth'},uncertainty:output.uncertainty,retrieval_coverage:saved.coverage,change_set_id:null,issues:[...saved.issues,...suggestions]}};
+  return {proposed,heads,result:{result_revision_id:randomUUID(),operation:job.operation,review_state:'unreviewed',answer_md:output.answer_md ? safeMarkdown(output.answer_md) : null,citations:resultCitations,citation_validation:resultCitations.length || proposed.some(p=>p.citations.length) ? 'anchors_valid' : 'no_evidence',freshness:'current',input_manifest_hash:manifest.hash,provenance:{model_version:envelope.model_version,attempt_id:job.current_attempt_id,compiler_version:'wiki-local-v1',accounting:envelope.accounting ?? null,...(saved.consent?{consent:saved.consent}:{}),anchor_meaning:'traceability_not_verified_truth'},uncertainty:output.uncertainty,retrieval_coverage:saved.coverage,change_set_id:null,issues:[...saved.issues,...suggestions]}};
 }
 function* createDraft(tx,job,manifest,proposed,heads) {
   if (Buffer.byteLength(canonical(proposed))>WIKI_CONTRACT.limits.outputBytes) fail('MODEL_OUTPUT_LIMIT',502);
@@ -299,7 +328,7 @@ async function executeWikiJob(context,id,{signal,owner=randomUUID()}={}) {
     if (!['queued','running'].includes(row.state) || (row.state==='running' && row.lease_until>instant)) return {job:null};
     try {yield* fresh(tx,row);yield* targetsCurrent(tx,JSON.parse(row.target_vector_json));}
     catch(error) {
-      if (!['SOURCE_REVOKED','MANIFEST_CONFLICT','SCHEMA_CONFLICT','TARGET_CONFLICT'].includes(error.code)) throw error;
+      if (!['SOURCE_REVOKED','MANIFEST_CONFLICT','SCHEMA_CONFLICT','TARGET_CONFLICT','CONSENT_SCOPE_CHANGED','EXTERNAL_DATA_BLOCKED'].includes(error.code)) throw error;
       // Authorized maintenance invalidation, not a lease-owner completion or renewal.
       if (row.current_attempt_id && row.state==='running') yield* tx.update('job_attempt',row.current_attempt_id,{failure_code:error.code,finished_at:instant});
       yield* tx.update('job',id,{state:'failed',fence:row.fence+1,failure_code:error.code,lease_owner:null,lease_until:null,updated_at:instant});
@@ -316,7 +345,7 @@ async function executeWikiJob(context,id,{signal,owner=randomUUID()}={}) {
     if (noEvidence) modelSnapshot={model_version:config?.model ?? 'unconfigured',configuration:config,context_verification:'no_evidence_not_dispatched'};
     else {
       if (!config) fail('MODEL_UNAVAILABLE',503);
-      compiler=config.provider==='openrouter' ? createOpenRouterWikiCompiler(config,context) : createLocalWikiCompiler(config); modelSnapshot=await compiler.inspect(signal);
+      compiler=config.provider==='openrouter' ? createOpenRouterWikiCompiler(config,context,saved.consent) : createLocalWikiCompiler(config); modelSnapshot=await compiler.inspect(signal);
     }
   } catch(error) {
     errorBeforeClaim=error;

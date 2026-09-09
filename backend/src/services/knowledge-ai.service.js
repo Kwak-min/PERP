@@ -1,4 +1,7 @@
 import { db } from '../config/db.js';
+import { env } from '../config/env.js';
+import { openRouterForKey } from './ai-provider.service.js';
+import { assertPersonalReceipt } from './personal-cloud-consent.service.js';
 import { keyMetadata, resolveOwnerProvider } from './ai-key.service.js';
 import { wikiError } from './knowledge-wiki-contract.service.js';
 
@@ -19,8 +22,11 @@ export function knowledgeKeyConfigured(context) {
 }
 
 // 비밀값/공급자 오류 본문은 외부로 반환하거나 저장하지 않는다. 리다이렉트는 금지한다.
-export async function knowledgeOpenRouterJson(context, path, {body,signal,timeoutMs=60000,maxBytes=4000000}={}) {
-  const scope=knowledgeKeyScope(context), provider=scope ? resolveOwnerProvider(scope) : null;
+export function personalCloudConfigured() { return Boolean(env.openrouterApiKey); }
+export async function knowledgeOpenRouterJson(context, path, {body,signal,consent,timeoutMs=60000,maxBytes=4000000}={}) {
+  if(context.scope==='personal')assertPersonalReceipt(context,consent);
+  // 개인 소유 범위에서는 회사별 사용자 키를 추측하지 않는다. 명시적 동의를 받은 서버 공용 정책만 적용한다.
+  const scope=knowledgeKeyScope(context), provider=context.scope==='personal' ? (env.openrouterApiKey ? openRouterForKey(env.openrouterApiKey) : null) : scope ? resolveOwnerProvider(scope) : null;
   if (!provider) throw wikiError('OPENROUTER_KEY_REQUIRED',503);
   const bounded=AbortSignal.any([AbortSignal.timeout(timeoutMs),...(signal?[signal]:[])]);
   try {

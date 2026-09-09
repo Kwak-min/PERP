@@ -136,7 +136,7 @@ async function embeddings(config, documents) {
   }
   return normalizeVectors(vectors,documents.length);
 }
-function normalizeVectors(vectors,count) {
+export function normalizeVectors(vectors,count) {
   if (!Array.isArray(vectors) || vectors.length !== count) throw new Error("invalid_embeddings");
   const dimension = vectors[0]?.length;
   if (!Number.isInteger(dimension) || dimension < 2 || dimension > 8192) throw new Error("invalid_embeddings");
