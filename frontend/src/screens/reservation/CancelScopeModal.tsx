@@ -1,11 +1,13 @@
 ﻿import { useState } from "react";
 import type { CancelScope } from "./model";
+import { ReservationModal } from "./ReservationModal";
 
 interface CancelScopeModalProps {
   isRecurring: boolean;
   onConfirm: (scope: CancelScope) => void;
   onClose: () => void;
   busy?: boolean;
+  error?: string | null;
 }
 
 const ALL_OPTIONS: { value: CancelScope; label: string; desc: string }[] = [
@@ -18,17 +20,13 @@ const THIS_ONLY: { value: CancelScope; label: string; desc: string }[] = [
   { value: "THIS", label: "이 예약만 취소", desc: "선택한 날짜의 예약 1건만 취소됩니다." },
 ];
 
-export function CancelScopeModal({ isRecurring, onConfirm, onClose, busy = false }: Readonly<CancelScopeModalProps>) {
+export function CancelScopeModal({ isRecurring, onConfirm, onClose, busy = false, error }: Readonly<CancelScopeModalProps>) {
   const [scope, setScope] = useState<CancelScope>("THIS");
   const options = isRecurring ? ALL_OPTIONS : THIS_ONLY;
 
   return (
-    <div className="rsv-modal-backdrop" onClick={onClose}>
-      <div className="rsv-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="rsv-modal-header">
-          <h2 className="rsv-modal-title">예약 취소</h2>
-          <button className="rsv-modal-close" onClick={onClose} aria-label="닫기">X</button>
-        </div>
+    <ReservationModal title="예약 취소" onClose={onClose} busy={busy}>
+        {error && <div role="alert" className="rsv-error-banner">{error}</div>}
         {isRecurring && (
           <p style={{ fontSize: "0.875rem", color: "var(--of-text-muted, #5b6b80)", marginBottom: "1rem" }}>
             반복 예약입니다. 취소 범위를 선택해주세요.
@@ -37,7 +35,7 @@ export function CancelScopeModal({ isRecurring, onConfirm, onClose, busy = false
         <div className="rsv-scope-options">
           {options.map((opt) => (
             <label key={opt.value} className={`rsv-scope-option ${scope === opt.value ? "selected" : ""}`}>
-              <input type="radio" name="cancelScope" value={opt.value} checked={scope === opt.value} onChange={() => setScope(opt.value)} />
+              <input type="radio" disabled={busy} name="cancelScope" value={opt.value} checked={scope === opt.value} onChange={() => setScope(opt.value)} />
               <div>
                 <div className="rsv-scope-label">{opt.label}</div>
                 <div className="rsv-scope-desc">{opt.desc}</div>
@@ -51,7 +49,6 @@ export function CancelScopeModal({ isRecurring, onConfirm, onClose, busy = false
             {busy ? "취소 중..." : "예약 취소"}
           </button>
         </div>
-      </div>
-    </div>
+    </ReservationModal>
   );
 }

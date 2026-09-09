@@ -56,6 +56,7 @@ export const reservationSchema = z.object({
   endTime: z.string(),
   status: reservationStatusSchema,
   recurrenceRuleId: z.number().nullable(),
+  isMine: z.boolean().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
   space: spaceSchema.optional(),
@@ -63,6 +64,13 @@ export const reservationSchema = z.object({
   attendees: z.array(attendeeSchema).optional(),
 });
 export type Reservation = z.infer<typeof reservationSchema>;
+export const reservationCreationSchema = z.union([
+  z.array(reservationSchema).transform(created => ({ created, skipped: [] })),
+  z.object({ created: z.array(reservationSchema), skipped: z.array(z.object({
+    startTime: z.string().datetime({ offset: true }), endTime: z.string().datetime({ offset: true }), code: z.literal("RESERVATION_CONFLICT"),
+  })) }),
+]);
+export type ReservationCreation = z.infer<typeof reservationCreationSchema>;
 
 // ── Timetable ──────────────────────────────────────────────────────────────
 export const timetableSlotSchema = z.object({
@@ -165,7 +173,8 @@ export function formatTime(isoString: string): string {
   return new Date(isoString).toLocaleTimeString("ko-KR", {
     hour: "2-digit",
     minute: "2-digit",
-    hour12: false,
+    hourCycle: "h23",
+    timeZone: "Asia/Seoul",
   });
 }
 
@@ -175,11 +184,12 @@ export function formatDate(isoString: string): string {
     month: "long",
     day: "numeric",
     weekday: "short",
+    timeZone: "Asia/Seoul",
   });
 }
 
 export function formatDateRange(start: string, end: string): string {
-  return `${formatDate(start)} ${formatTime(start)} – ${formatTime(end)}`;
+  return `${formatDate(start)} ${formatTime(start)} – ${formatDate(end)} ${formatTime(end)}`;
 }
 
 export const STATUS_LABEL: Record<ReservationStatus, string> = {
