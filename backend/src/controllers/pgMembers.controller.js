@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { pgIdentity } from "../middleware/pgAccess.js";
+import { pgIdentity, resolvePgCompanyPrincipal } from "../middleware/pgAccess.js";
 import { pgQuery, pgTransaction } from "../config/pg.js";
 import { ApiError } from "../utils/errors.js";
 import { orgIdSchema, orgMutation, recordOrgChange, withOrgAuditSchema } from "../services/pg-org-audit.service.js";
@@ -9,6 +9,29 @@ import { orgIdSchema, orgMutation, recordOrgChange, withOrgAuditSchema } from ".
 // 모든 조회는 로그인 사용자의 회사(company_id)로 스코프한다.
 
 const resolveAuthUser = pgIdentity;
+
+// 부서 접근 역할(org.department_access_roles)과 현재 사용자의 역할/직급 키 집합을 모은다.
+// can_enter = 접근 역할이 비었거나(전체 공개) 사용자 키와 교집합이 있으면 true.
+async function departmentAccessContext(req, companyId) {
+  const { rows } = await pgQuery(
+    `SELECT department_id, array_agg(role_key ORDER BY role_key) AS roles
+       FROM org.department_access_roles WHERE company_id = $1 GROUP BY department_id`,
+    [companyId],
+  );
+  const accessMap = new Map(rows.map((r) => [String(r.department_id), r.roles]));
+  const principal = req.pgCompanyPrincipal ?? (await resolvePgCompanyPrincipal(req).catch(() => null));
+  const userKeys = new Set(principal?.roles ?? []);
+  const positionId = principal?.membership?.positionId;
+  if (positionId) {
+    const { rows: pos } = await pgQuery(`SELECT name FROM org.positions WHERE id = $1 AND company_id = $2`, [positionId, companyId]);
+    if (pos[0]) userKeys.add(pos[0].name);
+  }
+  return { accessMap, userKeys };
+}
+
+function canEnterDepartment(roles, userKeys) {
+  return !roles || roles.length === 0 || roles.some((role) => userKeys.has(role));
+}
 
 async function companyMembers(companyId, query = pgQuery) {
   return (await query(`SELECT u.id, u.email, u.name, m.department_id, m.position_id,
@@ -55,14 +78,18 @@ export async function listDepartments(req, res) {
       ORDER BY id`,
     [companyId],
   );
-  const items = rows.map((r) => ({
-    id: String(r.id),
-    name: r.name,
-    parent_id: r.parent_id ? String(r.parent_id) : null,
-    leader_id: r.manager_id ? String(r.manager_id) : null,
-    access_roles: [],
-    can_enter: true,
-  }));
+  const { accessMap, userKeys } = await departmentAccessContext(req, companyId);
+  const items = rows.map((r) => {
+    const roles = accessMap.get(String(r.id)) ?? [];
+    return {
+      id: String(r.id),
+      name: r.name,
+      parent_id: r.parent_id ? String(r.parent_id) : null,
+      leader_id: r.manager_id ? String(r.manager_id) : null,
+      access_roles: roles,
+      can_enter: canEnterDepartment(roles, userKeys),
+    };
+  });
   res.json({ items });
 }
 
@@ -103,8 +130,10 @@ export async function orgChart(req, res) {
       unassigned.push(m);
     }
   }
+  const { accessMap, userKeys } = await departmentAccessContext(req, companyId);
   const buildSeat = (d) => {
     const members = byDept.get(String(d.id)) ?? [];
+    const roles = accessMap.get(String(d.id)) ?? [];
     return {
       id: String(d.id),
       name: d.name,
@@ -114,6 +143,8 @@ export async function orgChart(req, res) {
       leader: d.manager_id ? byId.get(String(d.manager_id)) ?? null : null,
       member_count: members.length,
       members,
+      access_roles: roles,
+      can_enter: canEnterDepartment(roles, userKeys),
       children: depts.filter((x) => String(x.parent_id) === String(d.id)).map(buildSeat),
     };
   };

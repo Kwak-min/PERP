@@ -157,11 +157,16 @@ pgRouter.get("/hr/leaves/calendar", asyncRoute(pgRoute(withPgFeature("leave", mo
 pgRouter.post("/hr/leaves/:id/decide", asyncRoute(pgRoute(withPgFeature("leave", mod.hrLeaveDecide), "leave.approve", null)));
 pgRouter.get("/hr/leave-balances", asyncRoute(pgRoute(withPgFeature("leave", mod.hrLeaveBalances), "member.read", null)));
 pgRouter.get("/hr/leave-policies", asyncRoute(pgRoute(withPgFeature("leave", mod.hrLeavePolicies), "member.read", null)));
+pgRouter.post("/hr/leave-policies", asyncRoute(pgRoute(withPgFeature("leave", mod.hrLeavePolicySave), "leave.approve", null)));
+pgRouter.post("/hr/leave-balances", asyncRoute(pgRoute(withPgFeature("leave", mod.hrLeaveGrant), "leave.approve", null)));
 pgRouter.get("/hr/leave-stats", asyncRoute(pgRoute(withPgFeature("leave", mod.hrLeaveStats), "leave.approve", null)));
 pgRouter.get("/hr/postings", asyncRoute(pgRoute(mod.hrPostings, "recruitment.manage", "hr")));
 pgRouter.post("/hr/postings/:id/close", asyncRoute(pgRoute(mod.hrPostingClose, "recruitment.manage", "hr")));
 pgRouter.get("/hr/postings/:id/applications", asyncRoute(pgRoute(mod.hrPostingApplications, "recruitment.manage", "hr")));
 pgRouter.post("/hr/applications/:id/stage", asyncRoute(pgRoute(mod.hrApplicationStage, "recruitment.manage", "hr")));
 pgRouter.get("/hr/onboarding", asyncRoute(pgRoute(mod.hrOnboarding, "recruitment.manage", "hr")));
+pgRouter.post("/hr/onboarding", asyncRoute(pgRoute(mod.hrOnboardingCreate, "recruitment.manage", "hr")));
 pgRouter.post("/hr/onboarding/:id/complete", asyncRoute(pgRoute(mod.hrOnboardingComplete, "recruitment.manage", "hr")));
+pgRouter.get("/members/invites", asyncRoute(pgRoute(mod.membersInvitesList, "member.read", null)));
 pgRouter.post("/members/invites", asyncRoute(pgRoute(mod.membersInvite, ["member.write", "role.assign"], null)));
+pgRouter.post("/members/invites/:id/revoke", asyncRoute(pgRoute(mod.membersInviteRevoke, ["member.write", "role.assign"], null)));

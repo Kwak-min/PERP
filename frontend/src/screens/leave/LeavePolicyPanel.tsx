@@ -59,7 +59,7 @@ export function LeavePolicyPanel({ policies, apiSession, onSaved }: Props) {
     setSavingKind(kind);
     setError(null);
     try {
-      await apiRequest("/hr/leave-policies", {
+      await apiRequest("/pg/hr/leave-policies", {
         method: "POST",
         session: apiSession,
         body: {
