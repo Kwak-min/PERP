@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 
 export async function nativeCompanyScenarios({ scenario, signIn, origin, storageKey, fixture }) {
   async function fill(page, name) {
-    await page.getByRole('radio', { name: /소규모 기업/ }).click();
+    await page.locator('[data-profile="company"]').click();
     await page.getByRole('button', { name: '다음', exact: true }).click();
     await page.getByLabel('조직 이름', { exact: true }).fill(name);
     await page.getByRole('button', { name: '다음', exact: true }).click();

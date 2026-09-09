@@ -6,7 +6,7 @@ import { createPgCompany } from '../services/pg-company.service.js';
 
 const createSchema = z.object({
   name: z.string().trim().min(1).max(200),
-  type: z.enum(['company', 'personal']).default('company'),
+  type: z.enum(['company', 'personal', 'club', 'lab']).default('company'),
   modules: z.array(z.string()).max(100).default([]),
   features: z.array(z.string()).max(3).default([]),
   departments: z.array(z.string().trim().min(1).max(200)).max(100).default([]),

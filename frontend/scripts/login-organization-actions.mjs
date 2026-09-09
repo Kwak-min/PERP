@@ -67,7 +67,7 @@ export async function creationAndNavigationScenarios(qa) {
     const retained = await page.evaluate(key => JSON.parse(localStorage.getItem(key)), storageKey);
     assert.equal(retained.token, prior.token);
     assert.equal(retained.orgId, prior.orgId);
-    await page.getByRole('radio', { name: /소규모 기업/ }).click();
+    await page.locator('[data-profile="company"]').click();
     await page.getByRole('button', { name: '다음', exact: true }).click();
     await page.getByLabel('조직 이름', { exact: true }).fill('QA_ADDED_' + mode);
     await page.getByRole('button', { name: '다음', exact: true }).click();
@@ -154,7 +154,7 @@ export async function creationAndNavigationScenarios(qa) {
     // Given: 생성 성공 후 소속 조회만 실패. When: 재확인. Then: 생성 POST 없이 기존 조직에 진입한다.
     const prior = await seedSession(page);
     await page.goto(origin + '/onboarding/organization');
-    await page.getByRole('radio', { name: /소규모 기업/ }).click();
+    await page.locator('[data-profile="company"]').click();
     await page.getByRole('button', { name: '다음', exact: true }).click();
     await page.getByLabel('조직 이름', { exact: true }).fill('QA_REFRESH_RETRY');
     await page.getByRole('button', { name: '다음', exact: true }).click();

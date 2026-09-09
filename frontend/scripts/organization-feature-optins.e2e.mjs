@@ -64,11 +64,15 @@ async function createThroughOnboarding(page, origin, name, selectedFeatures, nat
     session: nativePg ? await pgAccount(pgFixture.users[1].email) : await legacyAccount("feature-empty@example.invalid"),
   });
   await page.goto(origin + "/onboarding/organization");
-  if (!nativePg) await page.getByRole("radio", { name: /직접 설정/ }).click();
+  if (!nativePg) {
+    await page.locator('.onboarding-options summary').click();
+    await page.locator('[data-profile="custom"]').click();
+  }
   await page.getByRole("button", { name: "다음", exact: true }).click();
   await page.getByLabel("조직 이름").fill(name);
   await page.getByRole("button", { name: "다음", exact: true }).click();
 
+  await page.locator('.onboarding-options summary').click();
   for (const feature of ["근태", "휴가", "전자결재"]) {
     const checkbox = page.getByRole("checkbox", { name: new RegExp(`^${feature}`) });
     await checkbox.waitFor();

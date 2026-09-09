@@ -82,15 +82,15 @@ try {
         await page.goto(origin + '/welcome');
       }
       await page.getByRole('link', { name: /새 조직 만들기/ }).click();
-      // 회사/직접 설정 초안은 개인 유형 왕복에도 손실되지 않는다.
-      const nonpersonal = native ? /소규모 기업/ : /직접 설정/;
+      // 회사 이름 초안은 개인 유형 왕복에도 손실되지 않는다.
+      const nonpersonal = /소규모 팀/;
       await page.getByRole('radio', { name: nonpersonal }).click();
       await page.getByRole('button', { name: '다음', exact: true }).click();
       assert.equal(await page.locator('.form-stack input').count(), 1);
       assert.equal(await page.getByRole('button', { name: '다음', exact: true }).isDisabled(), true);
       await page.getByLabel('조직 이름', { exact: true }).fill('보존할 조직 초안');
       await page.getByRole('button', { name: '이전', exact: true }).click();
-      await page.getByRole('radio', { name: /개인 프로젝트 관리 및 사용/ }).click();
+      await page.locator('[data-profile="personal"]').click();
       await page.getByRole('button', { name: '다음', exact: true }).click();
       assert.equal(await page.getByLabel('조직 이름', { exact: true }).inputValue(), owner);
       assert.equal(await page.getByLabel('조직 이름', { exact: true }).getAttribute('readonly'), '');
@@ -104,11 +104,14 @@ try {
       assert.equal(await page.getByLabel('조직 이름', { exact: true }).inputValue(), '보존할 조직 초안');
       assert.equal(await page.getByLabel('조직 이름', { exact: true }).isEditable(), true);
       await page.getByRole('button', { name: '이전', exact: true }).click();
-      await page.getByRole('radio', { name: /개인 프로젝트 관리 및 사용/ }).click();
+      await page.locator('[data-profile="personal"]').click();
       await page.getByRole('button', { name: '다음', exact: true }).click();
       await page.getByRole('button', { name: '다음', exact: true }).click();
       const projects = page.locator('.module-option').filter({ has: page.locator('strong', { hasText: /^프로젝트$/ }) }).getByRole('checkbox');
       const tasks = page.locator('.module-option').filter({ has: page.locator('strong', { hasText: /^업무$/ }) }).getByRole('checkbox');
+      assert.equal(await projects.isChecked(), true);
+      assert.equal(await tasks.isChecked(), true);
+      await tasks.uncheck();
       await projects.check();
       assert.equal(await tasks.isChecked(), false);
       await tasks.check();
@@ -167,7 +170,7 @@ try {
       assert.equal(companyResponse.status(), 201);
       const company = await companyResponse.json();
       assert.equal(company.name, '비개인 조직 ' + scenario);
-      assert.equal(company.type, native ? 'perp_db' : 'custom');
+      assert.equal(company.type, native ? 'perp_db' : 'company');
       await companyHome;
       const companyDepartments = await api(server.baseUrl, native ? '/pg/members/departments' : '/members/departments', { token: freshToken, orgId: company.org_id });
       assert.equal(companyDepartments.status, 200);

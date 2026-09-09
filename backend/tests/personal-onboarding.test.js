@@ -41,7 +41,7 @@ test('PG rejects unsupported organization types before writing', async () => {
   const login = await api(server.baseUrl, '/pg/auth/login', { method: 'POST', body: { email: fixture.users[1].email, password: 'password-1234' } });
   assert.equal(login.status, 200);
   const count = fixture.state.companies.length;
-  const response = await api(server.baseUrl, '/pg/companies', { token: login.body.token, method: 'POST', body: { name: 'Unsupported', type: 'club' } });
+  const response = await api(server.baseUrl, '/pg/companies', { token: login.body.token, method: 'POST', body: { name: 'Unsupported', type: 'unsupported' } });
   assert.equal(response.status, 400);
   assert.equal(fixture.state.companies.length, count);
 });

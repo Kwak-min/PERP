@@ -41,7 +41,7 @@ async function workspaceOf(userId, membership) {
       WHERE ur.user_id = $1 AND ur.workspace_id IS NULL`, [userId, companyId]),
     pgQuery("SELECT module_key FROM org.company_modules WHERE company_id = $1", [companyId]),
   ]);
-  return { org_id: `pg:${companyId}`, org_name: membership.name, org_type: membership.organization_type === 'personal' ? 'personal' : 'perp_db',
+  return { org_id: `pg:${companyId}`, org_name: membership.name, org_type: ['personal', 'club', 'lab'].includes(membership.organization_type) ? membership.organization_type : 'perp_db',
     roles: [...new Set(grants.rows.map(row => row.role))],
     permissions: [...new Set(grants.rows.map(row => row.code).filter(code => code && code !== '*' && code !== 'menu.configured' && !code.startsWith('platform.')))],
     menu_permissions: effectivePgPermissions(grants.rows).filter(code => code.startsWith('menu.')),

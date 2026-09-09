@@ -73,7 +73,7 @@ export async function installCompanyFixture() {
     if (text.includes('org.company_memberships') && !schemaAvailable) throw Object.assign(new Error('relation org.company_memberships does not exist'), { code: '42P01' });
     if (text.includes('INSERT INTO org.companies')) {
       const company = { id: String(78 + data.companies.length - 1), name: values[0], is_active: true,
-        organization_type: text.includes("organization_type) VALUES ($1, 'personal')") ? 'personal' : 'company' };
+        organization_type: text.includes('organization_type) VALUES ($1, $2)') ? values[1] : 'company' };
       data.companies.push(company); return { rows: [company], rowCount: 1 };
     }
     if (text.startsWith('DELETE FROM org.company_modules')) {
