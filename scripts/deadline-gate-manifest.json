@@ -174,6 +174,7 @@
         "backend/tests/member-field-requests.test.js",
         "backend/tests/member-profile.test.js",
         "backend/tests/member-provisioning-security.test.js",
+        "backend/tests/native-finance-race.test.js",
         "backend/tests/no-department-defaults.test.js",
         "backend/tests/organization-feature-optins.test.js",
         "backend/tests/organization-feature-settings.test.js",

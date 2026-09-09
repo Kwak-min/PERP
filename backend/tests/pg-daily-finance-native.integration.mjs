@@ -7,7 +7,8 @@ import path from 'node:path';
 import net from 'node:net';
 import { randomUUID } from 'node:crypto';
 import pg from 'pg';
-import { api, startTestServer } from './http.js';
+import { startTestServer } from './http.js';
+import { competeNative } from './native-finance-race.js';
 
 // Opt-in, task-owned native PostgreSQL cluster. Never accepts an existing DB URL.
 const bin = process.env.FINANCE_TEST_PG_BIN;
@@ -21,7 +22,8 @@ function run(command, args) {
   finally { closeSync(fd); }
   if (result.error || result.status !== 0) throw new Error(`${command}: ${result.error ?? result.status}\n${readFileSync(log,'utf8')}`);
 }
-let started = false, database, server, appPool;
+const inheritedConnectionTimeout = Number(process.env.PG_CONNECTION_TIMEOUT_MS);
+let started = false, database, server, appPool, failure;
 try {
   const reservation = net.createServer();
   await new Promise((resolve,reject) => { reservation.once('error',reject); reservation.listen(0,'127.0.0.1',resolve); });
@@ -33,7 +35,10 @@ try {
   process.env.DATABASE_URL = '';
   process.env.PG_HOST = '127.0.0.1'; process.env.PG_PORT = String(port);
   process.env.PG_DATABASE = 'postgres'; process.env.PG_USER = 'finance_test'; process.env.PG_PASSWORD = '';
-  database = new pg.Pool({ host:'127.0.0.1',port,database:'postgres',user:'finance_test' });
+  // This owned live cluster uses the same bounded acquisition budget as the
+  // daily/org native fixtures, not the runner's unavailable-dependency 100 ms.
+  process.env.PG_CONNECTION_TIMEOUT_MS = '5000';
+  database = new pg.Pool({ host:'127.0.0.1',port,database:'postgres',user:'finance_test',connectionTimeoutMillis:5000 });
   for (const name of ['perp_schema.sql',...[2,3,4,5,6,7].map(n=>`perp_additions_v${n}.sql`),'perp_additions_v8_daily_finance.sql','perp_additions_v8_daily_finance.sql','perp_additions_v9_daily_corrections.sql','perp_additions_v10_org_audit.sql','perp_additions_v11_deadline_roles.sql','perp_additions_v12_deadline_expenses.sql','perp_additions_v12_deadline_expense_writer.sql']) {
     await database.query(await readFile(new URL(`../../db/${name}`,import.meta.url),'utf8'));
   }
@@ -51,7 +56,25 @@ try {
   const token=randomUUID(); await database.query('INSERT INTO auth.sessions(user_id,session_token) VALUES(1,$1)',[token]);
   console.log(JSON.stringify({engine:(await database.query('SELECT version()')).rows[0].version,host:'127.0.0.1',port,temporaryCluster:root}));
   server=await startTestServer(); appPool=(await import('../src/config/pg.js')).pgPool;
-  const request=(route,method='GET',body,key=randomUUID())=>api(server.baseUrl,'/pg'+route,{token,orgId:'pg:1',method,body,headers:{'Idempotency-Key':key}});
+  const { env } = await import('../src/config/env.js');
+  const configurationClient = await appPool.connect();
+  try {
+    const timeoutConfig = { inherited: inheritedConnectionTimeout, environment: Number(process.env.PG_CONNECTION_TIMEOUT_MS),
+      captured: env.pg.connectionTimeoutMillis, applicationPool: appPool.options.connectionTimeoutMillis,
+      applicationClient: configurationClient._connectionTimeoutMillis, fixturePool: database.options.connectionTimeoutMillis ?? 0,
+      poolMax: appPool.options.max, backendPid: configurationClient.processID,
+      sql: (await configurationClient.query("SELECT current_setting('lock_timeout') AS lock_timeout, current_setting('statement_timeout') AS statement_timeout")).rows[0] };
+    console.log(JSON.stringify({ NATIVE_FINANCE_TIMEOUT_CONFIG: timeoutConfig }));
+    assert.deepEqual([timeoutConfig.environment, timeoutConfig.captured, timeoutConfig.applicationPool, timeoutConfig.applicationClient, timeoutConfig.fixturePool],
+      [5000, 5000, 5000, 5000, 5000], 'Owned native PG must not inherit the unavailable-dependency acquisition deadline');
+    assert.deepEqual(timeoutConfig.sql, { lock_timeout: '0', statement_timeout: '0' });
+  } finally { configurationClient.release(); }
+  const request=async(route,method='GET',body,key=randomUUID(),signal=AbortSignal.timeout(15000))=>{
+    const response=await fetch(server.baseUrl+'/pg'+route,{method,signal,
+      headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`,'X-Org-Id':'pg:1','Idempotency-Key':key},
+      body:body===undefined?undefined:JSON.stringify(body)});
+    const text=await response.text(); return {status:response.status,body:text?JSON.parse(text):null};
+  };
   const transaction={account_id:'2',amount:'10.01'};
   const tables=['accounting.journal_entries','accounting.journal_lines','asset.assets','asset.history','accounting.budgets','accounting.settlements','accounting.dues_charges','accounting.dues_payments','accounting.record_events','org.approval_requests','org.role_change_events'];
   const snapshot=()=>Promise.all([...tables.map(async table=>(await database.query(`SELECT * FROM ${table} ORDER BY id`)).rows),database.query('SELECT * FROM accounting.request_replays ORDER BY company_id,actor_id,operation,request_key').then(r=>r.rows)]);
@@ -70,29 +93,9 @@ try {
     await failWrite(table,'INSERT',()=>request(route,'POST',body));
   }
 
-  // A barrier on explicit transaction client acquisition starts both transactions
-  // on distinct native backend PIDs. pg.Pool's callback-based query acquisition is
-  // unchanged; all SQL, row locks, unique-index waits and COMMITs remain real PG.
-  async function compete(first,second) {
-    const original=appPool.connect, pids=[]; let release;
-    const gate=new Promise(resolve=>{release=resolve;});
-    let timer;
-    const deadline=new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('two native transaction connections were not acquired')),10000);});
-    appPool.connect=function(...args) {
-      if(args.length) return original.apply(this,args);
-      return original.call(this).then(async client=>{
-        pids.push(client.processID); if(pids.length===2) release();
-        try { await Promise.race([gate,deadline]); return client; }
-        catch(error) { client.release(); throw error; }
-      });
-    };
-    try {
-      const results=await Promise.all([first(),second()]); assert.equal(new Set(pids).size,2);
-      console.log(JSON.stringify({nativeBackendPids:pids,statuses:results.map(r=>r.status)})); return results;
-    } finally { clearTimeout(timer); release(); appPool.connect=original; }
-  }
+  const compete=(first,second)=>competeNative(appPool,database,first,second);
   const key=randomUUID();
-  const duplicates=await compete(()=>request('/finance/transactions','POST',transaction,key),()=>request('/finance/transactions','POST',transaction,key));
+  const duplicates=await compete(signal=>request('/finance/transactions','POST',transaction,key,signal),signal=>request('/finance/transactions','POST',transaction,key,signal));
   assert.deepEqual(duplicates.map(r=>r.status),[201,201]); assert.equal(duplicates[0].body.id,duplicates[1].body.id);
   const entry=duplicates[0].body.id;
   assert.equal((await database.query('SELECT count(*)::int AS n FROM accounting.journal_entries')).rows[0].n,1);
@@ -111,7 +114,7 @@ try {
     await failWrite(table,event,()=>request(paymentRoute,'POST',payment));
   }
   const paymentKey=randomUUID();
-  const paid=await compete(()=>request(paymentRoute,'POST',payment,paymentKey),()=>request(paymentRoute,'POST',payment,randomUUID()));
+  const paid=await compete(signal=>request(paymentRoute,'POST',payment,paymentKey,signal),signal=>request(paymentRoute,'POST',payment,randomUUID(),signal));
   assert.deepEqual(paid.map(r=>r.status).sort(),[201,409]);
   const history=await request(paymentRoute); assert.equal(history.body.items.length,1); assert.equal(history.body.outstanding,'60.00');
   assert.equal((await request(paymentRoute,'POST',{amount:'60.00',expected_version:2})).status,201);
@@ -123,15 +126,27 @@ try {
   const decisionRoute=`/approvals/${approval.body.id}/decide`;
   await failWrite('org.approval_requests','UPDATE',()=>request(decisionRoute,'POST',{decision:'approve'}));
   await failWrite('org.role_change_events','INSERT',()=>request(decisionRoute,'POST',{decision:'approve'}));
-  const decisions=await compete(()=>request(decisionRoute,'POST',{decision:'approve'}),()=>request(decisionRoute,'POST',{decision:'reject'}));
+  const decisions=await compete(signal=>request(decisionRoute,'POST',{decision:'approve'},randomUUID(),signal),signal=>request(decisionRoute,'POST',{decision:'reject'},randomUUID(),signal));
   assert.deepEqual(decisions.map(r=>r.status).sort(),[200,409]);
   assert.equal((await database.query("SELECT count(*)::int AS n FROM org.role_change_events WHERE action='approval.decided'")).rows[0].n,1);
   assert.equal((await request('/finance/transactions','POST',{account_id:'2',amount:'9999999999999999.99'})).status,201);
   assert.equal((await request('/finance/summary')).body.수입,'10000000000000010.00');
   console.log('PASS native PG HTTP: every financial write rollback, real concurrent replay once, balanced journal, correction audit rollback, partial/remainder/history, version conflict, decision once, retention triggers, exact summary');
-} finally {
-  await appPool?.end(); await server?.close(); await database?.end();
-  if(started) run('pg_ctl',['-D',data,'-m','fast','-w','stop']);
-  await rm(root,{recursive:true,force:true});
+} catch (error) { failure = error; throw error; }
+finally {
+  const cleanupErrors = [];
+  for (const [name, close] of [['application-pool', () => appPool?.end()], ['http-server', () => server?.close()],
+    ['fixture-pool', () => database?.end()], ['native-cluster', () => { if(started) run('pg_ctl',['-D',data,'-m','fast','-w','stop']); }],
+    ['temporary-root', () => rm(root,{recursive:true,force:true})]]) {
+    let timer;
+    try {
+      await Promise.race([Promise.resolve().then(close), new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Native finance cleanup deadline: ${name}`)), 10000);
+      })]);
+    } catch (error) { cleanupErrors.push(error); }
+    finally { clearTimeout(timer); }
+  }
+  console.log(JSON.stringify({ NATIVE_FINANCE_CLEANUP: { root, errors: cleanupErrors.map(error => ({ message: error.message, stack: error.stack })) } }));
+  if (cleanupErrors.length) throw new AggregateError([...(failure ? [failure] : []), ...cleanupErrors], 'Native finance failure/cleanup');
   console.log('DAILY_FINANCE_NATIVE_CLUSTER_AND_SERVICES_CLEANED');
 }
