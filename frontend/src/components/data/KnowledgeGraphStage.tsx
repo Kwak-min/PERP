@@ -1,8 +1,10 @@
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 
 import {
   relationClass,
   relationLabel,
+  KNOWLEDGE_GRAPH_RELATIONS,
+  type KnowledgeGraphRelation,
   type KnowledgeGraphStageData,
   type KnowledgeGraphStageNode,
 } from "./knowledgeGraphStageModel.ts";
@@ -28,7 +30,9 @@ export function KnowledgeGraphStage({ data, scopeKey, ariaLabel, emptyMessage, o
     media.addEventListener("change", change);
     return () => media.removeEventListener("change", change);
   }, []);
-  const engine = useKnowledgeGraphEngine({ data, scopeKey, reducedMotion, ...(onNodeSelect ? { onNodeSelect } : {}) });
+  const [hidden, setHidden] = useState<readonly KnowledgeGraphRelation[]>([]);
+  const filtered = useMemo(() => ({ nodes: data.nodes, edges: data.edges.filter(edge => !hidden.includes(edge.kind)) }), [data, hidden]);
+  const engine = useKnowledgeGraphEngine({ data: filtered, scopeKey, reducedMotion, ...(onNodeSelect ? { onNodeSelect } : {}) });
 
   return (
     <section className="knowledge-graph-stage" data-engine-state={engine.engineState} data-render-state={engine.renderState} data-scope-key={scopeKey}>
@@ -49,10 +53,8 @@ export function KnowledgeGraphStage({ data, scopeKey, ariaLabel, emptyMessage, o
         {engine.engineState === "empty" && <p className="knowledge-graph-stage__message">{emptyMessage}</p>}
         {engine.hoveredTitle && <output className="knowledge-graph-stage__hover" aria-live="polite">{engine.hoveredTitle}</output>}
       </div>
-      <ul className="knowledge-graph-stage__legend" aria-label="관계 범례">
-        <li data-relation="wiki">직접 위키 링크</li>
-        <li data-relation="ai">AI 유사도 추론</li>
-        <li data-relation="space">프로젝트·공간 소속</li>
+      <ul className="knowledge-graph-stage__legend" aria-label="관계 범례와 필터">
+        {KNOWLEDGE_GRAPH_RELATIONS.filter(kind => data.edges.some(edge => edge.kind === kind)).map(kind => <li key={kind} data-relation={relationClass(kind)}><label><input type="checkbox" checked={!hidden.includes(kind)} onChange={() => setHidden(current => current.includes(kind) ? current.filter(value => value !== kind) : [...current, kind])} />{relationLabel(kind)}</label></li>)}
       </ul>
       <div className="knowledge-graph-stage__semantics">
         <div>
@@ -71,10 +73,11 @@ export function KnowledgeGraphStage({ data, scopeKey, ariaLabel, emptyMessage, o
         <details>
           <summary>연결 {data.edges.length}개</summary>
           <ol className="knowledge-graph-stage__edges" aria-label={`${ariaLabel} 연결 목록`}>
-            {data.edges.map((edge, index) => (
+            {filtered.edges.map((edge, index) => (
               <li key={`${edge.source_renderer_id}:${edge.target_renderer_id}:${index}`} data-relation={relationClass(edge.kind)} data-resolution={edge.resolution}>
-                <span>{nodeTitle(data, edge.source_renderer_id)} → {edge.resolution === "resolved" && edge.target_renderer_id ? nodeTitle(data, edge.target_renderer_id) : edge.target_title}</span>
+                <span>{nodeTitle(data, edge.source_renderer_id)} {edge.direction === "undirected" ? "↔" : "→"} {edge.resolution === "resolved" && edge.target_renderer_id ? nodeTitle(data, edge.target_renderer_id) : edge.target_title}</span>
                 <small>{relationLabel(edge.kind)} · {edge.resolution}</small>
+                {edge.provenance && <details><summary>관계 근거</summary><pre>{JSON.stringify(edge.provenance, null, 2)}</pre></details>}
               </li>
             ))}
           </ol>

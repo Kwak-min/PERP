@@ -18,14 +18,20 @@ const args = process.argv.slice(2);
 if (args.length === 2 && args[0] === '--scenario' && args[1] === 'roles') {
   assertIsolated();
   await (await import('./deadline-roles-qa.mjs')).rolesScenario();
+} else if (args[0] === '--scenario' && args[1] === 'knowledge-wiki' && (args.length === 2 || (args.length === 4 && args[2] === '--store' && ['legacy', 'pg'].includes(args[3])))) {
+  assertIsolated();
+  const { task28Workflow } = await import('./task28-workflow.e2e.mjs');
+  await task28Workflow({ mode: args[3] ?? 'legacy', evidence: path.join(root, '.omo/evidence/task-28-gate-revision/browser', args[3] ?? 'legacy') });
 } else if (args[0] !== '--scenario' || !['baseline', 'recruitment-nav', 'knowledge-graphs', 'graph-engine'].includes(args[1]) || (args.length !== 2 && !(args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])))) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|roles|knowledge-graphs|graph-engine [--probe error|cancel]');
+  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|roles|knowledge-graphs|graph-engine [--probe error|cancel] OR --scenario knowledge-wiki [--store legacy|pg]');
   process.exitCode = 2;
 } else {
   assertIsolated();
   if (args[1] === 'graph-engine') {
     const { graphEngineScenario } = await import('./deadline-graph-engine.scenario.mjs');
     await graphEngineScenario();
+  } else if (args[1] === 'knowledge-graphs' && !args[3]) {
+    await (await import('./task28-workflow.e2e.mjs')).task28Workflow();
   } else {
     await baseline(args[3], args[1]);
   }

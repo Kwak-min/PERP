@@ -44,11 +44,16 @@ export async function startDeadlineServer(signal) {
     if (errors.length) throw new AggregateError(errors, 'API cleanup failed');
   }
   try {
+    // The Wiki seam test can import services before allocating a fixture. Update
+    // the cached configuration as well as the environment inherited by restart children.
+    const { env } = await import('../src/config/env.js');
+    env.databaseFile = resource.database;
     const [{ createApp }, { migrate }, database, pg] = await Promise.all([
       import('../src/app.js'), import('../src/config/migrate.js'), import('../src/config/db.js'), import('../src/config/pg.js'),
     ]);
     closeDb = database.closeDb; closePgPool = pg.closePgPool;
     signal?.throwIfAborted();
+    assert.equal(path.resolve(database.db().prepare('PRAGMA database_list').get().file), path.resolve(resource.database));
     migrate();
     server = createServer(createApp());
     const ready = once(server, 'listening', { signal: AbortSignal.any([AbortSignal.timeout(10000), ...(signal ? [signal] : [])]) });

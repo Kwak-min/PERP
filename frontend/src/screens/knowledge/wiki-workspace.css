@@ -1,0 +1,21 @@
+.wiki-workspace { display: grid; gap: 24px; min-width: 0; margin-top: 24px; }
+.wiki-workspace > section, .wiki-workspace > header, .wiki-workspace__columns > section { min-width: 0; padding: 20px; border: 1px solid var(--of-border); border-radius: var(--r-md); background: var(--of-card); }
+.wiki-workspace h2, .wiki-workspace h3, .wiki-workspace h4 { margin-top: 0; }
+.wiki-workspace p { color: var(--of-text-muted); line-height: 1.6; }
+.wiki-workspace__columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; min-width: 0; }
+.wiki-workspace input:not([type=checkbox]), .wiki-workspace textarea { display: block; width: 100%; max-width: 100%; box-sizing: border-box; }
+.wiki-workspace textarea { min-height: 100px; }
+.wiki-workspace input[type=checkbox] { width: 18px; height: 18px; min-height: 18px; display: inline-block; vertical-align: middle; margin-right: 8px; }
+.wiki-workspace .form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.wiki-workspace button:not(.button) { padding: 6px 10px; border: 1px solid var(--of-border-strong); border-radius: var(--r-sm); background: var(--of-card); color: var(--of-text); }
+.wiki-workspace button { max-width: 100%; min-height: 36px; cursor: pointer; white-space: normal; overflow-wrap: anywhere; }
+.wiki-workspace button:focus-visible, .wiki-workspace input:focus-visible, .wiki-workspace mark:focus-visible { outline: 2px solid var(--of-primary); outline-offset: 3px; }
+.wiki-workspace code, .wiki-workspace pre { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+.wiki-workspace pre { max-height: 420px; overflow: auto; }
+.wiki-workspace article { margin-top: 16px; padding: 12px; border: 1px solid var(--of-border); border-radius: var(--r-sm); }
+.wiki-sources { max-height: 420px; overflow: auto; padding-left: 20px; }
+.wiki-sources li { display: grid; gap: 6px; margin-bottom: 16px; overflow-wrap: anywhere; }
+.wiki-citations li { margin-bottom: 8px; }
+.wiki-citations code { display: block; }
+.wiki-review { border-left: 4px solid var(--of-warning) !important; }
+@media (max-width: 768px) { .wiki-workspace__columns { grid-template-columns: minmax(0, 1fr); } .wiki-workspace button { min-height: 44px; } .wiki-workspace > section, .wiki-workspace > header, .wiki-workspace__columns > section { padding: 12px; } }
