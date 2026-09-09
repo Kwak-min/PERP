@@ -13,11 +13,13 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "6.0.5",
-    "vite": "8.2.1",
-    "typescript": "5.9.2",
+    "3d-force-graph": "1.80.0",
     "react": "19.1.1",
     "react-dom": "19.1.1",
     "react-router-dom": "7.18.2",
+    "three": "0.185.1",
+    "typescript": "5.9.2",
+    "vite": "8.2.1",
     "zod": "4.1.5"
   },
   "devDependencies": {

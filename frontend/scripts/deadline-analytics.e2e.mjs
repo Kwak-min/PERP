@@ -98,7 +98,7 @@ export async function analyticsScenario(pgMode = false) {
 
 async function exercise({ page, f, result, attempt, session }) {
   const prefix = f.pgMode ? '/api/v1/pg/analytics' : '/api/v1/analytics';
-  const responseFor = (suffix, method = 'GET') => page.waitForResponse(response => new URL(response.url()).pathname === prefix + suffix && response.request().method() === method, { timeout: 15000 });
+  const responseFor = (suffix, method = 'GET', actor = null) => page.waitForResponse(response => new URL(response.url()).pathname === prefix + suffix && response.request().method() === method && (!actor || (response.request().headers()['authorization'] === `Bearer ${actor.token}` && response.request().headers()['x-org-id'] === actor.orgId)), { timeout: 15000 });
   const metric = key => page.locator(`[data-metric-key="${key}"]`);
   async function apply(period = filter) {
     await page.getByLabel('시작일', { exact: true }).fill(period.from);
@@ -132,7 +132,7 @@ async function exercise({ page, f, result, attempt, session }) {
     result.http.push({ kind: 'kpis-body', body });
   }
   async function switchActor(actor) {
-    const received = responseFor('/kpis');
+    const received = responseFor('/kpis', 'GET', actor);
     await page.evaluate(async next => { const { sessionStore } = await import('/src/store/session.ts'); sessionStore.set(next); }, session(actor));
     const response = await received; assert.equal(response.status(), 200); const body = await response.json();
     await (await observe(page, `.analytics-period time[datetime="${body.generated_at}"]`))();
@@ -270,20 +270,58 @@ async function exercise({ page, f, result, attempt, session }) {
 async function staleTransitions({ page, f, apply, create, switchActor, responseFor, prefix, result, session }) {
   // Gate actual HTTP response delivery, not SQL or fabricated JSON. No timer-based ordering.
   async function hold(suffix, method, action, transition) {
-    let enteredResolve, releaseResolve, finishedResolve;
-    const entered = new Promise(resolve => { enteredResolve = resolve; }), released = new Promise(resolve => { releaseResolve = resolve; }), finished = new Promise(resolve => { finishedResolve = resolve; });
-    const pattern = '**' + prefix + suffix + '**'; let held = false;
-    const handler = async route => {
-      if (held || route.request().method() !== method) return route.continue(); held = true;
-      try { const response = await route.fetch(); enteredResolve({ status: response.status() }); await released; await route.fulfill({ response }); }
-      finally { finishedResolve(); }
+    const owner = await page.evaluate(async () => { const { sessionStore } = await import('/src/store/session.ts'); const { token, orgId } = sessionStore.getSnapshot(); return { token, orgId }; });
+    const entered = Promise.withResolvers(), released = Promise.withResolvers();
+    const origin = new URL(page.url()).origin;
+    const pattern = url => url.origin === origin && url.pathname === prefix + suffix;
+    const inFlight = new Set(), held = new Map(), errors = []; let closing = false;
+    const failed = request => held.get(request)?.cancelled.resolve(request.failure());
+    // StrictMode can issue two old-scope requests. Own both, not just the first
+    // (already-aborted) request, and never hold the replacement actor's request.
+    const handler = route => {
+      const work = (async () => {
+        const request = route.request(), headers = request.headers();
+        try {
+          if (closing || request.method() !== method || headers.authorization !== `Bearer ${owner.token}` || headers['x-org-id'] !== owner.orgId) return await route.fallback();
+          const record = { cancelled: Promise.withResolvers() }; held.set(request, record);
+          const response = await route.fetch({ timeout: 15000 });
+          record.status = response.status();
+          record.sha256 = createHash('sha256').update(await response.body()).digest('hex');
+          entered.resolve(record);
+          await released.promise;
+          await route.fulfill({ response });
+          await response.dispose();
+        } catch (error) {
+          errors.push(error); entered.resolve({ error });
+          try { await route.abort('failed'); } catch (abortError) { errors.push(abortError); }
+        }
+      })();
+      inFlight.add(work); void work.finally(() => inFlight.delete(work));
+      return work;
     };
+    page.on('requestfailed', failed);
     await page.route(pattern, handler);
     try {
-      await action(); const original = await bounded(entered); assert.ok(original.status < 300);
-      await transition(); releaseResolve(); await bounded(finished);
-      result.http.push({ kind: 'stale-discard', suffix, method, originalStatus: original.status });
-    } finally { releaseResolve(); await page.unroute(pattern, handler); }
+      await action(); const original = await bounded(entered.promise);
+      if (original.error) throw original.error;
+      assert.ok(original.status >= 200 && original.status < 300);
+      await transition();
+    } catch (error) { errors.push(error); }
+    finally {
+      closing = true; released.resolve();
+      try {
+        // Removing a route first lets Playwright fall it through to the context
+        // handler. Drain our fetch/fulfill callbacks before relinquishing ownership.
+        while (inFlight.size) await bounded(Promise.all([...inFlight]));
+        if (!errors.length) for (const record of held.values()) {
+          assert.ok(record.status >= 200 && record.status < 300);
+          assert.equal((await bounded(record.cancelled.promise)).errorText, 'net::ERR_ABORTED');
+        }
+      } catch (error) { errors.push(error); }
+      finally { await page.unroute(pattern, handler); page.off('requestfailed', failed); }
+    }
+    if (errors.length) throw new AggregateError(errors, `Analytics response gate failed: ${method} ${suffix}`);
+    result.http.push({ kind: 'stale-discard', suffix, method, org: owner.orgId, responses: [...held.values()].map(record => ({ status: record.status, sha256: record.sha256, cancelled: true })) });
   }
   await apply();
   await hold('/kpis', 'GET', () => page.getByRole('button', { name: '기간 적용 · 다시 조회' }).click(), async () => {
@@ -309,7 +347,7 @@ async function staleTransitions({ page, f, apply, create, switchActor, responseF
   await hold('/kpis', 'GET', () => page.getByRole('button', { name: '기간 적용 · 다시 조회' }).click(), async () => {
     // Same-company token transition is not merely a company-key remount.
     const actor = await f.limited(['analytics.read', 'menu.analytics']);
-    const received = responseFor('/kpis');
+    const received = responseFor('/kpis', 'GET', actor);
     await page.evaluate(async next => { const { sessionStore } = await import('/src/store/session.ts'); sessionStore.set(next); }, session(actor));
     const response = await received; assert.equal(response.status(), 200); const body = await response.json();
     await (await observe(page, `.analytics-period time[datetime="${body.generated_at}"]`))();

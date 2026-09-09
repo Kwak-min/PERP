@@ -20,11 +20,11 @@ const sharedScenarioArgs = args[0] === '--scenario'
   && ['baseline', 'recruitment-nav', 'nav-pref', 'members-pagination', 'assets-footer', 'sidebar', 'knowledge-graphs', 'project-members', 'project-members-access'].includes(args[1])
   && (args.length === 2 || (args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])));
 const dedicatedScenarioArgs = args[0] === '--scenario' && (
-  (args.length === 2 && ['month-summary', 'roles', 'role-toggles', 'role-toggles-native', 'disabled-hr-features', 'reservation-conflict-edit', 'reservation-space-calendar', 'expense-receipt', 'expense-csv-import', 'approval-workflow', 'analytics', 'analytics-pg'].includes(args[1]))
+  (args.length === 2 && ['month-summary', 'roles', 'role-toggles', 'role-toggles-native', 'disabled-hr-features', 'reservation-conflict-edit', 'reservation-space-calendar', 'expense-receipt', 'expense-csv-import', 'approval-workflow', 'analytics', 'analytics-pg', 'graph-engine'].includes(args[1]))
   || (args.length === 3 && args[1] === 'reservation-space-calendar' && args[2] === '--baseline')
 );
 if (!sharedScenarioArgs && !dedicatedScenarioArgs) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar|knowledge-graphs|project-members|project-members-access [--probe error|cancel] | --scenario month-summary|roles|role-toggles|role-toggles-native|disabled-hr-features|reservation-conflict-edit|expense-receipt|expense-csv-import|approval-workflow|analytics|analytics-pg | --scenario reservation-space-calendar [--baseline]');
+  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar|knowledge-graphs|project-members|project-members-access [--probe error|cancel] | --scenario month-summary|roles|role-toggles|role-toggles-native|disabled-hr-features|reservation-conflict-edit|expense-receipt|expense-csv-import|approval-workflow|analytics|analytics-pg|graph-engine | --scenario reservation-space-calendar [--baseline]');
   process.exitCode = 2;
 } else {
   assertIsolated();
@@ -37,6 +37,7 @@ if (!sharedScenarioArgs && !dedicatedScenarioArgs) {
   else if (args[1] === 'expense-csv-import') await import('./deadline-expense-import.scenario.mjs');
   else if (args[1] === 'expense-receipt') await import('./deadline-expense-receipt.scenario.mjs');
   else if (args[1] === 'analytics' || args[1] === 'analytics-pg') await (await import('./deadline-analytics.e2e.mjs')).analyticsScenario(args[1] === 'analytics-pg');
+  else if (args[1] === 'graph-engine') await (await import('./deadline-graph-engine.scenario.mjs')).graphEngineScenario();
   else if (args[1] === 'month-summary') await (await import('./deadline-month-summary.e2e.mjs')).monthSummary();
   else if (args[1] === 'nav-pref') await (await import('./deadline-nav-pref.e2e.mjs')).navPrefScenario(args[3]);
   else await baseline(args[3], args[1]);
@@ -93,6 +94,7 @@ async function baseline(probe, scenario) {
     const dependencyOrigin = `http://127.0.0.1:${dependencyPort}`;
     vite = await createServer({
       configFile: false, root: path.join(root, 'frontend'), envDir: process.env.DEADLINE_TEMP_ROOT,
+      cacheDir: path.join(process.env.DEADLINE_TEMP_ROOT, 'vite-cache'),
       plugins: [react()], define: { 'import.meta.env.VITE_RESERVATION_API_URL': JSON.stringify(dependencyOrigin) },
       server: { host: '127.0.0.1', port: 0, proxy: { '/api': new URL(api.baseUrl).origin }, watch: { ignored: ['**/.omo/**', '**/dist/**'] } },
     });

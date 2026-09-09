@@ -2,6 +2,8 @@ import { migrateReceipts } from './receipt-migration.js';
 import { migrateExpenses } from './expense-migration.js';
 import { migrateApprovalWorkflow, migrateApprovalSnapshotBoundary } from './approval-migration.js';
 import { migrateExpenseImports } from './expense-import-migration.js';
+import { knowledgeDDL } from './knowledge-schema.js';
+import { knowledgeInvalidationDDL } from './knowledge-invalidation-schema.js';
 
 function columnsOf(conn, table) {
   return new Set(conn.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name));
@@ -255,8 +257,9 @@ MIGRATIONS.push({
   },
 });
 
-// Version 12 is reserved for Wiki; applied versions need not be contiguous.
+MIGRATIONS.push({ version: 12, up(conn) { conn.exec(knowledgeDDL('sqlite')); } });
 MIGRATIONS.push({ version: 13, up: migrateExpenseImports });
+MIGRATIONS.push({ version: 14, up(conn) { conn.exec(knowledgeInvalidationDDL('sqlite')); } });
 
 export function applyMigrations(conn) {
   conn.exec(`

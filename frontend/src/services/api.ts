@@ -227,6 +227,67 @@ export async function apiUpload(path: string, file: File, options: Readonly<{ se
   return payload;
 }
 
+export type ApiStreamEvent = Readonly<{ id: string | null; event: string; data: unknown }>;
+
+// Bearer는 헤더에만 둔다. 호출자가 화면 수명 signal과 마지막 인가 cursor를 소유한다.
+export async function apiEventStream(
+  path: string,
+  options: Readonly<{ session: ApiSession; signal: AbortSignal; cursor?: number; onEvent: (event: ApiStreamEvent) => void }>,
+): Promise<void> {
+  const failure = (code: string, status: number) => new ApiError("위키 이벤트 연결을 완료하지 못했습니다.", { code, status, requestId: "", details: {} });
+  if (!/^\/(?:pg\/)?(?:vault|documents)\/wiki\/events$/.test(path) || (options.cursor !== undefined && (!Number.isSafeInteger(options.cursor) || options.cursor < 0))) throw failure("VALIDATION_ERROR", 400);
+  if (!options.session.token) throw failure("UNAUTHENTICATED", 401);
+  const headers = new Headers({ Accept: "text/event-stream", Authorization: `Bearer ${options.session.token}` });
+  if (options.session.orgId) headers.set("X-Org-Id", options.session.orgId);
+  if (options.cursor !== undefined) headers.set("Last-Event-ID", String(options.cursor));
+  const response = await fetch(`${API_BASE_URL}${workspaceEndpoint(path, options.session.orgId)}`, { headers, signal: options.signal, cache: "no-store" });
+  if (!response.ok) {
+    const text = await response.text();
+    let payload: unknown;
+    try { payload = JSON.parse(text); } catch { throw failure("INVALID_RESPONSE", response.status); }
+    const parsed = apiErrorSchema.safeParse(payload);
+    if (!parsed.success) throw failure("HTTP_ERROR", response.status);
+    throw new ApiError(parsed.data.error.message, { code: parsed.data.error.code, status: response.status, requestId: parsed.data.error.request_id, details: parsed.data.error.details });
+  }
+  if (!response.headers.get("content-type")?.includes("text/event-stream") || !response.body) {
+    await response.body?.cancel();
+    throw failure("INVALID_RESPONSE", 502);
+  }
+  const reader = response.body.getReader(), decoder = new TextDecoder("utf-8", { fatal: true });
+  let buffer = "", event = "message", id: string | null = null, data: string[] = [], size = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) { if (buffer || data.length) throw failure("TRUNCATED_EVENT", 502); return; }
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let end: number;
+      while ((end = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, end).replace(/\r$/, ""); buffer = buffer.slice(end + 1);
+        size += line.length;
+        if (size > 65536) throw failure("EVENT_LIMIT", 502);
+        if (!line) {
+          if (data.length) {
+            let parsed: unknown;
+            try { parsed = JSON.parse(data.join("\n")); } catch { throw failure("INVALID_EVENT", 502); }
+            options.onEvent({ id, event, data: parsed });
+          }
+          event = "message"; id = null; data = []; size = 0;
+          continue;
+        }
+        if (line.startsWith(":")) continue;
+        const colon = line.indexOf(":"), field = colon < 0 ? line : line.slice(0, colon);
+        const value = colon < 0 ? "" : line.slice(colon + 1).replace(/^ /, "");
+        if (field === "event") event = value;
+        if (field === "id" && !value.includes("\0")) id = value;
+        if (field === "data") data.push(value);
+      }
+      if (buffer.length + size > 65536) throw failure("EVENT_LIMIT", 502);
+    }
+  } finally {
+    try { await reader.cancel(); } finally { reader.releaseLock(); }
+  }
+}
+
 export function userMessageOf(error: unknown): string {
   if (error instanceof ApiError) {
     // 503 은 원인·조치가 담긴 운영 안내라 그대로 노출한다.

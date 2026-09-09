@@ -28,6 +28,19 @@ secret을 공유하지 않습니다. ERP는 SQLite와 `perp_db`를 동시에 사
 | `perp_db` | `db/perp_schema.sql`, `db/perp_additions_v2.sql` 수동 관리 | 앱 시작이 적용하지 않음; PG expiry는 기존 `login_at`+TTL이라 추가 migration 없음 |
 | 예약 DB | Prisma schema + local `init.sql` + `prisma/migrations/` | baseline부터 현재까지의 완전한 이력과 실제 적용 증거 필요 |
 
+Wiki publication uses SQLite migration **14**, after Wiki storage12; **13** remains
+reserved for CSV imports. For `perp_db`, apply Wiki storage
+`db/perp_additions_v15_knowledge_wiki.sql`, retain CSV
+`perp_additions_v16_deadline_expense_imports.sql` and analytics
+`perp_additions_v17_analytics_exports.sql` in the integrated release sequence, then
+apply `db/perp_additions_v18_knowledge_invalidation.sql` once. The pending
+integration revises SQLite14/PGv18 authority triggers to wake reauthorization
+without cancelling still-authorized reader queries; source changes still fence
+jobs. Use the integrated DDL, not the earlier Task33-only draft. This revision
+assumes these pending migrations have not been deployed; an already-applied
+earlier draft requires a separately reviewed forward upgrade, not reapplication. This task worktree does not ship the CSV/analytics
+migrations; their owning release must supply them. ERP startup does not run PG DDL.
+
 예약의 `npm run db:migrate`는 `prisma migrate dev`, `db:push`는 migration 이력을
 만들지 않는 개발 명령입니다. 둘 다 production migration 대체로 사용하지 않습니다.
 현재 worktree의 정확한 incremental SQL은
