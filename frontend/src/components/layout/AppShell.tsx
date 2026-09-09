@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { matchPath, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useAppContext } from "../../context/AppContext";
@@ -14,6 +14,10 @@ import { AgentPanel } from "./AgentPanel";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 const mobilePaths = ['/', '/projects', '/calendar', '/settings'];
+const sidebarMedia = '(max-width: 1100px)';
+const canFocus = (node: HTMLElement) => node.isConnected && !node.closest('[inert]') && !node.matches(':disabled') && node.checkVisibility({ visibilityProperty: true });
+const sidebarControls = (panel: HTMLElement) => [...panel.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]')]
+  .filter(node => node.tabIndex >= 0 && canFocus(node));
 const emptyNavPref: NavPref = { version: 1, favoriteScreenIds: [], collapsedSectionIds: [] };
 type NavState = Readonly<{ key: string; status: 'loading' | 'ready' | 'unavailable'; value: NavPref; error: string | null }>;
 
@@ -27,11 +31,63 @@ export function AppShell() {
   const session = useSession();
   const navigate = useNavigate();
   const location = useLocation();
-  const { sidebarOpen, setSidebarOpen, toggleAgent, toggleSidebar } = useAppContext();
+  const { sidebarOpen, setSidebarOpen, toggleAgent } = useAppContext();
+  const [responsiveSidebar, setResponsiveSidebar] = useState(() => window.matchMedia(sidebarMedia).matches);
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const sidebarOpener = useRef<HTMLButtonElement | null>(null);
+  const sidebarFocused = useRef<HTMLElement | null>(null);
+  const modalSidebar = responsiveSidebar && sidebarOpen;
   const [search, setSearch] = useState("");
   const [identity, setIdentity] = useState<Readonly<{ token: string; userId: string | null; error: string | null }>>({ token: '', userId: null, error: null });
   const [navState, setNavState] = useState<NavState>({ key: '', status: 'loading', value: emptyNavPref, error: null });
   const access = useWorkspaceAccess(session, location.pathname);
+
+  useLayoutEffect(() => {
+    const media = window.matchMedia(sidebarMedia);
+    const onChange = () => { setResponsiveSidebar(media.matches); setSidebarOpen(false); };
+    media.addEventListener('change', onChange);
+    return () => media.removeEventListener('change', onChange);
+  }, [setSidebarOpen]);
+
+  useEffect(() => { setSidebarOpen(false); }, [location.pathname, setSidebarOpen]);
+
+  useLayoutEffect(() => {
+    const panel = sidebarRef.current;
+    if (!panel) return;
+    const frame = panel.parentElement!;
+    const restore = () => {
+      const opener = sidebarOpener.current ?? frame.querySelector<HTMLElement>('.menu-button');
+      const target = opener && canFocus(opener) ? opener : frame.querySelector<HTMLElement>('#main-content');
+      if (target && canFocus(target)) target.focus();
+    };
+    if (!modalSidebar) {
+      // A focused desktop control must not disappear offscreen after a breakpoint change.
+      if (responsiveSidebar && panel.contains(document.activeElement)) restore();
+      return;
+    }
+    // Only this shell's covered siblings are inert; no document-wide keyboard interception.
+    const background = [...frame.children].filter((node): node is HTMLElement => node instanceof HTMLElement && node !== panel && !node.classList.contains('sidebar-scrim'));
+    const previous = background.map(node => ({ node, inert: node.inert }));
+    background.forEach(node => { node.inert = true; });
+    (sidebarControls(panel)[0] ?? panel).focus();
+    return () => {
+      previous.forEach(({ node, inert }) => { node.inert = inert; });
+      if (window.matchMedia(sidebarMedia).matches) restore();
+      else if (panel.contains(document.activeElement) && !canFocus(document.activeElement as HTMLElement)) {
+        (sidebarControls(panel)[0] ?? panel).focus();
+      }
+    };
+  }, [modalSidebar, responsiveSidebar, Boolean(session)]);
+
+  useLayoutEffect(() => {
+    const panel = sidebarRef.current, focused = sidebarFocused.current;
+    // A permission refresh is not a close/open cycle. Recover only a lost control,
+    // never a live focus position or focus intentionally moved to another surface.
+    if (panel && canFocus(panel) && focused && !canFocus(focused)
+      && (document.activeElement === document.body || document.activeElement === focused)) {
+      (sidebarControls(panel)[0] ?? panel).focus();
+    }
+  }, [access.data]);
 
   useEffect(() => {
     if (!session) return;
@@ -129,8 +185,22 @@ export function AppShell() {
   return (
     <AccessContext.Provider value={access.data}>
     <div className="app-frame">
-      <button className={`sidebar-scrim ${sidebarOpen ? "sidebar-scrim--open" : ""}`} aria-label="메뉴 닫기" onClick={() => setSidebarOpen(false)} />
-      <aside className={`sidebar ${sidebarOpen ? "sidebar--open" : ""}`}>
+      <button className={`sidebar-scrim ${modalSidebar ? "sidebar-scrim--open" : ""}`} tabIndex={-1} aria-hidden="true" aria-label="메뉴 닫기" onClick={() => setSidebarOpen(false)} />
+      <div ref={sidebarRef} id="app-sidebar" className={`sidebar ${modalSidebar ? "sidebar--open" : ""}`} role={modalSidebar ? 'dialog' : 'complementary'} aria-label="주 메뉴" aria-modal={modalSidebar ? true : undefined} inert={responsiveSidebar && !sidebarOpen} hidden={responsiveSidebar && !sidebarOpen} tabIndex={-1}
+        onFocusCapture={event => { sidebarFocused.current = event.target; }}
+        onBlurCapture={event => {
+          if (canFocus(event.target) && !event.currentTarget.contains(event.relatedTarget)) sidebarFocused.current = null;
+        }}
+        onKeyDown={event => {
+          if (!modalSidebar || event.defaultPrevented) return;
+          if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setSidebarOpen(false); }
+          if (event.key !== 'Tab') return;
+          const controls = sidebarControls(event.currentTarget);
+          const first = controls[0], last = controls.at(-1);
+          if (!first) { event.preventDefault(); event.currentTarget.focus(); }
+          else if (event.shiftKey && (document.activeElement === first || document.activeElement === event.currentTarget)) { event.preventDefault(); last?.focus(); }
+          else if (!event.shiftKey && (document.activeElement === last || document.activeElement === event.currentTarget)) { event.preventDefault(); first.focus(); }
+        }}>
         <div className="sidebar__brand"><WorkspaceSwitcher session={activeSession} /></div>
         <nav aria-label="주 메뉴">
           {favorites.length > 0 && <section className="nav-favorites" data-testid="nav-favorites" data-order={favorites.map(screen => screen.id).join(',')} aria-labelledby="nav-favorites-label">
@@ -168,18 +238,18 @@ export function AppShell() {
             </div>;
           })}
         </nav>
-        <div className="sidebar__footer"><div className="user-block"><span className="avatar">{session.name.slice(0, 1)}</span><span><strong>{session.name}</strong><small>{session.email}</small></span></div><Button tone="neutral" size="small" onClick={logout}>로그아웃</Button></div>
-      </aside>
+        <div className="sidebar__footer"><div className="user-block"><span className="avatar">{session.name.slice(0, 1)}</span><span><strong>{session.name}</strong><small>{session.email}</small></span></div><Button tone="neutral" size="small" onClick={logout}>로그아웃</Button><Button className="sidebar__close" tone="neutral" size="small" onClick={() => setSidebarOpen(false)}>메뉴 닫기</Button></div>
+      </div>
 
       <div className="app-main">
         <header className="topbar">
-          <Button className="menu-button" tone="neutral" size="small" onClick={toggleSidebar} aria-label="메뉴 열기">메뉴</Button>
+          <Button className="menu-button" tone="neutral" size="small" onClick={event => { sidebarOpener.current = event.currentTarget; setSidebarOpen(true); }} aria-label="메뉴 열기" aria-expanded={modalSidebar} aria-controls="app-sidebar" aria-haspopup="dialog">메뉴</Button>
           <form className="global-search" onSubmit={(event) => { event.preventDefault(); const term = search.trim(); if (!term) return; const target = term.includes("@") ? "/members" : /문서|자료|규정|계약/.test(term) ? "/documents" : "/projects"; navigate(`${target}?q=${encodeURIComponent(term)}`); }}>
             <label><span className="sr-only">전역 검색</span><input type="search" placeholder="업무, 문서, 구성원 검색 후 Enter" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
           </form>
           <div className="topbar__actions">{canOpen('/notifications') && <NavLink className="icon-link" to="/notifications" aria-label="알림">알림</NavLink>}{canOpen('/agent') && <Button tone="ai" size="small" onClick={toggleAgent}>AI Agent</Button>}</div>
         </header>
-        <main id="main-content" key={`${session.orgId}:${location.pathname}`}>
+        <main id="main-content" tabIndex={-1} key={`${session.orgId}:${location.pathname}`}>
           {access.error ? <section className="state-card" role="alert"><h1>접근 권한을 확인하지 못했습니다</h1><p>{access.error}</p><Button onClick={access.retry}>다시 시도</Button></section>
             : !access.data ? <p role="status">접근 권한을 확인하는 중입니다…</p>
               : !allowed ? <section className="state-card" role="alert" data-testid="screen-access-denied"><h1>접근할 수 없습니다</h1><p>이 메뉴의 역할 권한이 없거나 조직에서 기능이 꺼져 있습니다.</p></section> : <Outlet />}
