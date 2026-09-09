@@ -20,11 +20,11 @@ const sharedScenarioArgs = args[0] === '--scenario'
   && ['baseline', 'recruitment-nav', 'nav-pref', 'members-pagination', 'assets-footer', 'sidebar', 'knowledge-graphs', 'project-members', 'project-members-access'].includes(args[1])
   && (args.length === 2 || (args.length === 4 && args[2] === '--probe' && ['error', 'cancel'].includes(args[3])));
 const dedicatedScenarioArgs = args[0] === '--scenario' && (
-  (args.length === 2 && ['month-summary', 'roles', 'role-toggles', 'role-toggles-native', 'disabled-hr-features', 'reservation-conflict-edit', 'reservation-space-calendar', 'expense-receipt', 'expense-csv-import'].includes(args[1]))
+  (args.length === 2 && ['month-summary', 'roles', 'role-toggles', 'role-toggles-native', 'disabled-hr-features', 'reservation-conflict-edit', 'reservation-space-calendar', 'expense-receipt', 'expense-csv-import', 'approval-workflow'].includes(args[1]))
   || (args.length === 3 && args[1] === 'reservation-space-calendar' && args[2] === '--baseline')
 );
 if (!sharedScenarioArgs && !dedicatedScenarioArgs) {
-  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar|knowledge-graphs|project-members|project-members-access [--probe error|cancel] | --scenario month-summary|roles|role-toggles|role-toggles-native|disabled-hr-features|reservation-conflict-edit|expense-receipt|expense-csv-import | --scenario reservation-space-calendar [--baseline]');
+  console.error('Usage: deadline-qa.e2e.mjs --scenario baseline|recruitment-nav|nav-pref|members-pagination|assets-footer|sidebar|knowledge-graphs|project-members|project-members-access [--probe error|cancel] | --scenario month-summary|roles|role-toggles|role-toggles-native|disabled-hr-features|reservation-conflict-edit|expense-receipt|expense-csv-import|approval-workflow | --scenario reservation-space-calendar [--baseline]');
   process.exitCode = 2;
 } else {
   assertIsolated();
@@ -33,6 +33,7 @@ if (!sharedScenarioArgs && !dedicatedScenarioArgs) {
   else if (args[1] === 'roles') await (await import('./deadline-roles-qa.mjs')).rolesScenario();
   else if (['role-toggles', 'role-toggles-native'].includes(args[1])) await (await import('./deadline-role-toggles.e2e.mjs')).roleTogglesScenario(args[1] === 'role-toggles-native');
   else if (args[1] === 'disabled-hr-features') await (await import('./deadline-disabled-hr-features-qa.mjs')).disabledHrFeaturesScenario();
+  else if (args[1] === 'approval-workflow') await (await import('./deadline-approval-workflow.scenario.mjs')).approvalWorkflow();
   else if (args[1] === 'expense-csv-import') await import('./deadline-expense-import.scenario.mjs');
   else if (args[1] === 'expense-receipt') await import('./deadline-expense-receipt.scenario.mjs');
   else if (args[1] === 'month-summary') await (await import('./deadline-month-summary.e2e.mjs')).monthSummary();
@@ -282,8 +283,8 @@ async function baseline(probe, scenario) {
     assert.equal(approvalReaderSaved.roles_version, approvalReader.roles_version + 1);
     assert.deepEqual((await api.request(fixture.actorMember, '/approvals/requests')).items.map(item => item.id), [fixture.approval.id]);
     result.approvalReaderFixture = { assignmentAloneReadable: false, explicitDecisionGrant: approvalReaderRole.key, expectedRolesVersion: approvalReader.roles_version, savedRolesVersion: approvalReaderSaved.roles_version };
-    await surface('approvals-assigned-member', fixture.actorMember, '/approvals', 'main .operational-list li', '/api/v1/approvals/requests', async page => {
-      assert.ok((await page.locator('.operational-list').innerText()).includes(fixture.approval.title));
+    await surface('approvals-assigned-member', fixture.actorMember, '/approvals', 'main [data-approval-row]', '/api/v1/approvals/requests', async page => {
+      assert.ok((await page.locator('.approvals-list').innerText()).includes(fixture.approval.title));
       return { approvalId: fixture.approval.id, requesterId: fixture.actorAdmin.userId, assigneeId: fixture.actorMember.userId };
     }, [375, 1280]);
     for (const [name, route, apiPath, selector] of [
@@ -291,7 +292,7 @@ async function baseline(probe, scenario) {
       ['roles', '/settings/roles', '/api/v1/settings/roles', 'main h1'],
       ['disabled-hr-features', '/settings/organization', '/api/v1/tenants/modules', 'main input[type="checkbox"]'],
       ['finance-transactions', '/finance/transactions', '/api/v1/finance/transactions', 'main [data-transaction-id]'],
-      ['approvals-admin-inbox-empty', '/approvals', '/api/v1/approvals/requests', 'main .state-card:not([role])'],
+      ['approvals-admin-inbox-empty', '/approvals', '/api/v1/approvals/requests', 'main .approvals-list:empty'],
       ['analytics', '/analytics', '/api/v1/analytics/dashboard', 'main [data-screen-id]'],
       ['company-graph', '/documents/graph', '/api/v1/documents/graph', 'main .graph-stage__canvas'],
       ['personal-graph', '/vault/graph', '/api/v1/vault/graph', 'main .graph-stage__empty:not([role])'],
