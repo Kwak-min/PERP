@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
+import { presetFor } from "../config/agent-tools.js";
 import { transaction } from "../config/db.js";
 import { env } from "../config/env.js";
 import { bumpVersion, insert, listScoped, nowIso } from "../models/base.js";
@@ -39,12 +40,16 @@ function decrypt(principal, row) {
 }
 
 export function keyMetadata(principal) {
-  const shared = Boolean(env.openrouterApiKey);
-  return { provider: "openrouter", configured: shared || Boolean(ownerKey(principal)), credential_mode: shared ? "shared" : "personal", model: env.externalModel };
+  const mode = ownerKey(principal) ? "personal" : env.openrouterApiKey ? "shared" : "none";
+  return { provider: "openrouter", configured: mode !== "none", credential_mode: mode, model: env.externalModel };
 }
 
-function requirePersonalMode() {
-  if (env.openrouterApiKey) throw new ApiError("CONFLICT", "서버 관리 공용 키를 사용 중입니다. 개인 키를 저장하거나 삭제할 필요가 없습니다. 공용 키 변경은 서버 관리자에게 요청하세요.");
+// 서버 내부 전용. 호출자는 먼저 사용자/조직 권한과 전송 등급을 검증해야 한다.
+// 공급자 객체에는 인증 정보가 있으므로 HTTP 응답이나 로그에 직렬화하지 않는다.
+export function resolveOwnerProvider(principal) {
+  const row = ownerKey(principal);
+  const credential = row ? decrypt(principal, row) : env.openrouterApiKey;
+  return credential ? providers.openRouterForKey(credential) : null;
 }
 
 function record(principal, configured, requestId) {
@@ -59,7 +64,6 @@ function record(principal, configured, requestId) {
 }
 
 export const saveKey = transaction((principal, apiKey, requestId) => {
-  requirePersonalMode();
   const nonce = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", masterKey(), nonce);
   cipher.setAAD(binding(principal));
@@ -74,12 +78,19 @@ export const saveKey = transaction((principal, apiKey, requestId) => {
     tenant_id: principal.tenantId, org_id: principal.orgId, user_id: principal.userId,
     provider: "openrouter", ...encrypted, created_by: principal.userId,
   });
+  const profile = listScoped("agent_profile", principal, [
+    { sql: "user_id = ?", params: [principal.userId] },
+  ], { limit: 1 })[0];
+  if (profile) bumpVersion("agent_profile", profile, { model_policy: "external" }, principal.userId);
+  else insert("agent_profile", {
+    tenant_id: principal.tenantId, org_id: principal.orgId, user_id: principal.userId,
+    preset: presetFor(principal.roles ?? []), model_policy: "external", created_by: principal.userId,
+  });
   record(principal, true, requestId);
   return keyMetadata(principal);
 });
 
 export const deleteKey = transaction((principal, requestId) => {
-  requirePersonalMode();
   const existing = ownerKey(principal);
   if (existing) {
     bumpVersion("ai_user_key", existing, {
@@ -91,17 +102,12 @@ export const deleteKey = transaction((principal, requestId) => {
 });
 
 export async function testKey(principal) {
-  let credential = env.openrouterApiKey;
-  if (!credential) {
-    const row = ownerKey(principal);
-    if (!row) throw new ApiError("CONFLICT", "먼저 개인 OpenRouter API 키를 저장하세요.");
-    credential = decrypt(principal, row);
-  }
-  const provider = providers.openRouterForKey(credential);
+  const provider = resolveOwnerProvider(principal);
+  if (!provider) throw new ApiError("CONFLICT", "먼저 개인 OpenRouter API 키를 저장하세요.");
   // 연결 확인은 조직 문서·기억·Vault를 조회하지 않는 고정 합성 요청이다.
   const result = await provider.complete(env.externalModel, "Reply briefly.", "Reply OK.", { maxTokens: 8, timeoutMs: 8000 });
   if (result.error) throw new ApiError("SERVICE_UNAVAILABLE", "OpenRouter 연결에 실패했습니다. 키 권한, 잔액, 모델 설정과 네트워크를 확인하세요.");
-  return { provider: "openrouter", connected: true, model: env.externalModel };
+  return { provider: "openrouter", connected: true, model: result.model };
 }
 
 export async function completeForUser(principal, { dataClass, system, user, prefer = null }) {
@@ -113,11 +119,11 @@ export async function completeForUser(principal, { dataClass, system, user, pref
   if (policy === "local" || !providers.externalAllowed(dataClass)) {
     return providers.complete(dataClass, system, user, "local");
   }
-  // 공용 키는 모든 회사에서 우선하지만 컨텍스트와 권한 범위는 그대로 유지한다.
-  if (env.openrouterApiKey) {
-    return providers.complete(dataClass, system, user, "external", providers.openRouterForKey(env.openrouterApiKey));
-  }
-  const row = ownerKey(principal);
-  if (!row) return providers.complete(dataClass, system, user, policy);
-  return providers.complete(dataClass, system, user, "external", providers.openRouterForKey(decrypt(principal, row)));
+  const provider = resolveOwnerProvider(principal);
+  if (!provider && policy !== "external") return providers.complete(dataClass, system, user, policy);
+  if (!provider) throw new ApiError("SERVICE_UNAVAILABLE", "OpenRouter API 키가 없습니다. AI 연결 설정에서 키를 저장하세요.");
+  // 클라우드를 선택한 요청은 로컬/echo 성공으로 대체하지 않는다.
+  const result = await providers.complete(dataClass, system, user, "external", provider);
+  if (result.error) throw new ApiError("SERVICE_UNAVAILABLE", "OpenRouter 요청에 실패했습니다. 키 권한, 잔액, 모델 설정과 네트워크를 확인하세요.");
+  return result;
 }

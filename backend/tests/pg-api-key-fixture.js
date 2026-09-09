@@ -24,6 +24,23 @@ export async function installPgKeyFixture() {
           && row.status === "active" && companies.has(row.company_id))
         .map(row => ({ ...row, name: companies.get(row.company_id) })) };
     }
+    if (sql.includes("FROM auth.users u") && sql.includes("WHERE u.id = $1")) {
+      const user = users.get(values[0]);
+      return { rows: user ? [{ ...user, company_name: companies.get(user.company_id) }] : [] };
+    }
+    // 현재 SPA의 신원/메뉴 확인도 실제 HTTP 컨트롤러를 통과한다.
+    if (sql.includes("FROM org.department_access_roles")) return { rows: [] };
+    if (sql.includes("FROM org.roles r LEFT JOIN org.role_permissions")) {
+      return { rows: [...memberships.values()].filter(row => row.company_id === values[0]).map(row => ({
+        id: `fixture-role-${row.user_id}`, name: "configured", is_system: false, scope: "self", version: 1,
+        permissions: grants.get(scopeKey(row.user_id, row.company_id)) ?? [],
+      })) };
+    }
+    if (sql.includes("FROM org.company_memberships m JOIN auth.users u")) {
+      return { rows: [...memberships.values()].filter(row => row.company_id === values[0] && row.status === "active")
+        .map(row => ({ ...row, name: users.get(row.user_id).name, email: users.get(row.user_id).email,
+          roles_version: 1, roles: [`fixture-role-${row.user_id}`] })) };
+    }
     if (sql.includes("FROM org.user_roles")) {
       return { rows: (grants.get(scopeKey(values[0], values[1])) ?? []).map(code => ({ role: "configured", code })) };
     }

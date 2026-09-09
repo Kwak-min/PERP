@@ -87,8 +87,8 @@ describe("personal OpenRouter credentials through authenticated HTTP and wire ad
     assert.ok(!JSON.stringify(row).includes(key));
     const audit = conn.prepare("SELECT * FROM audit_event WHERE actor_id = ?").all(owner.userId);
     assert.ok(!JSON.stringify(audit).includes(key));
-    assert.deepEqual((await request(member)).body, { provider: "openrouter", configured: false, credential_mode: "personal", model: config.externalModel });
-    assert.deepEqual((await request(other)).body, { provider: "openrouter", configured: false, credential_mode: "personal", model: config.externalModel });
+    assert.deepEqual((await request(member)).body, { provider: "openrouter", configured: false, credential_mode: "none", model: config.externalModel });
+    assert.deepEqual((await request(other)).body, { provider: "openrouter", configured: false, credential_mode: "none", model: config.externalModel });
   });
 
   it("rejects invalid key payloads without echoing submitted credentials", async () => {
@@ -213,7 +213,7 @@ describe("personal OpenRouter credentials through authenticated HTTP and wire ad
     await save(owner);
     await save(member, memberKey);
     const result = await request(owner, "/agent/api-key", { method: "DELETE" });
-    assert.deepEqual(result.body, { provider: "openrouter", configured: false, credential_mode: "personal", model: config.externalModel });
+    assert.deepEqual(result.body, { provider: "openrouter", configured: false, credential_mode: "none", model: config.externalModel });
     const rows = conn.prepare("SELECT ciphertext, nonce, auth_tag, deleted_at FROM ai_user_key WHERE user_id = ?").all(owner.userId);
     assert.ok(rows.every((row) => row.deleted_at && row.ciphertext === "" && row.nonce === "" && row.auth_tag === ""));
     assert.equal((await request(member)).body.configured, true);
