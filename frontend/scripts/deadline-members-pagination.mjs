@@ -75,8 +75,10 @@ export async function membersPagination({ surface, api, fixture, result, attempt
       const response = await responseReady;
       assert.equal(response.status(), 200);
       assert.equal((await response.json()).user_id, member.user_id);
-      await change(page, () => document.querySelectorAll('.org-directory tbody tr').length === 10, () => page.goBack({ waitUntil: 'domcontentloaded' }));
+      await change(page, () => document.querySelectorAll('.org-directory tbody tr').length === 1, () => page.goBack({ waitUntil: 'domcontentloaded' }));
+      assert.equal(await search.inputValue(), member.email, 'Back restores the member query');
     }
+    await change(page, () => document.querySelectorAll('.org-directory tbody tr').length === 10, () => search.fill(''));
     await change(page, () => document.querySelector('.org-directory nav')?.dataset.page === '2', () => next.click());
     await change(page, () => document.querySelector('.org-directory nav')?.dataset.page === '1', () => page.locator('.org-directory').getByLabel('부서', { exact: true }).selectOption(department.id));
     assert.equal(await rows.count(), 10);
