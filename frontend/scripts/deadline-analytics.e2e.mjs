@@ -96,11 +96,39 @@ export async function analyticsScenario(pgMode = false) {
   }
 }
 
+export async function resizeAnalyticsViewport(page, width) {
+  await page.evaluate(width => {
+    window.__analyticsResize = new Promise((resolve, reject) => {
+      const observer = new MutationObserver(check), layout = new ResizeObserver(check);
+      const screen = document.querySelector('.analytics-screen');
+      const timer = setTimeout(() => { cleanup(); reject(new Error('Analytics viewport deadline')); }, 15000);
+      function cleanup() { clearTimeout(timer); observer.disconnect(); layout.disconnect(); window.removeEventListener('resize', check); }
+      function check() {
+        const sidebarWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-w'));
+        const expectedWidth = width <= 1100 ? width : width - sidebarWidth;
+        if (innerWidth === width && document.getElementById('app-sidebar')?.hidden === (width <= 1100) &&
+          Math.abs(screen.getBoundingClientRect().width - expectedWidth) < 1 && getComputedStyle(screen).paddingTop === (width <= 600 ? '16px' : '24px')) { cleanup(); resolve(); }
+      }
+      observer.observe(document.documentElement, { subtree: true, attributes: true }); layout.observe(screen);
+      window.addEventListener('resize', check); check();
+    });
+  }, width);
+  await page.setViewportSize({ width, height: 900 });
+  await page.evaluate(() => window.__analyticsResize);
+}
+
+async function openFilters(page) {
+  if (await page.locator('.analytics-filter-panel').getAttribute('open') !== null) return;
+  const opened = await observe(page, '.analytics-filter-panel', 'open', '');
+  await page.locator('.analytics-filter-panel > summary').click(); await opened();
+}
+
 async function exercise({ page, f, result, attempt, session }) {
   const prefix = f.pgMode ? '/api/v1/pg/analytics' : '/api/v1/analytics';
   const responseFor = (suffix, method = 'GET', actor = null) => page.waitForResponse(response => new URL(response.url()).pathname === prefix + suffix && response.request().method() === method && (!actor || (response.request().headers()['authorization'] === `Bearer ${actor.token}` && response.request().headers()['x-org-id'] === actor.orgId)), { timeout: 15000 });
   const metric = key => page.locator(`[data-metric-key="${key}"]`);
   async function apply(period = filter) {
+    await openFilters(page);
     await page.getByLabel('시작일', { exact: true }).fill(period.from);
     await page.getByLabel('종료일', { exact: true }).fill(period.to);
     await page.getByLabel('시간대', { exact: true }).fill(period.tz);
@@ -189,6 +217,7 @@ async function exercise({ page, f, result, attempt, session }) {
   }
   await (await observe(page, '[data-analytics-kpis]', 'data-state', 'ready'))();
   await f.entry('2024-02-29', '12.34', 'income');
+  await openFilters(page);
   await page.getByLabel('시작일', { exact: true }).fill('2024-02-28');
   await page.getByLabel('종료일', { exact: true }).fill('2024-03-01');
   const seriesResponse = responseFor('/kpis');
@@ -233,13 +262,22 @@ async function exercise({ page, f, result, attempt, session }) {
   const transactionJob = await create('transactions'); const csv = await download(transactionJob);
   assert.ok(csv.includes(f.pgMode ? '9999999999999999.99' : '92233720368547758.07'));
   for (const width of [375, 768, 1280]) {
-    await page.setViewportSize({ width, height: 900 }); await page.evaluate(async () => { await document.fonts.ready; scrollTo(0, 0); });
+    await resizeAnalyticsViewport(page, width); await page.evaluate(async () => { await document.fonts.ready; scrollTo(0, 0); });
     const observed = await page.locator('.analytics-screen').evaluate(element => {
       const box = element.getBoundingClientRect(); return { viewport: innerWidth, left: box.left, right: box.right, scroll: element.scrollWidth, client: element.clientWidth, documentWidth: document.documentElement.scrollWidth };
     });
     assert.ok(observed.left >= 0 && observed.right <= width + 1 && observed.scroll <= observed.client + 1, JSON.stringify(observed));
+    assert.ok(await page.locator('[data-metric-value]').first().evaluate(node => node.getBoundingClientRect().bottom < 375));
+    assert.equal(await page.locator('.analytics-filter-panel[open], .analytics-basis[open]').count(), 0);
     const file = new URL(`analytics-${width}.png`, attempt); await page.screenshot({ path: fileURLToPath(file), fullPage: true, animations: 'disabled' });
     result.captures.push({ width, file: fileURLToPath(file), observed, sha256: createHash('sha256').update(await readFile(file)).digest('hex') });
+    const disclosure = metric('tasks.open').locator('summary');
+    await disclosure.focus();
+    const expanded = await observe(page, '[data-metric-key="tasks.open"] details', 'open', '');
+    await disclosure.press('Space'); await expanded();
+    assert.equal(await metric('tasks.open').locator('dd').nth(2).isVisible(), true);
+    await disclosure.press('Enter');
+    assert.equal(await metric('tasks.open').locator('details').getAttribute('open'), null);
     const choice = page.getByRole('combobox', { name: '차트 구간 선택', exact: true });
     await choice.focus(); await choice.press('Home');
     const selected = await observe(page, '[data-series-selected]', 'data-series-selected', '2026-09-02');
@@ -313,10 +351,11 @@ async function exercise({ page, f, result, attempt, session }) {
   await select('tasks'); const overlimit = responseFor('/exports', 'POST'); await page.getByRole('button', { name: 'CSV 요청 생성', exact: true }).click();
   const error = await overlimit; assert.equal(error.status(), 413); await (await observe(page, '[data-error-code]', 'data-error-code', 'EXPORT_LIMIT_EXCEEDED'))();
   assert.equal(await page.locator('[data-export-id]').count(), 0);
+  await openFilters(page);
   await page.getByLabel('시작일', { exact: true }).fill('2026-10-01'); await page.getByLabel('종료일', { exact: true }).fill('2026-09-01');
   const validation = await observe(page, '[data-error-code]', 'data-error-code', 'VALIDATION_ERROR'); await page.getByRole('button', { name: '기간 적용 · 다시 조회' }).click(); await validation();
   assert.equal(await page.locator('[data-metric-key]').count(), 0); assert.equal(await page.locator('[data-export-id]').count(), 0);
-  result.coverage = ['daily-finance-chart', 'exact-series-table', 'bounded-long-period', 'series-keyboard-375-768-1280', 'series-accessibility-tree', 'finance-query-failure', 'all16', 'ready-empty-forbidden-disabled-unavailable', 'exact-money', 'null-ratio', 'period-change', 'source-failure-vs-unsupported', 'own-approval-privacy', 'report-allowlist', 'fresh-csv-row-count', 'download-403-409', 'overlimit-413', 'invalid-period', 'stale-transitions'];
+  result.coverage = ['result-first-375-768-1280', 'keyboard-basis-disclosure', 'optional-filter-panel', 'daily-finance-chart', 'exact-series-table', 'bounded-long-period', 'series-keyboard-375-768-1280', 'series-accessibility-tree', 'finance-query-failure', 'all16', 'ready-empty-forbidden-disabled-unavailable', 'exact-money', 'null-ratio', 'period-change', 'source-failure-vs-unsupported', 'own-approval-privacy', 'report-allowlist', 'fresh-csv-row-count', 'download-403-409', 'overlimit-413', 'invalid-period', 'stale-transitions'];
 }
 
 async function staleTransitions({ page, f, apply, create, switchActor, responseFor, prefix, result, session }) {
@@ -354,6 +393,7 @@ async function staleTransitions({ page, f, apply, create, switchActor, responseF
     page.on('requestfailed', failed);
     await page.route(pattern, handler);
     try {
+      await openFilters(page);
       await action(); const original = await bounded(entered.promise);
       if (original.error) throw original.error;
       assert.ok(original.status >= 200 && original.status < 300);
@@ -377,6 +417,7 @@ async function staleTransitions({ page, f, apply, create, switchActor, responseF
   }
   await apply();
   await hold('/kpis', 'GET', () => page.getByRole('button', { name: '기간 적용 · 다시 조회' }).click(), async () => {
+    await openFilters(page);
     await page.getByLabel('시작일', { exact: true }).fill('2026-08-01');
     assert.equal(await page.locator('[data-metric-key]').count(), 0);
   });
