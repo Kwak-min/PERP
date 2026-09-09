@@ -123,7 +123,7 @@ export function route(dataClass, prefer = null, externalProvider = REGISTRY.open
 
   if (!externalAllowed(dataClass)) return localChain;
   if (prefer === "local") return localChain;
-  if (prefer === "external") return [...externalChain, ...localChain];
+  if (prefer === "external") return externalChain;
   if (env.aiProvider === "echo") return [[REGISTRY.echo, "echo-local"]];
   return [...externalChain, ...localChain];
 }

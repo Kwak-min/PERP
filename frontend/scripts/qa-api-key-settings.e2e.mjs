@@ -12,42 +12,38 @@ import { installPgKeyFixture } from "../../backend/tests/pg-api-key-fixture.js";
 const pgMode = process.argv.includes("--pg");
 const sharedMode = process.argv.includes("--shared");
 const sharedSecret = "synthetic-browser-central-key";
-const calls = [];
-const keyRoutes = [];
-const serverErrors = [];
-let wire, backend, staticServer, browser, pgFixture;
-const evidence = new URL(pgMode ? "../../.omo/api-key-pg-evidence/" : "../../.omo/api-key-evidence/", import.meta.url);
 const secret = "sk-or-v1-synthetic-browser-only";
 const replacement = "sk-or-v1-synthetic-browser-replacement";
+const calls = [], keyRoutes = [], serverErrors = [], responses = [];
+let wire, backend, staticServer, browser, pgFixture;
+let wireStatus = 200;
+const evidence = new URL(`../../.omo/cloud-key-${pgMode ? "pg" : "legacy"}-${sharedMode ? "shared" : "personal"}/`, import.meta.url);
 try {
   wire = createServer(async (req, res) => {
     let body = "";
     for await (const chunk of req) body += chunk;
     calls.push({ authorization: req.headers.authorization, body: JSON.parse(body) });
-    res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ choices: [{ message: { content: "OK" } }], usage: { total_tokens: 2 } }));
+    res.writeHead(wireStatus, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(wireStatus === 200
+      ? { choices: [{ message: { content: "actual-cloud-answer" } }], model: "fixture-upstream-model", usage: { total_tokens: 2 } }
+      : { error: { message: req.headers.authorization } }));
   });
   const wireReady = once(wire, "listening", { signal: AbortSignal.timeout(5000) });
-  wire.listen(0, "127.0.0.1");
-  await wireReady;
+  wire.listen(0, "127.0.0.1"); await wireReady;
   process.env.OPENROUTER_BASE_URL = `http://127.0.0.1:${wire.address().port}`;
-  process.env.OPENROUTER_API_KEY = "";
+  process.env.OPENROUTER_API_KEY = sharedMode ? sharedSecret : "";
   process.env.ORBITFLOW_AI_KEY_ENCRYPTION_KEY = randomBytes(32).toString("base64");
   backend = await startTestServer();
   if (pgMode) pgFixture = await installPgKeyFixture();
   const owner = pgMode ? pgFixture.actor("101") : await createOwnerOrg(backend.baseUrl, ["agent"]);
-  const other = pgMode ? pgFixture.actor("102", sharedMode ? "88" : "77") : await createOwnerOrg(backend.baseUrl, ["agent"]);
+  const other = pgMode ? pgFixture.actor("102", "88") : await createOwnerOrg(backend.baseUrl, ["agent"]);
   if (!pgMode) {
     const options = { ...owner, method: "POST" };
-    await api(backend.baseUrl, "/vault/notes", { ...options, body: { title: "privacy fixture", content: "vault-context-must-not-be-sent" } });
-    await api(backend.baseUrl, "/agent/memory", { ...options, body: { content: "memory-context-must-not-be-sent" } });
+    assert.equal((await api(backend.baseUrl, "/vault/notes", { ...options, body: { title: "privacy fixture", content: "vault-context-must-not-be-sent" } })).status, 201);
+    assert.equal((await api(backend.baseUrl, "/agent/memory", { ...options, body: { content: "memory-context-must-not-be-sent" } })).status, 201);
+    assert.equal((await api(backend.baseUrl, "/agent/profile", { ...owner, method: "PUT", body: { model_policy: "local" } })).status, 200);
   }
   const { env } = await import("../../backend/src/config/env.js");
-  if (sharedMode) {
-    assert.equal((await api(backend.baseUrl, pgMode ? "/pg/agent/api-key" : "/agent/api-key", { ...owner, method: "PUT", body: { api_key: secret } })).status, 200);
-    env.openrouterApiKey = sharedSecret;
-    env.aiKeyEncryptionKey = "";
-  }
   staticServer = createServer(async (req, res) => {
     try {
       if (req.url.startsWith("/api/v1/")) {
@@ -59,9 +55,10 @@ try {
           body: ["GET", "HEAD"].includes(req.method) ? undefined : body,
         });
         if (response.status === 500) serverErrors.push(req.url);
+        const text = await response.text();
+        responses.push(text);
         res.writeHead(response.status, { "Content-Type": "application/json" });
-        res.end(await response.text());
-        return;
+        res.end(text); return;
       }
       const name = extname(req.url) ? req.url.slice(1) : "index.html";
       const content = await readFile(new URL(`../dist/${name}`, import.meta.url));
@@ -73,117 +70,88 @@ try {
     }
   });
   const staticReady = once(staticServer, "listening", { signal: AbortSignal.timeout(5000) });
-  staticServer.listen(0, "127.0.0.1");
-  await staticReady;
+  staticServer.listen(0, "127.0.0.1"); await staticReady;
   const appUrl = `http://127.0.0.1:${staticServer.address().port}`;
   browser = await chromium.launch({ channel: "chrome" });
   await mkdir(evidence, { recursive: true });
   const context = await browser.newContext();
   const page = await context.newPage();
   const pageErrors = [];
-  page.on("pageerror", (error) => pageErrors.push(error.message));
-  await page.addInitScript((actor) => sessionStorage.setItem("orbitflow.session.v1", JSON.stringify({
+  page.on("pageerror", error => pageErrors.push(error.message));
+  const seedSession = (actor) => sessionStorage.setItem("orbitflow.session.v1", JSON.stringify({
     token: actor.token, orgId: actor.orgId, name: "Fixture", email: "fixture@example.com", mustChangePassword: false,
-    organizations: [{ org_id: actor.orgId, org_name: actor.orgId.startsWith("pg:") ? "PG 회사 77" : "Test Org", org_type: actor.orgId.startsWith("pg:") ? "perp_db" : "custom", roles: ["configured"] }],
-  })), owner);
+    organizations: [{ org_id: actor.orgId, org_name: "Test Org", org_type: actor.orgId.startsWith("pg:") ? "perp_db" : "custom", roles: ["configured"] }],
+  }));
+  await page.addInitScript(seedSession, owner);
   await page.goto(pgMode ? `${appUrl}/settings/ai-key` : `${appUrl}/settings`);
   if (!pgMode) await Promise.all([
-    page.waitForURL((url) => url.pathname === "/settings/ai-key", { timeout: 5000 }),
+    page.waitForURL(url => url.pathname === "/settings/ai-key", { timeout: 5000 }),
     page.locator('.settings-links a[href="/settings/ai-key"]').click(),
   ]);
-  if (sharedMode) {
-    const verifyShared = async (target) => {
-      await expect(target.getByTestId("api-key-status")).toHaveAttribute("data-credential-mode", "shared");
-      await expect(target.getByTestId("api-key-status")).toHaveAttribute("data-configured", "true");
-      await expect(target.locator("#openrouter-api-key")).toHaveCount(0);
-      await expect(target.locator(".api-key-settings form")).toHaveCount(0);
-      const [response] = await Promise.all([
-        target.waitForResponse(response => response.url().endsWith("/agent/api-key/test") && response.request().method() === "POST", { timeout: 15000 }),
-        target.getByTestId("shared-key-settings").getByRole("button").click(),
-      ]);
-      assert.equal(response.status(), 200);
-      assert.ok(!(await response.text()).includes(sharedSecret));
-      assert.equal(calls.at(-1).authorization, `Bearer ${sharedSecret}`);
-      const visible = await target.evaluate(() => JSON.stringify({ html: document.body.innerHTML, local: { ...localStorage }, session: { ...sessionStorage } }));
-      assert.ok(!visible.includes(sharedSecret) && !visible.includes(secret));
-    };
-    await verifyShared(page);
-    await page.reload();
-    await verifyShared(page);
-    for (const width of [375, 768, 1280]) {
-      await page.setViewportSize({ width, height: 900 });
-      await verifyShared(page);
-      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
-      await page.screenshot({ path: fileURLToPath(new URL(`shared-${width}.png`, evidence)), fullPage: true });
-    }
-    const isolated = await browser.newContext();
-    const otherPage = await isolated.newPage();
-    otherPage.on("pageerror", error => pageErrors.push(error.message));
-    await otherPage.addInitScript(actor => sessionStorage.setItem("orbitflow.session.v1", JSON.stringify({
-      token: actor.token, orgId: actor.orgId, name: "Other", email: "other@example.com", mustChangePassword: false,
-      organizations: [{ org_id: actor.orgId, org_name: "Other Org", org_type: actor.orgId.startsWith("pg:") ? "perp_db" : "custom", roles: ["configured"] }],
-    })), other);
-    await otherPage.goto(`${appUrl}/settings/ai-key`);
-    await verifyShared(otherPage);
-    await otherPage.reload();
-    await verifyShared(otherPage);
-    await isolated.close();
-    assert.ok(calls.every(call => call.authorization === `Bearer ${sharedSecret}`));
-    assert.ok(!JSON.stringify(calls).includes("vault-context-must-not-be-sent"));
-    assert.ok(!JSON.stringify(calls).includes("memory-context-must-not-be-sent"));
-  } else {
   const status = page.getByTestId("api-key-status");
-  await expect(status).toHaveAttribute("data-configured", "false", { timeout: 5000 });
+  await expect(status).toHaveAttribute("data-credential-mode", sharedMode ? "shared" : "none");
   const input = page.getByLabel("OpenRouter API 키", { exact: true });
   await expect(input).toHaveAttribute("type", "password");
+  await expect(input).toBeVisible();
   const action = async (method, button, suffix = "") => {
     const [response] = await Promise.all([
-      page.waitForResponse((response) => response.url().endsWith(`/agent/api-key${suffix}`) && response.request().method() === method, { timeout: 15000 }),
+      page.waitForResponse(response => response.url().endsWith(`/agent/api-key${suffix}`) && response.request().method() === method, { timeout: 15000 }),
       button.click(),
     ]);
     return response;
   };
+  const testButton = page.getByRole("button", { name: "연결 테스트", exact: true });
+  if (sharedMode) {
+    assert.equal((await action("POST", testButton, "/test")).status(), 200);
+    assert.equal(calls.at(-1).authorization, `Bearer ${sharedSecret}`);
+    await expect(page.getByRole("button", { name: "키 삭제", exact: true })).toBeDisabled();
+  }
   await input.fill(secret);
   assert.equal((await action("PUT", page.getByRole("button", { name: "키 저장", exact: true }))).status(), 200);
-  await expect(status).toHaveAttribute("data-configured", "true");
+  await expect(status).toHaveAttribute("data-credential-mode", "personal");
   await expect(input).toHaveValue("");
-  assert.equal((await action("POST", page.getByRole("button", { name: "연결 테스트", exact: true }), "/test")).status(), 200);
+  assert.equal((await action("POST", testButton, "/test")).status(), 200);
   assert.equal(calls.at(-1).authorization, `Bearer ${secret}`);
   assert.ok(!JSON.stringify(calls).includes("vault-context-must-not-be-sent"));
   assert.ok(!JSON.stringify(calls).includes("memory-context-must-not-be-sent"));
+  if (!pgMode) assert.equal((await api(backend.baseUrl, "/agent/profile", owner)).body.model_policy, "external");
   await input.fill(replacement);
   assert.equal((await action("PUT", page.getByRole("button", { name: "키 교체", exact: true }))).status(), 200);
-  await action("POST", page.getByRole("button", { name: "연결 테스트", exact: true }), "/test");
+  assert.equal((await action("POST", testButton, "/test")).status(), 200);
   assert.equal(calls.at(-1).authorization, `Bearer ${replacement}`);
   await page.reload();
-  await expect(status).toHaveAttribute("data-configured", "true");
+  await expect(status).toHaveAttribute("data-credential-mode", "personal");
   await expect(input).toHaveValue("");
-  const storage = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage } }));
-  assert.ok(!storage.includes(secret) && !storage.includes(replacement));
+  const visible = await page.evaluate(() => JSON.stringify({ html: document.body.innerHTML, local: { ...localStorage }, session: { ...sessionStorage } }));
+  assert.ok([secret, replacement, sharedSecret].every(value => !visible.includes(value)));
   for (const width of [375, 768, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     await expect(status).toBeVisible();
-    assert.equal((await action("POST", page.getByRole("button", { name: "연결 테스트", exact: true }), "/test")).status(), 200);
-    await page.locator(".sidebar").evaluate(async (sidebar) => {
+    assert.equal((await action("POST", testButton, "/test")).status(), 200);
+    await page.locator(".sidebar").evaluate(async sidebar => {
       const timeout = AbortSignal.timeout(5000);
       await Promise.race([
-        Promise.all(sidebar.getAnimations().map((animation) => animation.finished)),
+        Promise.all(sidebar.getAnimations().map(animation => animation.finished)),
         new Promise((_, reject) => timeout.addEventListener("abort", () => reject(timeout.reason), { once: true })),
       ]);
     });
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
-    assert.equal(overflow, false, `overflow at ${width}`);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `overflow at ${width}`);
     await page.screenshot({ path: fileURLToPath(new URL(`configured-${width}.png`, evidence)), fullPage: true });
   }
   const isolated = await browser.newContext();
   const otherPage = await isolated.newPage();
-  await otherPage.addInitScript((actor) => sessionStorage.setItem("orbitflow.session.v1", JSON.stringify({
-    token: actor.token, orgId: actor.orgId, name: "Other", email: "other@example.com", mustChangePassword: false,
-    organizations: [{ org_id: actor.orgId, org_name: "Other Org", org_type: "custom", roles: ["owner"] }],
-  })), other);
+  await otherPage.addInitScript(seedSession, other);
   await otherPage.goto(`${appUrl}/settings/ai-key`);
-  await expect(otherPage.getByTestId("api-key-status")).toHaveAttribute("data-configured", "false");
+  await expect(otherPage.getByTestId("api-key-status")).toHaveAttribute("data-credential-mode", sharedMode ? "shared" : "none");
   await isolated.close();
+  wireStatus = 429;
+  const start = calls.length;
+  try {
+    assert.equal((await action("POST", testButton, "/test")).status(), 503);
+    await expect(page.getByRole("alert")).toBeVisible();
+    assert.equal(calls.length - start, 1);
+    await page.screenshot({ path: fileURLToPath(new URL("cloud-error.png", evidence)), fullPage: true });
+  } finally { wireStatus = 200; }
   const master = env.aiKeyEncryptionKey;
   env.aiKeyEncryptionKey = "";
   try {
@@ -191,22 +159,24 @@ try {
     assert.equal((await action("PUT", page.getByRole("button", { name: "키 교체", exact: true }))).status(), 503);
     await expect(page.getByRole("alert")).toBeVisible();
     await expect(input).toHaveValue("");
-    await page.screenshot({ path: fileURLToPath(new URL("configuration-error.png", evidence)), fullPage: true });
   } finally { env.aiKeyEncryptionKey = master; }
   await page.getByRole("button", { name: "키 삭제", exact: true }).click();
   assert.equal((await action("DELETE", page.getByRole("button", { name: "삭제 확인", exact: true }))).status(), 200);
-  await expect(status).toHaveAttribute("data-configured", "false");
-  await expect(page.getByRole("button", { name: "연결 테스트", exact: true })).toBeDisabled();
-  }
+  await expect(status).toHaveAttribute("data-credential-mode", sharedMode ? "shared" : "none");
+  if (sharedMode) {
+    assert.equal((await action("POST", testButton, "/test")).status(), 200);
+    assert.equal(calls.at(-1).authorization, `Bearer ${sharedSecret}`);
+  } else await expect(testButton).toBeDisabled();
   assert.deepEqual(pageErrors, []);
   assert.deepEqual(serverErrors, []);
+  assert.ok([secret, replacement, sharedSecret].every(value => !JSON.stringify(responses).includes(value)));
   assert.ok(keyRoutes.length > 0 && keyRoutes.every(path => path.startsWith(pgMode ? "/api/v1/pg/agent/api-key" : "/api/v1/agent/api-key")));
-  console.log(`${pgMode ? "PG_" : ""}API_KEY_CHROME_PASS ${sharedMode ? "shared two-companies reload no-personal-input synthetic-use no-secret-exposure" : "save replace reload synthetic-use isolation config-error delete"} 375/768/1280`);
+  console.log(`${pgMode ? "PG_" : ""}API_KEY_CHROME_PASS ${sharedMode ? "shared-override" : "personal"} save replace reload effective-key isolation strict-failure delete no-secret-exposure 375/768/1280`);
   await context.close();
 } finally {
   if (browser) await browser.close();
-  if (staticServer) await new Promise((resolve, reject) => staticServer.close((error) => error ? reject(error) : resolve()));
+  if (staticServer) await new Promise((resolve, reject) => staticServer.close(error => error ? reject(error) : resolve()));
   if (pgFixture) await pgFixture.close();
   if (backend) await backend.close();
-  if (wire) await new Promise((resolve, reject) => wire.close((error) => error ? reject(error) : resolve()));
+  if (wire) await new Promise((resolve, reject) => wire.close(error => error ? reject(error) : resolve()));
 }

@@ -8,7 +8,7 @@ import * as audit from "../services/audit.service.js";
 import { createApproval } from "../services/approval.service.js";
 import { buildPreview, execute, rollback } from "../services/agent-executor.service.js";
 import * as providers from "../services/ai-provider.service.js";
-import { completeForUser } from "../services/ai-key.service.js";
+import { completeForUser, keyMetadata } from "../services/ai-key.service.js";
 import * as rag from "../services/rag.service.js";
 import { verifyPassword } from "../utils/crypto.js";
 import { ApiError, notFound } from "../utils/errors.js";
@@ -579,11 +579,11 @@ export function listProviders(req, res) {
     items: Object.entries(providers.REGISTRY).map(([name, provider]) => ({
       name,
       local: provider.local,
-      available: provider.available(),
+      available: name === "openrouter" ? keyMetadata(principal).configured : provider.available(),
     })),
     routing_rules: [
       "데이터 등급 sensitive/confidential 은 외부 LLM 전송 차단(로컬 전용)",
-      "장애 시 정책상 허용된 대체 모델로 폴백",
+      "OpenRouter 요청 실패는 오류로 반환하며 로컬 성공으로 대체하지 않음",
       "모든 요청은 model/provider/token/cost/latency/citations/approval 기록",
     ],
   });
