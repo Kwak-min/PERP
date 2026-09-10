@@ -355,7 +355,12 @@ export async function analyticsCases(t, f) {
       f.record('project_member', { project_id: project, user_id: actor.userId });
       const base = { occurred_on: '2027-05-01', created_by: actor.userId, department_id: department, project_id: project, status: 'confirmed', currency: 'KRW' };
       const ids = [f.record('transaction_record', { ...base, kind: 'income', amount_minor: 1000 }).id, f.record('transaction_record', { ...base, kind: 'expense', amount_minor: 300 }).id];
-      for (const extra of [{ status: 'draft' }, { deleted_at: '2027-05-02' }, { org_id: f.foreign.orgId }, { tenant_id: 'foreign-tenant' }]) f.record('transaction_record', { ...base, kind: 'income', amount_minor: 99999, ...extra });
+      for (const extra of [{ status: 'draft' }, { deleted_at: '2027-05-02' }]) f.record('transaction_record', { ...base, kind: 'income', amount_minor: 99999, ...extra });
+      for (const extra of [{ org_id: f.foreign.orgId }, { tenant_id: 'foreign-tenant' }]) {
+        // 새 회사 불일치 프로젝트 연결은 DB 제약으로 거부한다. 미연결 외부 행도 집계에서 제외한다.
+        assert.throws(() => f.record('transaction_record', { ...base, kind: 'income', amount_minor: 99999, ...extra }), { code: 'ERR_SQLITE_ERROR', errcode: 1811 });
+        f.record('transaction_record', { ...base, project_id: null, kind: 'income', amount_minor: 99999, ...extra });
+      }
       f.record('transaction_record', { occurred_on: '2027-05-01', kind: 'income', amount_minor: 99999, status: 'confirmed', currency: 'USD' });
       const body = await kpis(actor, periodQuery);
       assert.equal(body.series[0].scope.rows, scope); assert.equal(body.series[0].unit, 'KRW');

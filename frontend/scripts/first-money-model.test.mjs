@@ -5,11 +5,13 @@ import { incomeInput } from '../../backend/src/services/income-input.service.js'
 const vite = await createServer({ configFile: false, envDir: process.env.DEADLINE_TEMP_ROOT, server: { middlewareMode: true, watch: null } });
 after(() => vite.close());
 const { incomeSchema, incomeAccounts, ledgerRows, confirmedMoneySchema } = await vite.ssrLoadModule('/frontend/src/screens/expenses/model.ts');
-test('income form submits exact strict server-compatible input without expense or project adoption', () => {
+test('income form submits exact strict server-compatible input without expense fields or implicit project adoption', () => {
   const input = { amount: '9999999999999999.99', currency: 'KRW', income_date: '2026-09-09', payer: ' Payer ', account_id: '1', memo: '' };
   const parsed = incomeSchema.parse(input), canonical = incomeInput(parsed);
   assert.equal(canonical.amount, input.amount); assert.equal(canonical.kind, 'income'); assert.equal(canonical.counterparty, 'Payer');
-  for (const patch of [{ project_id: '1' }, { receipt_tokens: [] }, { amount: '1.001' }, { income_date: '2026-02-30' }, { currency: 'USD' }]) assert.equal(incomeSchema.safeParse({ ...input, ...patch }).success, false);
+  assert.equal(canonical.project_id, undefined);
+  assert.equal(incomeInput(incomeSchema.parse({ ...input, project_id: '1' })).project_id, '1');
+  for (const patch of [{ project_id: '' }, { receipt_tokens: [] }, { amount: '1.001' }, { income_date: '2026-02-30' }, { currency: 'USD' }]) assert.equal(incomeSchema.safeParse({ ...input, ...patch }).success, false);
   assert.deepEqual(incomeAccounts({ items: [{ value: '1', label: 'A', account_type: 'revenue' }, { value: '2', label: 'B', account_type: 'expense' }] }, true), [{ id: '1', label: 'A' }]);
 });
 test('balanced totals never determine direction, derived account flow does; original totals remain', () => {
@@ -24,5 +26,9 @@ test('unknown, truncated or mismatched success cannot acknowledge a pending mone
   const schema = confirmedMoneySchema(expected);
   const result = { id: '1', status: 'confirmed', amount: '100.10', account_id: '1', memo: '', counterparty: 'Payer', expense_date: '2026-09-09', currency: 'KRW', receipts: [] };
   assert.equal(schema.safeParse(result).success, true);
+  const linked = confirmedMoneySchema({ ...expected, project_id: 'project-a' });
+  assert.equal(linked.safeParse(result).success, false);
+  assert.equal(linked.safeParse({ ...result, project_id: 'project-b' }).success, false);
+  assert.equal(linked.safeParse({ ...result, project_id: 'project-a' }).success, true);
   for (const value of [null, { id: '1', status: 'confirmed' }, { ...result, amount: '100.01' }, { ...result, account_id: '2' }]) assert.equal(schema.safeParse(value).success, false);
 });

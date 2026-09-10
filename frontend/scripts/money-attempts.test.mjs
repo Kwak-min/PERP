@@ -32,6 +32,25 @@ test('canonical income and receipt expense survive per-tab storage exactly, incl
     clearMoneyAttempt(scope); assert.equal(loadMoneyAttempt(scope), null);
   }
 });
+test('project linkage is retained while v1 omitted fields remain omitted in persisted replay bodies', () => {
+  for (const original of [income, expense]) {
+    assert.equal(Object.hasOwn(original.body, 'project_id'), false);
+    saveMoneyAttempt(scope, original);
+    const oldRaw = Object.values(storage)[0];
+    assert.equal(Object.hasOwn(loadMoneyAttempt(scope).body, 'project_id'), false);
+    assert.equal(JSON.stringify(loadMoneyAttempt(scope)), oldRaw);
+    clearMoneyAttempt(scope);
+    for (const projectId of ['project-a', null]) {
+      const schema = original.kind === 'income' ? incomeSchema : expenseSchema;
+      const attempt = { ...original, body: schema.parse({ ...original.body, ...(original.kind === 'expense' ? { no_receipt_reason: original.body.no_receipt_reason ?? '' } : {}), project_id: projectId }) };
+      saveMoneyAttempt(scope, attempt);
+      assert.equal(loadMoneyAttempt(scope).body.project_id, projectId);
+      assert.equal(JSON.stringify(loadMoneyAttempt(scope)), Object.values(storage)[0]);
+      assert.throws(() => saveMoneyAttempt(scope, { ...attempt, body: { ...attempt.body, project_id: 'project-b' } }));
+      clearMoneyAttempt(scope);
+    }
+  }
+});
 test('account, source and space are independent boundaries; no auth token or email is used as identity', () => {
   saveMoneyAttempt(scope, income);
   for (const changed of [{ userId: 'account-2' }, { orgId: 'space-2' }, { source: 'pg' }]) assert.equal(loadMoneyAttempt({ ...scope, ...changed }), null);

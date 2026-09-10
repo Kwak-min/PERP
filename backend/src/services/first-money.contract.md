@@ -14,7 +14,7 @@
 
 - POST `/finance/incomes`, `/pg/finance/incomes`; `Idempotency-Key` 필수(기존 재무 키 규칙).
 - 본문: `{amount:string,currency:'KRW',income_date:'YYYY-MM-DD',payer:string,account_id:string,memo:string}`. currency 기본값 KRW, memo 기본값 빈 문자열. payer는 trim 후 1~200자, memo 최대 4000자, account_id 1~100자다. 금액은 양수 소수 2자리 이내이며 숫자 JSON은 거부한다. 날짜는 실제 달력 날짜이며 0000년은 거부한다.
-- 알 수 없는 필드, 지출·증빙·예산·프로젝트 필드는 현재 거부한다. 프로젝트 연계 후속 작업은 입력 스키마와 정규화 payload를 함께 확장해야 한다.
+- 알 수 없는 필드, 지출·증빙·예산 필드는 거부한다. 프로젝트 재무 통합 후 optional `project_id:string|null`을 명시 입력할 수 있다. 같은 회사의 현재 프로젝트 권한을 write transaction 및 keyed replay 전에 확인하고, 예산 없이 새 수입 전표에만 귀속한다. 생략/null은 미연결로 유지한다.
 - 정규화 payload: `kind:'income', amount, input_currency:'KRW', entry_date:income_date, counterparty:payer, account_id, memo`.
 - 201 응답: 기존 확정 거래 writer 응답 + `kind:'income', income_date, payer`. `id`/`amount`는 문자열, `status:'confirmed'`. 호환 필드 `expense_date`는 같은 거래 날짜다.
 - replay 작업명 `income.create`. SQLite tenant/org/actor, PG company/actor로 요청 키가 격리되며 다른 본문 재사용은 409다. 동일 트랜잭션에서 기존 원장 writer·감사·재생을 완료한다. 현재 소속/메뉴/모듈/동작 권한 검사는 재생보다 먼저 수행한다.

@@ -12,6 +12,7 @@ export const expenseSchema = z.object({
   merchant: z.string().trim().min(1).max(200),
   account_id: z.string().min(1).max(100),
   budget_id: z.string().min(1).max(100).nullable().optional(),
+  project_id: z.string().min(1).max(100).nullable().optional(),
   memo: z.string().max(4000).default(''),
   receipt_tokens: receiptTokensSchema.default([]),
   no_receipt_reason: z.string().trim().min(1).max(1000).nullable().optional(),
@@ -24,6 +25,7 @@ export function expenseInput(body) {
     counterparty: value.merchant, occurred_at: value.expense_time ? new Date(`${value.expense_date}T${value.expense_time}${value.expense_time.length === 5 ? ':00' : ''}+09:00`).toISOString() : null,
     input_currency: value.currency, no_receipt_reason: value.no_receipt_reason ?? null,
     account_id: value.account_id, budget_id: value.budget_id ?? null,
+    ...(value.project_id ? { project_id: value.project_id } : {}),
     memo: value.memo, receipt_tokens: value.receipt_tokens,
   };
 }

@@ -1,3 +1,4 @@
+import * as projectMoney from '../controllers/projectMoney.controller.js';
 import { Router } from "express";
 import { expenseImportsRouter } from './expenseImports.routes.js';
 
@@ -30,6 +31,9 @@ import { personalCloudRouter } from './personal-cloud.routes.js';
 import { knowledgeWikiPublicationRouter } from './knowledge-wiki-publication.routes.js';
 
 export const pgRouter = Router();
+pgRouter.get('/projects/:id/money', asyncRoute(pgRoute(projectMoney.pgSummary, 'project.read', 'projects')));
+pgRouter.post('/projects/:id/money/budgets', asyncRoute(pgRoute(projectMoney.pgCreateBudget, 'project.write', 'projects')));
+pgRouter.post('/projects/:id/money/budgets/:budgetId/associate', asyncRoute(pgRoute(projectMoney.pgAssociateBudget, 'project.write', 'projects')));
 pgRouter.use('/finance/transactions/imports', expenseImportsRouter('perp_db'));
 pgRouter.get('/analytics/kpis', asyncRoute(pgRoute(analytics.kpis, 'analytics.read', 'analytics')));
 pgRouter.get('/analytics/reports/:reportKey', asyncRoute(pgRoute(analytics.report, 'analytics.read', 'analytics')));

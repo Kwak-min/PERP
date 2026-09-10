@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { z } from 'zod';
+import { Link } from 'react-router-dom';
 import { apiRequest, userMessageOf, type ApiSession } from '../../services/api';
 import { isPgWorkspace } from '../../services/workspace';
 import { financePath, incomeAccounts, incomeSchema, confirmedMoneySchema, type Account } from '../../screens/expenses/model';
 import { Button } from '../ui/Button';
 import { saveMoneyAttempt, clearMoneyAttempt, knownMoneyRollback, type MoneyAttempt, type MoneyAttemptScope } from '../../services/money-attempts';
 
-type Props = Readonly<{ session: ApiSession; attemptScope: MoneyAttemptScope; initialAttempt: Extract<MoneyAttempt, { kind: 'income' }> | null; onSaved: (id: string) => void; onClose: () => void; onLockChange?: (locked: boolean) => void }>;
-export function IncomeForm({ session, attemptScope, initialAttempt, onSaved, onClose, onLockChange }: Props) {
+type Props = Readonly<{ session: ApiSession; attemptScope: MoneyAttemptScope; initialAttempt: Extract<MoneyAttempt, { kind: 'income' }> | null; onSaved: (id: string) => void; onClose: () => void; onLockChange?: (locked: boolean) => void; project?: { id: string; name: string } }>;
+export function IncomeForm({ session, attemptScope, initialAttempt, onSaved, onClose, onLockChange, project }: Props) {
+  const linkedProjectId = initialAttempt ? initialAttempt.body.project_id : project?.id;
   const [values, setValues] = useState({ amount: initialAttempt?.body.amount ?? '', income_date: initialAttempt?.body.income_date ?? '', payer: initialAttempt?.body.payer ?? '', account_id: initialAttempt?.body.account_id ?? '', memo: initialAttempt?.body.memo ?? '' });
   const [accounts, setAccounts] = useState<Account[]>([]), [optionsState, setOptionsState] = useState<'loading' | 'ready' | 'failed'>('loading');
   const [revision, setRevision] = useState(0), [error, setError] = useState<string | null>(null);
@@ -27,7 +29,7 @@ export function IncomeForm({ session, attemptScope, initialAttempt, onSaved, onC
   async function submit(event: React.FormEvent) {
     event.preventDefault(); if (saving) return; setError(null);
     if (!pending.current) {
-      const parsed = incomeSchema.safeParse({ ...values, currency: 'KRW' });
+      const parsed = incomeSchema.safeParse({ ...values, currency: 'KRW', ...(linkedProjectId ? { project_id: linkedProjectId } : {}) });
       if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? '입력값을 확인하세요.'); return; }
       if (!confirmed) { setError('확정 후 금액과 내용을 변경할 수 없음을 확인해 주세요.'); return; }
       const attempt = { kind: 'income' as const, key: crypto.randomUUID(), body: parsed.data };
@@ -51,6 +53,7 @@ export function IncomeForm({ session, attemptScope, initialAttempt, onSaved, onC
   }
   return <section className="expense-panel" data-income-form data-money-state={saving ? 'saving' : uncertain ? 'uncertain' : 'editing'} aria-label="수입 입력">
     <header><div><h2>수입 입력</h2><p>받은 돈을 KRW 확정 장부에 기록합니다. 은행 잔액을 조회하는 기능은 아닙니다.</p></div><Button tone="ghost" disabled={locked} onClick={onClose}>입력 닫기</Button></header>
+    {(linkedProjectId || initialAttempt) && <p data-money-project={linkedProjectId ?? ''}>{linkedProjectId ? <>연결 프로젝트: <Link to={`/projects/${encodeURIComponent(linkedProjectId)}`}>{project?.id === linkedProjectId ? project.name : '보관된 프로젝트 보기'}</Link> · 예산과 별도로 이 프로젝트의 확정 수입에 기록합니다.</> : '보관된 요청: 프로젝트 미연결'}</p>}
     <form onSubmit={event => void submit(event)} noValidate>
       <fieldset disabled={locked}><legend>들어온 돈</legend><div className="expense-fields">
         <label>금액 (KRW)<input name="amount" inputMode="decimal" value={values.amount} onChange={e => change('amount', e.target.value)} required placeholder="0.00" /></label>

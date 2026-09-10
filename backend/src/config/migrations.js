@@ -1,3 +1,4 @@
+import { migrateProjectMoney } from './project-money-migration.js';
 import { migrateReceipts } from './receipt-migration.js';
 import { migrateExpenses } from './expense-migration.js';
 import { migrateApprovalWorkflow, migrateApprovalSnapshotBoundary } from './approval-migration.js';
@@ -260,6 +261,8 @@ MIGRATIONS.push({
 MIGRATIONS.push({ version: 12, up(conn) { conn.exec(knowledgeDDL('sqlite')); } });
 MIGRATIONS.push({ version: 13, up: migrateExpenseImports });
 MIGRATIONS.push({ version: 14, up(conn) { conn.exec(knowledgeInvalidationDDL('sqlite')); } });
+
+MIGRATIONS.push({ version: 21, up: migrateProjectMoney });
 
 export function applyMigrations(conn) {
   conn.exec(`

@@ -34,10 +34,11 @@ export const incomeSchema = z.object({
   currency: z.literal('KRW'), income_date: z.string().date('실제 받은 날을 입력하세요.').refine(value => !value.startsWith('0000'), '실제 받은 날을 입력하세요.'),
   payer: z.string().trim().min(1, '보낸 사람이나 받은 곳을 입력하세요.').max(200),
   account_id: z.string().min(1, '수입 분류를 선택하세요.'), memo: z.string().max(4000),
+  project_id: z.string().min(1).max(100).nullable().optional(),
 }).strict();
-export function confirmedMoneySchema(expected: { amount: string; account_id: string; memo: string; counterparty: string; date: string }) {
+export function confirmedMoneySchema(expected: { amount: string; account_id: string; memo: string; counterparty: string; date: string; project_id?: string | null | undefined }) {
   const [whole, fraction = ''] = expected.amount.split('.');
-  return z.object({ id: z.string().min(1), status: z.literal('confirmed'), amount: z.literal(`${whole}.${fraction.padEnd(2, '0')}`),
+  return z.object({ ...(expected.project_id ? { project_id: z.literal(expected.project_id) } : {}), id: z.string().min(1), status: z.literal('confirmed'), amount: z.literal(`${whole}.${fraction.padEnd(2, '0')}`),
     currency: z.literal('KRW'), account_id: z.literal(expected.account_id), memo: z.literal(expected.memo),
     counterparty: z.literal(expected.counterparty), expense_date: z.literal(expected.date), receipts: z.array(receiptSchema) });
 }
@@ -50,6 +51,7 @@ export const expenseSchema = z.object({
   amount: z.string().regex(/^(?:0|[1-9]\d{0,15})(?:\.\d{1,2})?$/, '금액은 소수점 두 자리 이내의 양수로 입력하세요.').refine(value => /[1-9]/.test(value), '금액은 0보다 커야 합니다.'),
   currency: z.literal('KRW'), expense_date: z.string().date('실제 사용일을 입력하세요.').refine(value => !value.startsWith('0000'), '실제 사용일을 입력하세요.'),
   expense_time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/, '시각을 확인하세요.').optional(),
+  project_id: z.string().min(1).max(100).nullable().optional(),
   merchant: z.string().trim().min(1, '사용처를 입력하세요.').max(200), account_id: z.string().min(1, '지출 계정을 선택하세요.'), budget_id: z.string().nullable(),
   memo: z.string().max(4000), receipt_tokens: z.array(z.string()).max(5), no_receipt_reason: z.string().trim().max(1000).transform(value => value || null),
 }).refine(value => value.receipt_tokens.length > 0 || Boolean(value.no_receipt_reason), '영수증 또는 미첨부 사유가 필요합니다.');

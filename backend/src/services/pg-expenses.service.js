@@ -1,3 +1,4 @@
+import { pgMoneyLinks } from './project-money-links.service.js';
 import { z } from 'zod';
 import { pgTransaction } from '../config/pg.js';
 import { pgIdentity } from '../middleware/pgAccess.js';
@@ -16,14 +17,17 @@ export function withPgFinanceTransaction(req, run) {
 }
 
 export function pgExpenseMutation(req, operation, payload, run) {
-  return withPgFinanceTransaction(req, (client, principal) =>
-    replayPgMutation(client, req, { operation, payload }, () => run(client, principal)));
+  return withPgFinanceTransaction(req, async (client, principal) => {
+    if (['expense.create', 'income.create', 'transaction.create'].includes(operation)) await pgMoneyLinks(client, principal, payload, principal);
+    return replayPgMutation(client, req, { operation, payload }, () => run(client, principal));
+  });
 }
 
 // HTTP 호환 writer와 strict expense/후속 CSV가 공유한다. BEGIN/COMMIT은 하지 않는다.
 // caller는 withPgFinanceTransaction으로 회사 lock을 replay/job보다 먼저 확보해야 한다.
 export async function postPgTransaction(client, req, payload) {
   const { companyId, userId } = pgIdentity(req);
+  const { projectId } = await pgMoneyLinks(client, { companyId, userId }, payload);
   const accountId = idSchema.parse(payload.account_id);
   const { rows: [account] } = await client.query(`SELECT id,account_type FROM accounting.accounts
     WHERE id=$1 AND company_id=$2 AND is_active=true AND account_type IN ('revenue','expense') FOR SHARE`, [accountId, companyId]);
@@ -37,9 +41,9 @@ export async function postPgTransaction(client, req, payload) {
   const { rows: [cash] } = await client.query(`SELECT id FROM accounting.accounts WHERE company_id=$1 AND account_type='asset' AND is_active=true ORDER BY code LIMIT 1 FOR SHARE`, [companyId]);
   if (!cash) throw new ApiError('VALIDATION_ERROR', '현금(자산) 계정이 없어 거래를 만들 수 없습니다.');
   const { rows: [entry] } = await client.query(`INSERT INTO accounting.journal_entries
-    (company_id,entry_date,memo,created_by,posted,counterparty,occurred_at,input_currency,no_receipt_reason,budget_id)
-    VALUES($1,COALESCE($2::date,CURRENT_DATE),$3,$4,false,$5,$6,$7,$8,$9) RETURNING id`,
-  [companyId, payload.entry_date, payload.memo, userId, payload.counterparty ?? null, payload.occurred_at ?? null, payload.input_currency ?? null, payload.no_receipt_reason ?? null, payload.budget_id ?? null]);
+    (company_id,entry_date,memo,created_by,posted,counterparty,occurred_at,input_currency,no_receipt_reason,budget_id,project_id)
+    VALUES($1,COALESCE($2::date,CURRENT_DATE),$3,$4,false,$5,$6,$7,$8,$9,$10) RETURNING id`,
+  [companyId, payload.entry_date, payload.memo, userId, payload.counterparty ?? null, payload.occurred_at ?? null, payload.input_currency ?? null, payload.no_receipt_reason ?? null, payload.budget_id ?? null, projectId]);
   const debit = account.account_type === 'revenue' ? cash.id : account.id;
   const credit = account.account_type === 'revenue' ? account.id : cash.id;
   await client.query('INSERT INTO accounting.journal_lines(entry_id,account_id,debit,credit) VALUES($1,$2,$3,0)', [entry.id, debit, payload.amount]);
@@ -52,7 +56,7 @@ export async function postPgTransaction(client, req, payload) {
     status: 'confirmed', amount: payload.amount, currency: payload.input_currency ?? null,
     counterparty: payload.counterparty ?? null, occurred_at: payload.occurred_at ?? null,
     expense_date: payload.entry_date, no_receipt_reason: payload.no_receipt_reason ?? null,
-    account_id: accountId, budget_id: payload.budget_id ?? null, memo: payload.memo, receipts };
+    account_id: accountId, budget_id: payload.budget_id ?? null, project_id: projectId, memo: payload.memo, receipts };
   await recordEvent(client, req, 'transactions', entry.id, null, result);
   return result;
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { apiRequest, userMessageOf, type ApiSession } from '../../services/api';
 import { isPgWorkspace } from '../../services/workspace';
 import { budgetOptions, expenseAccounts, expenseSchema, financePath, confirmedMoneySchema, type Account, type UploadSlot } from '../../screens/expenses/model';
@@ -6,8 +7,9 @@ import { ReceiptUploads } from './ReceiptUploads';
 import { Button } from '../ui/Button';
 import { saveMoneyAttempt, clearMoneyAttempt, knownMoneyRollback, type MoneyAttempt, type MoneyAttemptScope } from '../../services/money-attempts';
 
-type Props = Readonly<{ session: ApiSession; attemptScope: MoneyAttemptScope; initialAttempt: Extract<MoneyAttempt, { kind: 'expense' }> | null; onSaved: (id: string) => void; onClose: () => void; onLockChange?: (locked: boolean) => void }>;
-export function ExpenseForm({ session, attemptScope, initialAttempt, onSaved, onClose, onLockChange }: Props) {
+type Props = Readonly<{ session: ApiSession; attemptScope: MoneyAttemptScope; initialAttempt: Extract<MoneyAttempt, { kind: 'expense' }> | null; onSaved: (id: string) => void; onClose: () => void; onLockChange?: (locked: boolean) => void; project?: { id: string; name: string; budgets: Account[] } }>;
+export function ExpenseForm({ session, attemptScope, initialAttempt, onSaved, onClose, project, onLockChange }: Props) {
+  const linkedProjectId = initialAttempt ? initialAttempt.body.project_id : project?.id;
   const [values, setValues] = useState({ amount: initialAttempt?.body.amount ?? '', expense_date: initialAttempt?.body.expense_date ?? '', expense_time: initialAttempt?.body.expense_time ?? '', merchant: initialAttempt?.body.merchant ?? '', account_id: initialAttempt?.body.account_id ?? '', budget_id: initialAttempt?.body.budget_id ?? '', memo: initialAttempt?.body.memo ?? '', no_receipt_reason: initialAttempt?.body.no_receipt_reason ?? '' });
   const [slots, setSlots] = useState<UploadSlot[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]), [budgets, setBudgets] = useState<Account[]>([]);
@@ -23,11 +25,12 @@ export function ExpenseForm({ session, attemptScope, initialAttempt, onSaved, on
     apiRequest(`${base}/accounts`, { session, signal: controller.signal }).then(payload => {
       const rows = expenseAccounts(payload, pg); if (!controller.signal.aborted) { setAccounts(rows); setOptionsState('ready'); }
     }).catch((caught: unknown) => { if (!controller.signal.aborted) { setError(userMessageOf(caught)); setOptionsState('failed'); } });
-    apiRequest(`${base}/budgets`, { session, signal: controller.signal }).then(payload => {
+    if (project) { setBudgets(project.budgets); setBudgetError(null); }
+    else apiRequest(`${base}/budgets`, { session, signal: controller.signal }).then(payload => {
       const rows = budgetOptions(payload, pg); if (!controller.signal.aborted) { setBudgets(rows); setBudgetError(null); }
     }).catch((caught: unknown) => { if (!controller.signal.aborted) setBudgetError(userMessageOf(caught)); });
     return () => controller.abort();
-  }, [base, pg, session, revision]);
+  }, [base, pg, session, revision, project]);
   function change(field: keyof typeof values, value: string) { setValues(current => ({ ...current, [field]: value })); setConfirmed(false); setError(null); }
   const locked = saving || uncertain;
   useEffect(() => { onLockChange?.(locked); }, [locked, onLockChange]);
@@ -36,7 +39,7 @@ export function ExpenseForm({ session, attemptScope, initialAttempt, onSaved, on
     setError(null);
     if (!pending.current) {
       if (slots.some(slot => slot.state !== 'ready')) { setError('모든 영수증 업로드를 완료하거나 실패한 파일을 제거하세요.'); return; }
-      const parsed = expenseSchema.safeParse({ ...values, expense_time: values.expense_time || undefined, budget_id: values.budget_id || null, currency: 'KRW', receipt_tokens: slots.flatMap(slot => slot.upload ? [slot.upload.token] : []) });
+      const parsed = expenseSchema.safeParse({ ...values, ...(linkedProjectId ? { project_id: linkedProjectId } : {}), expense_time: values.expense_time || undefined, budget_id: values.budget_id || null, currency: 'KRW', receipt_tokens: slots.flatMap(slot => slot.upload ? [slot.upload.token] : []) });
       if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? '입력값을 확인하세요.'); return; }
       if (!confirmed) { setError('확정 후 원금과 내용을 변경할 수 없음을 확인해 주세요.'); return; }
       const attempt = { kind: 'expense' as const, key: crypto.randomUUID(), body: parsed.data };
@@ -61,6 +64,7 @@ export function ExpenseForm({ session, attemptScope, initialAttempt, onSaved, on
   }
   return <section className="expense-panel" data-expense-form data-money-state={saving ? 'saving' : uncertain ? 'uncertain' : 'editing'} aria-label="새 지출 입력">
     <header><div><h2>새 지출 입력</h2><p>이미 사용한 비용을 KRW 확정 장부에 기록합니다.</p></div><Button tone="ghost" disabled={locked} onClick={onClose}>입력 닫기</Button></header>
+    {(linkedProjectId || initialAttempt) && <p data-money-project={linkedProjectId ?? ''}>{linkedProjectId ? <>연결 프로젝트: <Link to={`/projects/${encodeURIComponent(linkedProjectId)}`}>{project?.id === linkedProjectId ? project.name : '보관된 프로젝트 보기'}</Link> · 이 프로젝트의 확정 지출로 기록합니다.</> : '보관된 요청: 프로젝트 미연결'}</p>}
     <form onSubmit={event => void submit(event)} noValidate>
       <fieldset disabled={locked}><legend>사용 내역</legend><div className="expense-fields">
         <label>금액 (KRW)<input name="amount" inputMode="decimal" value={values.amount} onChange={e => change('amount', e.target.value)} required aria-required="true" placeholder="0.00" /></label>
@@ -68,7 +72,7 @@ export function ExpenseForm({ session, attemptScope, initialAttempt, onSaved, on
         <label>사용일<input name="expense_date" type="date" value={values.expense_date} onChange={e => change('expense_date', e.target.value)} required /></label>
         <label>사용 시각 (선택 · 서울)<input name="expense_time" type="time" step="1" value={values.expense_time} onChange={e => change('expense_time', e.target.value)} /></label>
         <label>지출 분류 (계정)<select name="account_id" value={values.account_id} onChange={e => change('account_id', e.target.value)} required><option value="">계정 선택</option>{accounts.map(account => <option key={account.id} value={account.id}>{account.label}</option>)}</select></label>
-        <label>예산 (선택)<select name="budget_id" value={values.budget_id} onChange={e => change('budget_id', e.target.value)}><option value="">선택 안 함</option>{budgets.map(budget => <option key={budget.id} value={budget.id}>{budget.label}</option>)}</select></label>
+        <label>예산 (선택)<select name="budget_id" value={values.budget_id} onChange={e => change('budget_id', e.target.value)}><option value="">선택 안 함</option>{initialAttempt && values.budget_id && !budgets.some(budget => budget.id === values.budget_id) && <option value={values.budget_id}>보관된 예산 {values.budget_id}</option>}{budgets.map(budget => <option key={budget.id} value={budget.id}>{budget.label}</option>)}</select></label>
       </div>
       {optionsState === 'loading' && <p role="status">계정을 불러오는 중...</p>}
       {optionsState === 'ready' && accounts.length === 0 && <p>현재 회사에 활성 지출 계정이 없습니다.</p>}

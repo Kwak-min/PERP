@@ -9,6 +9,7 @@ import { useBranch } from "../store/branch";
 import { useAccess } from '../hooks/useWorkspaceAccess';
 import { StateBoundary } from "../components/common/StateBoundary";
 import { Button } from "../components/ui/Button";
+import { ProjectFinancePanel } from './projects/ProjectFinancePanel';
 import { TaskDetail } from './projects/TaskDetail';
 import { ProjectTaskCreateModal } from "./projects/ProjectTaskCreateModal";
 import { ProjectAssignmentModal, type AssignmentResult, type ProjectAssignmentTarget } from './projects/ProjectAssignmentModal';
@@ -48,7 +49,11 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
   const projectView = screen.id === "PRJ-001" || screen.id === "PRJ-002";
   const [revision, setRevision] = useState(0);
   useEffect(() => {
-    const refresh = () => setRevision(value => value + 1);
+    const refresh = (event: Event) => {
+      // 파일 선택 창에서 돌아온 focus가 작성 중인 재무 폼을 없애지 않는다. 권한 변경은 계속 갱신한다.
+      if (event.type === 'focus' && document.querySelector('[data-project-money] form')) return;
+      setRevision(value => value + 1);
+    };
     window.addEventListener('focus', refresh);
     window.addEventListener('orbitflow:access-changed', refresh);
     return () => { window.removeEventListener('focus', refresh); window.removeEventListener('orbitflow:access-changed', refresh); };
@@ -127,6 +132,7 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
           </div>
           <div id={`project-tasks-${project.id}`} hidden={!open} className="project-tasks__expanded">
             <div className="project-tasks__project-meta"><span>{project.start_date?.slice(0, 10) ?? "시작 미정"} ~ {project.end_date?.slice(0, 10) ?? "종료 미정"}</span><Button size="small" tone="neutral" disabled={!can('project.write')} onClick={() => setAssignmentTarget({ mode: 'member', project })}>구성원 추가</Button><Button size="small" disabled={!can('project.write') || project.version === undefined} onClick={() => setEditingProject(project)}>프로젝트 수정</Button><Button size="small" disabled={!can("task.write")} onClick={() => setModal({ kind: "task", projectId: project.id })}>업무 만들기</Button></div>
+            {open && <ProjectFinancePanel key={`money:${project.id}:${revision}`} projectId={project.id} projectName={project.name} session={session} />}
             {open && <ProjectRoster key={`${project.id}:${revision}`} projectId={project.id} session={session} />}
             <StateBoundary status={tasks.status} error={tasks.error}>{taskList(related)}</StateBoundary>
           </div>

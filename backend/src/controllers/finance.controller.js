@@ -1,6 +1,8 @@
 import { z } from "zod";
 
-import { db } from "../config/db.js";
+import { db, transaction } from "../config/db.js";
+import { freshReceiptPrincipal, legacyReceiptParent } from '../services/legacy-receipt-files.service.js';
+import { legacyMoneyLinks, requireProjectMoneyScope } from '../services/project-money-links.service.js';
 import { resolvePrincipal } from "../middleware/auth.js";
 import { bumpVersion, getScoped, insert, listScoped, nowIso, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
@@ -149,10 +151,11 @@ export function listTransactions(req, res) {
 }
 
 export function patchTransaction(req, res) {
-  const principal = resolvePrincipal(req);
+  const result = transaction(() => {
+  const principal = freshReceiptPrincipal(resolvePrincipal(req), 'transaction');
   principal.require("transaction.write");
   const payload = txPatchSchema.parse(req.body);
-  const tx = getScoped(TX, principal, req.params.transactionId, "transaction");
+  const tx = legacyReceiptParent(principal, { kind: 'transaction', parentId: req.params.transactionId, write: true });
   assertPeriodOpen(principal, tx.occurred_on);
   if (tx.status === 'confirmed') throw new ApiError('CONFLICT', '확정된 금융 기록은 덮어쓸 수 없습니다.');
 
@@ -165,6 +168,8 @@ export function patchTransaction(req, res) {
   for (const field of ["amount_minor", "memo", "account_id", "budget_id"]) {
     if (payload[field] !== undefined) changes[field] = payload[field];
   }
+  const links = legacyMoneyLinks(principal, { ...tx, ...changes });
+  if (payload.budget_id !== undefined) changes.project_id = links.projectId;
   const updated = bumpVersion(TX, tx, changes, principal.userId);
 
   audit.record({
@@ -178,13 +183,18 @@ export function patchTransaction(req, res) {
     requestId: req.requestId,
   });
 
-  res.json(txView(updated));
+  return txView(updated);
+  })();
+  res.json(result);
 }
 
 export function confirmTransaction(req, res) {
-  const principal = resolvePrincipal(req);
+  const result = transaction(() => {
+  const principal = freshReceiptPrincipal(resolvePrincipal(req), 'transaction');
   principal.require("transaction.confirm");
   const tx = getScoped(TX, principal, req.params.transactionId, "transaction");
+  if (principal.scope !== 'all' && tx.created_by !== principal.userId) throw notFound('transaction');
+  legacyMoneyLinks(principal, tx);
   assertPeriodOpen(principal, tx.occurred_on);
   if (tx.status === "confirmed") throw new ApiError("CONFLICT", "transaction already confirmed");
 
@@ -202,13 +212,18 @@ export function confirmTransaction(req, res) {
     requestId: req.requestId,
   });
 
-  res.json({ ...txView(updated), budget_warning: budgetWarning(principal, updated) });
+  return { ...txView(updated), budget_warning: budgetWarning(principal, updated) };
+  })();
+  res.json(result);
 }
 
 export function createBudget(req, res) {
-  const principal = resolvePrincipal(req);
+  const result = transaction(() => {
+  const principal = freshReceiptPrincipal(resolvePrincipal(req), 'transaction');
   principal.require("budget.write");
   const payload = budgetSchema.parse(req.body);
+  if (payload.project_id) requireProjectMoneyScope(principal, getScoped('project', principal, payload.project_id));
+  if (payload.account_id) getScoped('account', principal, payload.account_id);
   const budget = insert("budget", {
     tenant_id: principal.tenantId,
     org_id: principal.orgId,
@@ -232,12 +247,14 @@ export function createBudget(req, res) {
     requestId: req.requestId,
   });
 
-  res.status(201).json({
+  return {
     id: budget.id,
     name: budget.name,
     amount_minor: budget.amount_minor,
     revision: budget.revision,
-  });
+  };
+  })();
+  res.status(201).json(result);
 }
 
 export function listBudgets(req, res) {

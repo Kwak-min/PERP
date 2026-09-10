@@ -1,3 +1,4 @@
+import { legacyMoneyLinks } from './project-money-links.service.js';
 import { db } from '../config/db.js';
 import { resolvePrincipal } from '../middleware/auth.js';
 import { getScoped, insert } from '../models/base.js';
@@ -36,6 +37,7 @@ export function withLegacyFinanceTransaction(req, run) {
 }
 
 export function replayLegacyMutation(req, principal, { operation, payload, keyRequired = true }, run) {
+  if (['expense.create', 'income.create', 'transaction.create'].includes(operation)) legacyMoneyLinks(principal, payload);
   const header = req.get('Idempotency-Key');
   if (!keyRequired && header === undefined) return run();
   const key = requestKeySchema.parse(header);
@@ -63,6 +65,7 @@ export function writeLegacyTransaction(principal, payload, requestId) {
     if (!account.active || account.kind !== payload.kind) throw new ApiError('VALIDATION_ERROR', '현재 회사의 활성 거래 계정을 선택하세요.');
   }
   for (const [field, table] of [['project_id', 'project'], ['counterparty_id', 'counterparty']]) if (payload[field]) getScoped(table, principal, payload[field]);
+  const { projectId } = legacyMoneyLinks(principal, payload);
   const amountMinor = strict ? legacyMinor(payload.amount) : payload.amount_minor;
   if (payload.budget_id) {
     const budget = getScoped('budget', principal, payload.budget_id);
@@ -79,7 +82,7 @@ export function writeLegacyTransaction(principal, payload, requestId) {
   const tx = insert('transaction_record', {
     tenant_id: principal.tenantId, org_id: principal.orgId, kind: payload.kind,
     amount_minor: amountMinor, occurred_on: occurredOn, account_id: payload.account_id ?? null,
-    counterparty_id: payload.counterparty_id ?? null, project_id: payload.project_id ?? null, budget_id: payload.budget_id ?? null,
+    counterparty_id: payload.counterparty_id ?? null, project_id: projectId, budget_id: payload.budget_id ?? null,
     memo: payload.memo, dedupe_key: dedupe, created_by: principal.userId, status: strict ? 'confirmed' : 'draft',
     counterparty: payload.counterparty ?? null, occurred_at: payload.occurred_at ?? null,
     input_currency: payload.input_currency ?? null, no_receipt_reason: payload.no_receipt_reason ?? null,

@@ -14,7 +14,7 @@ export async function installFinanceFixture() {
   const addition = new URL('perp_additions_v8_daily_finance.sql', schema);
   await db.exec(await readFile(addition, 'utf8'));
   await db.exec(await readFile(addition, 'utf8')); // additive migration must be rerunnable
-  for (const name of ['perp_additions_v9_daily_corrections.sql', 'perp_additions_v10_org_audit.sql', 'perp_additions_v11_deadline_roles.sql', 'perp_additions_v12_deadline_expenses.sql', 'perp_additions_v12_deadline_expense_writer.sql']) {
+  for (const name of ['perp_additions_v9_daily_corrections.sql', 'perp_additions_v10_org_audit.sql', 'perp_additions_v11_deadline_roles.sql', 'perp_additions_v12_deadline_expenses.sql', 'perp_additions_v12_deadline_expense_writer.sql', 'perp_additions_v21_project_money.sql']) {
     await db.exec(await readFile(new URL(name, schema), 'utf8'));
   }
   await db.exec(`INSERT INTO org.companies (name) VALUES ('Finance fixture'), ('Other fixture');

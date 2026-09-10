@@ -44,7 +44,8 @@ export async function firstMoneyScenarios(native = null) {
     assert.deepEqual(await request(actor, '/finance/incomes', payload, 201, key), saved);
     await request(actor, '/finance/incomes', { ...payload, amount: '100.02' }, 409, key);
     assert.deepEqual(await snapshot(), posted);
-    for (const patch of [{ amount: 1 }, { amount: '1.001' }, { amount: '0' }, { amount: '-1' }, { currency: 'USD' }, { income_date: '2026-02-30' }, { income_date: '0000-01-01' }, { payer: ' ' }, { account_id: expenseId }, { project_id: 'unowned-project' }, { receipt_tokens: [] }, { kind: 'expense' }]) await request(actor, '/finance/incomes', { ...payload, ...patch }, 400, randomUUID());
+    for (const patch of [{ amount: 1 }, { amount: '1.001' }, { amount: '0' }, { amount: '-1' }, { currency: 'USD' }, { income_date: '2026-02-30' }, { income_date: '0000-01-01' }, { payer: ' ' }, { account_id: expenseId }, { project_id: '' }, { receipt_tokens: [] }, { kind: 'expense' }]) await request(actor, '/finance/incomes', { ...payload, ...patch }, 400, randomUUID());
+    await request(actor, '/finance/incomes', { ...payload, project_id: 'unowned-project' }, pg ? 400 : 404, randomUUID());
     await request(actor, '/finance/incomes', payload, 400);
     await request(foreign, '/finance/incomes', payload, pg ? 400 : 404, randomUUID());
     assert.deepEqual(await snapshot(), posted);

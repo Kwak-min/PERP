@@ -204,7 +204,7 @@ export async function createTransaction(req, res) {
   }
   const body = req.body ?? {};
   // Keep old value normalization, but never silently discard strict expense fields.
-  if (Object.keys(body).some(field => !['account_id', 'amount', 'entry_date', 'memo'].includes(field))) {
+  if (Object.keys(body).some(field => !['account_id', 'amount', 'entry_date', 'memo', 'project_id', 'budget_id'].includes(field))) {
     throw new ApiError('VALIDATION_ERROR', 'Use /pg/finance/expenses for expense fields.');
   }
   const accountId = body.account_id;
@@ -213,7 +213,9 @@ export async function createTransaction(req, res) {
   if (entryDate) z.string().date().parse(entryDate);
   const memo = String(body.memo ?? "").trim() || null;
   if (!accountId) throw new ApiError("VALIDATION_ERROR", "계정을 선택하세요");
-  const payload = { account_id: String(accountId), amount, entry_date: entryDate, memo };
+  const payload = { account_id: String(accountId), amount, entry_date: entryDate, memo,
+    ...(body.project_id != null ? { project_id: z.string().regex(/^[1-9]\d*$/).parse(body.project_id) } : {}),
+    ...(body.budget_id != null ? { budget_id: z.string().regex(/^[1-9]\d*$/).parse(body.budget_id) } : {}) };
   const result = await pgExpenseMutation(req, 'transaction.create', payload, client => postPgTransaction(client, req, payload));
   res.status(201).json(result);
 }
