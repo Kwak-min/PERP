@@ -7,13 +7,14 @@ import { isPgWorkspace } from "../services/workspace";
 import { useSession } from "../store/session";
 import { useBranch } from "../store/branch";
 import { useAccess } from '../hooks/useWorkspaceAccess';
+import { useModalFocus } from '../hooks/useModalFocus';
 import { StateBoundary } from "../components/common/StateBoundary";
 import { Button } from "../components/ui/Button";
 import { ProjectFinancePanel } from './projects/ProjectFinancePanel';
 import { TaskDetail } from './projects/TaskDetail';
 import { ProjectTaskCreateModal } from "./projects/ProjectTaskCreateModal";
 import { ProjectAssignmentModal, type AssignmentResult, type ProjectAssignmentTarget } from './projects/ProjectAssignmentModal';
-import { parseProjects, parseTasks, projectProgress, statusLabel, tasksForProject, taskStatuses, type Project, type Task } from "./projects/model";
+import { matchesProjectSearch, matchesTaskSearch, parseProjects, parseTasks, projectProgress, statusLabel, tasksForProject, taskStatuses, type Project, type Task } from "./projects/model";
 import "./projects/project-tasks.css";
 
 const permissionsSchema = z.object({ permissions: z.array(z.string()) });
@@ -72,6 +73,8 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
   const [modal, setModal] = useState<{ kind: "project" | "task"; projectId?: string } | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [finishingProject, setFinishingProject] = useState<Project | null>(null);
+  const [finishError, setFinishError] = useState<string | null>(null);
   const [assignmentTarget, setAssignmentTarget] = useState<ProjectAssignmentTarget | null>(null);
   const parseProjectRows = useMemo(() => (payload: unknown) => parseProjects(payload, pg), [pg]);
   const parseTaskRows = useMemo(() => (payload: unknown) => parseTasks(taskId && !pg ? { items: [payload] } : payload, pg), [pg, taskId]);
@@ -84,7 +87,7 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
       if (!controller.signal.aborted) setPermissions(grants);
     }).catch((caught: unknown) => { if (!controller.signal.aborted) setNotice(`작업 권한을 확인하지 못했습니다: ${userMessageOf(caught)}`); });
     return () => controller.abort();
-  }, [pg, session]);
+  }, [pg, session, revision]);
   const can = (permission: string) => permissions.includes(permission) || (!pg && permissions.includes("*"));
   const administrator = useAccess()?.is_company_administrator === true;
   const refresh = () => setRevision(value => value + 1);
@@ -99,8 +102,17 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
     finally { setSaving(null); }
   }
   function toggle(id: string): void { setExpanded(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
-  const filteredProjects = projects.items.filter(project => (!projectId || project.id === projectId) && project.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
-  const filteredTasks = tasks.items.filter(task => task.title.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  async function finishProject(): Promise<void> {
+    if (!finishingProject || saving) return;
+    setSaving(finishingProject.id); setFinishError(null);
+    try {
+      await apiRequest(`${pg ? '/pg' : ''}/projects/${encodeURIComponent(finishingProject.id)}`, { session, method: 'PATCH', body: { version: finishingProject.version, status: 'done' } });
+      setFinishingProject(null); refresh(); setNotice('프로젝트를 완료했습니다. 업무와 재무 기록은 그대로 유지됩니다.');
+    } catch (caught: unknown) { setFinishError(userMessageOf(caught)); }
+    finally { setSaving(null); }
+  }
+  const filteredProjects = projects.items.filter(project => (!projectId || project.id === projectId) && matchesProjectSearch(project, query));
+  const filteredTasks = tasks.items.filter(task => matchesTaskSearch(task, query, projects.items.find(project => project.id === task.project_id)));
   const detail = tasks.items[0];
   function taskList(items: readonly Task[]): React.ReactNode {
     return items.length ? <ul className="project-tasks__list">{items.map(task => <li key={task.id} data-task-id={task.id}>
@@ -127,11 +139,13 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
         const related = tasksForProject(tasks.items, project.id), progress = projectProgress(related), open = expanded.has(project.id);
         return <section key={project.id} className="project-tasks__project" data-project-id={project.id}>
           <div className="project-tasks__project-row"><button className="project-tasks__expand" aria-expanded={open} aria-controls={`project-tasks-${project.id}`} onClick={() => toggle(project.id)}><span aria-hidden="true">{open ? "−" : "+"}</span><strong>{project.name}</strong></button>
+            <span data-project-status={project.status}>{project.status === 'done' ? '완료' : project.status === 'active' ? '진행 중' : project.status}</span>
             {tasks.status === "ready" ? <div className="project-tasks__progress"><progress aria-label={`${project.name} 진행률`} max={100} value={progress.percent} /><span>{progress.total ? `${progress.completed}/${progress.total} 완료 · ${progress.percent}%` : "업무 없음 · 0/0"}</span></div>
               : <span role="status">{tasks.status === "loading" ? "진행률 불러오는 중" : tasks.status === "forbidden" ? "업무 조회 권한 없음" : "진행률 조회 실패"}</span>}
           </div>
           <div id={`project-tasks-${project.id}`} hidden={!open} className="project-tasks__expanded">
             <div className="project-tasks__project-meta"><span>{project.start_date?.slice(0, 10) ?? "시작 미정"} ~ {project.end_date?.slice(0, 10) ?? "종료 미정"}</span><Button size="small" tone="neutral" disabled={!can('project.write')} onClick={() => setAssignmentTarget({ mode: 'member', project })}>구성원 추가</Button><Button size="small" disabled={!can('project.write') || project.version === undefined} onClick={() => setEditingProject(project)}>프로젝트 수정</Button><Button size="small" disabled={!can("task.write")} onClick={() => setModal({ kind: "task", projectId: project.id })}>업무 만들기</Button></div>
+            <Button size="small" tone="neutral" disabled={!can('project.write') || project.version === undefined || project.status === 'done' || saving !== null} onClick={() => { setFinishError(null); setFinishingProject(project); }}>프로젝트 완료</Button>
             {open && <ProjectFinancePanel key={`money:${project.id}:${revision}`} projectId={project.id} projectName={project.name} session={session} />}
             {open && <ProjectRoster key={`${project.id}:${revision}`} projectId={project.id} session={session} />}
             <StateBoundary status={tasks.status} error={tasks.error}>{taskList(related)}</StateBoundary>
@@ -143,6 +157,7 @@ function ProjectTaskWorkspace({ screen, session }: Readonly<{ screen: ScreenDefi
       : <p role="status">업무를 찾을 수 없습니다.</p> : taskList(filteredTasks)}</StateBoundary>}
     {assignmentTarget && <ProjectAssignmentModal target={assignmentTarget} session={session} administrator={administrator} onClose={() => setAssignmentTarget(null)} onSaved={result => { refresh(); setMemberResult(result); setNotice(result === 'existing' ? '이미 소속된 구성원입니다. 현재 명단을 다시 확인했습니다.' : result === 'created' ? '프로젝트 구성원을 추가했습니다.' : '업무 배정을 저장했습니다.'); }} />}
     {editingProject && <ProjectTaskCreateModal kind="project" projects={projects.items} initialProject={editingProject} departmentId={null} session={session} onClose={() => setEditingProject(null)} onSaved={() => { setEditingProject(null); refresh(); setNotice('프로젝트를 저장했습니다.'); }} />}
+    {finishingProject && <ProjectFinishDialog project={finishingProject} saving={saving !== null} error={finishError} onClose={() => setFinishingProject(null)} onConfirm={() => void finishProject()} />}
     {modal && <ProjectTaskCreateModal {...modal} canAddProjectMember={can('project.write')} projects={projects.items} departmentId={pg ? null : branch} session={session} onClose={() => setModal(null)} onSaved={() => { const id = modal.projectId; if (id) setExpanded(current => new Set([...current, id])); setModal(null); refresh(); setNotice("서버에 저장했습니다."); }} />}
   </div>;
 }
@@ -151,11 +166,25 @@ const rosterSchema = z.object({ items: z.array(z.object({ value: z.string(), lab
 const parseRoster = (payload: unknown) => rosterSchema.parse(payload).items;
 function ProjectRoster({ projectId, session }: Readonly<{ projectId: string; session: ApiSession }>) {
   const [revision, setRevision] = useState(0);
+  const [query, setQuery] = useState('');
   const roster = useRows(`${isPgWorkspace(session.orgId) ? '/pg' : ''}/projects/${encodeURIComponent(projectId)}/members`, session, revision, parseRoster);
+  const filtered = roster.items.filter(member => member.label.normalize('NFKC').toLocaleLowerCase().includes(query.trim().normalize('NFKC').toLocaleLowerCase()));
   return <section data-project-roster aria-label="프로젝트 구성원">
     <h3>프로젝트 구성원{roster.status === 'ready' ? ` (${roster.items.length})` : ''}</h3>
-    {roster.status === 'ready' ? roster.items.length ? <ul>{roster.items.map(member => <li key={member.value} data-member-id={member.value}>{member.label}</li>)}</ul> : <p role="status">등록된 구성원이 없습니다.</p>
+    <label>프로젝트 구성원 검색<input type="search" value={query} onChange={event => setQuery(event.target.value)} /></label>
+    {roster.status === 'ready' ? filtered.length ? <ul>{filtered.map(member => <li key={member.value} data-member-id={member.value}>{member.label}</li>)}</ul> : <p role="status">{query ? '검색 결과가 없습니다.' : '등록된 구성원이 없습니다.'}</p>
       : roster.status === 'loading' ? <p role="status">구성원을 불러오는 중입니다.</p> : <p role="alert">구성원 명단: {userMessageOf(roster.error)}</p>}
     <Button type="button" size="small" tone="neutral" disabled={roster.status === 'loading'} onClick={() => setRevision(value => value + 1)}>명단 다시 불러오기</Button>
   </section>;
+}
+
+function ProjectFinishDialog({ project, saving, error, onClose, onConfirm }: Readonly<{ project: Project; saving: boolean; error: string | null; onClose: () => void; onConfirm: () => void }>) {
+  const close = () => { if (!saving) onClose(); };
+  const ref = useModalFocus<HTMLDivElement>(close, true);
+  return <div className="modal-scrim" role="presentation" onMouseDown={close}><div ref={ref} className="modal quick-create-modal" role="dialog" aria-modal="true" aria-labelledby="project-finish-title" onMouseDown={event => event.stopPropagation()}>
+    <header className="modal__head"><h2 id="project-finish-title">프로젝트 완료 확인</h2></header>
+    <p>{project.name} 프로젝트를 완료 처리합니다. 미완료 업무를 포함한 모든 업무, 구성원 및 재무 기록은 그대로 유지됩니다.</p>
+    {error && <p role="alert" className="field-error">{error} 창을 닫고 프로젝트를 새로고침한 뒤 현재 상태를 확인하세요.</p>}
+    <footer className="modal__foot"><Button tone="neutral" disabled={saving} onClick={close}>닫기</Button><Button disabled={saving || Boolean(error)} onClick={onConfirm}>{saving ? '저장 중' : '완료 처리'}</Button></footer>
+  </div></div>;
 }

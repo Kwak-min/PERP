@@ -7,6 +7,7 @@ import { assertPgProjectAssignee, notifyPgTaskAssignment } from '../services/pro
 
 const idSchema = z.string().regex(/^[1-9]\d*$/);
 const projectInput = z.object({ version: correctionVersion, name: z.string().trim().min(1).max(200).optional(),
+  status: z.literal('done').optional(),
   description: z.string().nullable().optional(), starts_on: correctionDate.optional(), ends_on: correctionDate.optional() }).strict();
 const taskInput = z.object({ version: correctionVersion, title: z.string().trim().min(1).max(300).optional(),
   assignee_id: idSchema.nullable().optional(), due_on: correctionDate.optional(),

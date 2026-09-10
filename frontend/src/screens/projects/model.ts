@@ -22,6 +22,17 @@ export function tasksForProject(tasks: readonly Task[], projectId: string): Task
   return tasks.filter(task => task.project_id === projectId);
 }
 
+function matchesSearch(query: string, values: readonly (string | null | undefined)[]): boolean {
+  const normalized = query.trim().normalize('NFKC').toLocaleLowerCase();
+  return values.some(value => (value ?? '').normalize('NFKC').toLocaleLowerCase().includes(normalized));
+}
+export function matchesProjectSearch(project: Project, query: string): boolean {
+  return matchesSearch(query, [project.name, project.description]);
+}
+export function matchesTaskSearch(task: Task, query: string, project?: Project): boolean {
+  return matchesSearch(query, [task.title, task.description, task.assignee_name, task.project_name, project?.name]);
+}
+
 export function projectProgress(tasks: readonly Task[]): { completed: number; total: number; percent: number } {
   const completed = tasks.filter(task => task.status === "done").length;
   return { completed, total: tasks.length, percent: tasks.length ? Math.round(completed / tasks.length * 100) : 0 };
