@@ -1,5 +1,13 @@
 export const TOOLS = Object.fromEntries([
   {
+    "name": "search.projects", "stage": "read", "resource": "project", "permission": "project.read",
+    "requires_approval": false, "requires_reauth": false, "rollback": ""
+  },
+  {
+    "name": "get.project_money", "stage": "read", "resource": "project", "permission": "project.read",
+    "requires_approval": false, "requires_reauth": false, "rollback": ""
+  },
+  {
     "name": "search.documents",
     "stage": "read",
     "resource": "document",

@@ -35,7 +35,7 @@ function configuration(scope) {
     reason:model ? null : 'embedding_model_not_configured'};
 }
 function forDocument(config,document) {
-  return config.provider==='openrouter' && !knowledgeCloudAllowed(document.sensitivity) ? config.local : config;
+  return config.provider==='openrouter' && (document.visibility === 'private' || !knowledgeCloudAllowed(document.sensitivity)) ? config.local : config;
 }
 function localConfiguration() {
   const model = process.env.ORBITFLOW_DOCUMENT_EMBEDDING_MODEL?.trim();
@@ -67,7 +67,7 @@ function localConfiguration() {
 }
 
 const fingerprint = (document, config) => createHash("sha256")
-  .update(JSON.stringify([document.id, document.version, document.title, document.content, config.key]))
+  .update(JSON.stringify([document.id, document.version, document.title, document.content, document.sensitivity, document.visibility, config.key]))
   .digest("hex");
 
 function boundedSet(map, key, value, limit = MAX_DOCUMENTS) {
@@ -251,7 +251,7 @@ class DocumentSemanticService {
     try {
       if (!current()) return;
       const candidates = (await job.loadCandidates())
-        .filter((candidate) => candidate.id !== document.id && (config.provider !== 'openrouter' || knowledgeCloudAllowed(candidate.sensitivity)))
+        .filter((candidate) => candidate.id !== document.id && (config.provider !== 'openrouter' || (candidate.visibility !== 'private' && knowledgeCloudAllowed(candidate.sensitivity))))
         .slice(0, DOCUMENT_CANDIDATE_LIMIT);
       const documents = [document, ...candidates];
       for (const candidate of documents) {

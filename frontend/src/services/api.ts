@@ -61,7 +61,7 @@ export async function apiRequest(
   }
   if (options.session?.orgId) headers.set("X-Org-Id", options.session.orgId);
 
-  const timeout = AbortSignal.timeout(10_000);
+  const timeout = AbortSignal.timeout(/^\/(?:pg\/)?agent\/chat$/.test(path) ? 120_000 : 10_000);
   const request: RequestInit = {
     cache: 'no-store',
     method: options.method ?? "GET",

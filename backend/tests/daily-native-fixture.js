@@ -6,9 +6,10 @@ import path from 'node:path';
 import net from 'node:net';
 import pg from 'pg';
 import { hashPassword } from '../src/utils/crypto.js';
+import { applyAgentPgMigrations } from '../src/config/agent-pg-migrations.js';
 
 // 실제 네이티브 PostgreSQL. 외부 접속설정을 사용하지 않고 매 실행마다 새 로컬 클러스터를 만든다.
-export async function startDailyNativePostgres() {
+export async function startDailyNativePostgres({ orgUi = false } = {}) {
   const bin = process.env.DAILY_TEST_PG_BIN;
   if (!bin) throw new Error('DAILY_TEST_PG_BIN must identify local PostgreSQL binaries');
   const root = await mkdtemp(path.join(tmpdir(), 'perp-daily-native-')), data = path.join(root, 'data');
@@ -36,9 +37,10 @@ export async function startDailyNativePostgres() {
     process.env.PG_DATABASE = 'postgres'; process.env.PG_USER = 'daily_test'; process.env.PG_PASSWORD = '';
     process.env.PG_CONNECTION_TIMEOUT_MS = '5000';
     pool = new pg.Pool({ host: '127.0.0.1', port, database: 'postgres', user: 'daily_test' });
-    for (const file of ['perp_schema.sql', ...[2,3,4,5,6,7].map(v => `perp_additions_v${v}.sql`), 'perp_additions_v8_daily_finance.sql', 'perp_additions_v9_daily_corrections.sql', 'perp_additions_v9_daily_corrections.sql', 'perp_additions_v10_org_audit.sql', 'perp_additions_v11_deadline_roles.sql', 'perp_additions_v12_deadline_expenses.sql', 'perp_additions_v12_deadline_expense_writer.sql', 'perp_additions_v13_approval_states.sql', 'perp_additions_v14_approval_details.sql', 'perp_additions_v21_project_money.sql']) {
+    for (const file of ['perp_schema.sql', ...[2,3,4,5,6,7].map(v => `perp_additions_v${v}.sql`), ...(orgUi ? ['perp_additions_v8.sql'] : []), 'perp_additions_v8_daily_finance.sql', 'perp_additions_v9_daily_corrections.sql', 'perp_additions_v9_daily_corrections.sql', 'perp_additions_v10_org_audit.sql', 'perp_additions_v11_deadline_roles.sql', 'perp_additions_v12_deadline_expenses.sql', 'perp_additions_v12_deadline_expense_writer.sql', 'perp_additions_v13_approval_states.sql', 'perp_additions_v14_approval_details.sql', 'perp_additions_v21_project_money.sql']) {
       await pool.query(await readFile(new URL(`../../db/${file}`, import.meta.url), 'utf8'));
     }
+    await applyAgentPgMigrations(pool);
     const companies = (await pool.query("INSERT INTO org.companies(name) VALUES ('DAILY_ISOLATED_A'),('DAILY_ISOLATED_B') RETURNING id")).rows;
     const companyId = companies[0].id, otherCompanyId = companies[1].id, users = [];
     for (let i = 0; i < 3; i++) users.push((await pool.query(`INSERT INTO auth.users(company_id,email,name,password_hash,approval_status)
@@ -54,7 +56,7 @@ export async function startDailyNativePostgres() {
     await pool.query('INSERT INTO org.role_permissions(role_id,permission_id) SELECT $1,id FROM org.permissions WHERE code=ANY($2::text[])', [recipientRole.id,['notification.read','task.read','project.read','member.read','menu.notifications','menu.tasks','menu.projects','menu.members','menu.home','menu.configured']]);
     await pool.query('INSERT INTO org.user_roles(user_id,role_id) VALUES ($1,$2)', [users[1].id,recipientRole.id]);
     await pool.query("INSERT INTO org.company_modules(company_id,module_key) SELECT $1,k FROM unnest($2::text[]) k ON CONFLICT DO NOTHING", [companyId,['projects','tasks','calendar','assets']]);
-    console.log(JSON.stringify({ engine: (await pool.query('SELECT version()')).rows[0].version, host: '127.0.0.1', port, temporaryCluster: root, fixture: 'isolated native PostgreSQL, real auth/memberships/SQL', migrationAppliedTwice: true, integratedMigrations: [8,9,10,11,12,13,14] }));
+    console.log(JSON.stringify({ engine: (await pool.query('SELECT version()')).rows[0].version, host: '127.0.0.1', port, temporaryCluster: root, fixture: 'isolated native PostgreSQL, real auth/memberships/SQL', migrationAppliedTwice: true, integratedMigrations: [8,9,10,11,12,13,14,21,22,23,24] }));
     return { pool, companyId, otherCompanyId, assigneeId: users[1].id, foreignId: users[2].id, identity: { users }, close };
   } catch (error) {
     try { await close(); } catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Native setup and cleanup failed'); }

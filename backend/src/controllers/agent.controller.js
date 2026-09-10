@@ -10,6 +10,8 @@ import * as audit from "../services/audit.service.js";
 import { approvalView, canReadApproval, createApproval } from "../services/approval.service.js";
 import { localDate } from "../services/analytics-contract.service.js";
 import { buildPreview, execute, rollback } from "../services/agent-executor.service.js";
+import { requireTurnKey } from "../services/agent-run.service.js";
+import { agentChat, requestKnowledgeMode } from "../services/agent-chat.service.js";
 import * as providers from "../services/ai-provider.service.js";
 import { completeForUser, keyMetadata } from "../services/ai-key.service.js";
 import * as rag from "../services/rag.service.js";
@@ -41,6 +43,10 @@ const chatSchema = z.object({
   project_id: z.string().nullable().optional(),
   data_class: z.enum(["public", "internal", "personal", "sensitive", "confidential"]).default("internal"),
   vault_mode: z.enum(["off", "on"]).optional(),
+  agent_mode: z.boolean().optional(),
+  knowledge_mode: z.enum(["personal", "company"]).optional(),
+  attachment_ids: z.array(z.string().uuid()).max(5).optional(),
+  cloud_consent: z.object({ token: z.string().min(1).max(10000), confirmed: z.literal(true) }).strict().optional(),
 });
 
 const memorySchema = z.object({
@@ -68,10 +74,25 @@ const profileSchema = z.object({
   preferences: z.record(z.any()).default({}),
 });
 
+export function operationContext(req) {
+  const principal = resolvePrincipal(req);
+  principal.require("agent.chat");
+  principal.require("menu.agent");
+  assertEnabled("agent", req.organization.modules);
+  return { source: "legacy", request: req, principal, credentialPrincipal: principal,
+    actorId: principal.userId, workspaceId: principal.orgId, requestId: req.requestId,
+    knowledgeMode: requestKnowledgeMode(req) };
+}
+
 export async function chat(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("agent.chat");
   const payload = chatSchema.parse(req.body);
+  if (payload.agent_mode) {
+    requireTurnKey(req);
+    return agentChat(operationContext(req), payload, res);
+  }
+  if (payload.knowledge_mode || payload.attachment_ids || payload.cloud_consent) throw new ApiError("VALIDATION_ERROR", "지식 범위와 첨부는 Agent 모드에서 사용하세요.");
 
   let conversation = null;
   if (payload.conversation_id) {

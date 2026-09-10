@@ -5,6 +5,7 @@ import { env } from "./config/env.js";
 import { errorHandler, notFoundHandler, requestContext } from "./middleware/error.js";
 import { pgAuthBridge } from "./middleware/pgAuth.js";
 import { registerRoutes } from "./routes/index.js";
+import { knowledgeTransportError } from "./controllers/agent-knowledge.controller.js";
 
 export function createApp() {
   const app = express();
@@ -29,6 +30,7 @@ export function createApp() {
   registerRoutes(app);
 
   app.use(notFoundHandler);
+  app.use(knowledgeTransportError);
   app.use(errorHandler);
   return app;
 }

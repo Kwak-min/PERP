@@ -3,8 +3,10 @@ import { Router } from "express";
 import * as controller from "../controllers/agent.controller.js";
 import * as keyController from "../controllers/agent-key.controller.js";
 import { asyncRoute } from "../middleware/error.js";
+import { agentOperationsRouter } from "./agent-operations.routes.js";
 
 export const agentRouter = Router();
+agentRouter.use(agentOperationsRouter(controller.operationContext));
 
 agentRouter.post("/chat", asyncRoute(controller.chat));
 agentRouter.get("/conversations", asyncRoute(controller.listConversations));

@@ -127,3 +127,43 @@ export async function completeForUser(principal, { dataClass, system, user, pref
   if (result.error) throw new ApiError("SERVICE_UNAVAILABLE", "OpenRouter 요청에 실패했습니다. 키 권한, 잔액, 모델 설정과 네트워크를 확인하세요.");
   return result;
 }
+
+function agentTurnRoute(principal, { messages, classification, prefer = null }) {
+  const profile = listScoped("agent_profile", principal, [
+    { sql: "user_id = ?", params: [principal.userId] },
+  ], { limit: 1 })[0];
+  const policy = prefer === "local" || profile?.model_policy === "local" ? "local" : prefer ?? profile?.model_policy ?? null;
+  const effective = providers.classifyAgentContent(messages, classification ?? "confidential");
+  // 로컬 요청은 키 행을 읽지 않고, 미리보기는 어떤 키도 복호화하지 않는다.
+  const local = policy === "local" || !providers.externalAllowed(effective);
+  const external = !local && Boolean(ownerKey(principal) || env.openrouterApiKey);
+  if (!local && !external && policy === "external") {
+    throw new ApiError("SERVICE_UNAVAILABLE", "OpenRouter API 키가 없습니다. AI 연결 설정에서 키를 저장하세요.", { reason: "provider_unavailable" });
+  }
+  if (external ? !env.openrouterBaseUrl : !providers.REGISTRY.ollama.available()) {
+    throw new ApiError("SERVICE_UNAVAILABLE", "사용 가능한 AI 모델 연결이 없습니다.", { reason: "provider_unavailable" });
+  }
+  return { classification: effective, target: {
+    provider: external ? "openrouter" : "ollama", model: external ? env.externalModel : env.localModel, external,
+  } };
+}
+
+export function agentTurnTarget(principal, options) {
+  return agentTurnRoute(principal, options).target;
+}
+
+export async function completeTurnForUser(principal, { messages, tools, classification, signal, prefer = null, beforeDispatch, response_format }) {
+  const input = { messages, classification, prefer };
+  const route = agentTurnRoute(principal, input);
+  const provider = route.target.external ? resolveOwnerProvider(principal) : null;
+  return providers.completeTurn({
+    messages, tools, classification: route.classification, signal, response_format,
+    beforeDispatch: beforeDispatch ? async target => {
+      await beforeDispatch(target);
+      const current = agentTurnTarget(principal, input);
+      if (current.provider !== target.provider || current.model !== target.model || current.external !== target.external) {
+        throw new ApiError("CONFLICT", "AI 전송 대상이 변경되었습니다. 동의를 다시 확인하세요.", { reason: "provider_target_changed" });
+      }
+    } : undefined,
+  }, route.target.external ? "external" : "local", provider);
+}

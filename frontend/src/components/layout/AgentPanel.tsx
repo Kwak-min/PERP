@@ -9,7 +9,12 @@ import {
   getAgentBrief,
   getAgentMemory,
   getPendingApprovals,
+  listAgentOperations,
   sendAgentChat,
+  type AgentOperation,
+  type AgentTurn,
+  type AgentKnowledgeMode,
+  type AgentProtectedResult,
   type AgentMemory,
   type PendingApproval,
 } from "../../services/agent";
@@ -17,8 +22,14 @@ import { userMessageOf, type ApiSession } from "../../services/api";
 import { isPgWorkspace } from "../../services/workspace";
 import { useSession, type SessionState } from "../../store/session";
 import { Button } from "../ui/Button";
+import { AgentActionCard } from "./AgentActionCard";
+import { AgentAttachments, AgentKnowledgeConsent, AgentKnowledgeReceipts } from "./AgentKnowledgeControls";
+import { useAgentKnowledge } from "./useAgentKnowledge";
+import type { KnowledgeSave } from "../../services/agent-knowledge";
+import { AgentProtectedResults } from "./AgentProtectedResults";
+import { createRequestKey } from "../../services/requestKey";
 
-type LogEntry = Readonly<{ id: number; role: "user" | "agent"; text: string; items?: readonly string[] }>;
+type LogEntry = Readonly<{ id: number; role: "user" | "agent"; text: string; items?: readonly string[]; saves?: readonly KnowledgeSave[]; protected?: readonly AgentProtectedResult[] }>;
 type DecisionDraft = Readonly<{ approval: PendingApproval; decision: "approve" | "reject" }>;
 const QUICK_INTENTS = new Map<string, "brief" | "approvals" | "memory">([
   ["오늘 브리핑 보여줘", "brief"], ["오늘 브리핑 보기", "brief"],
@@ -29,14 +40,18 @@ const QUICK_INTENTS = new Map<string, "brief" | "approvals" | "memory">([
 
 export function AgentPanel() {
   const stored = useSession();
-  return stored ? <AgentPanelWorkspace key={`${stored.token}:${stored.orgId}`} stored={stored} /> : null;
+  const [mode, setMode] = useState<AgentKnowledgeMode>("personal");
+  return stored ? <AgentPanelWorkspace key={`${stored.token}:${stored.orgId}:${mode}`} stored={stored} mode={mode} setMode={setMode} /> : null;
 }
 
-function AgentPanelWorkspace({ stored }: Readonly<{ stored: SessionState }>) {
+function AgentPanelWorkspace({ stored, mode, setMode }: Readonly<{ stored: SessionState; mode: AgentKnowledgeMode; setMode: (mode: AgentKnowledgeMode) => void }>) {
   const { agentOpen, setAgentOpen } = useAppContext();
   const session = useMemo<ApiSession>(() => ({ token: stored.token, orgId: stored.orgId }), [stored.token, stored.orgId]);
+  const knowledge = useAgentKnowledge(session, mode);
   const [message, setMessage] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [turn, setTurn] = useState<AgentTurn | null>(null);
+  const [actions, setActions] = useState<readonly AgentOperation[]>([]);
   const [log, setLog] = useState<readonly LogEntry[]>([]);
   const [pending, setPending] = useState<readonly PendingApproval[] | null>(null);
   const [memories, setMemories] = useState<readonly AgentMemory[] | null>(null);
@@ -94,6 +109,7 @@ function AgentPanelWorkspace({ stored }: Readonly<{ stored: SessionState }>) {
   }
 
   async function showMemory(): Promise<void> {
+    if (mode === "company") { setError("회사 모드에서는 개인 AI 기억을 조회하지 않습니다."); return; }
     setPending(null); setDecisionDraft(null);
     const items = await run("memory", signal => getAgentMemory(session, signal));
     if (items) {
@@ -105,17 +121,26 @@ function AgentPanelWorkspace({ stored }: Readonly<{ stored: SessionState }>) {
   async function send(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const text = message.trim();
-    if (!text) return;
+    if (!text || busy || turn || knowledge.busy) return;
     append({ role: "user", text }); setMessage("");
     const intent = QUICK_INTENTS.get(text);
     if (intent === "brief") { await showBrief(); return; }
     if (intent === "approvals") { await showPending(); return; }
     if (intent === "memory") { await showMemory(); return; }
-    const response = await run("chat", signal => sendAgentChat(session, text, conversationId, signal));
+    await submitTurn({ message: text, conversation_id: conversationId, key: createRequestKey(), knowledge_mode: mode,
+      attachment_ids: knowledge.attachments.map(item => item.id) });
+  }
+
+  async function submitTurn(next: AgentTurn): Promise<void> {
+    setTurn(next);
+    const response = await run("chat", signal => sendAgentChat(session, next, signal));
     if (!response) return;
+    setTurn(null); knowledge.clear();
     setConversationId(response.conversation_id);
-    append({ role: "agent", text: response.answer.conclusion,
-      items: response.answer.evidence.map(item => `${item.title ?? item.type}${item.date ? ` · ${item.date.slice(0, 10)}` : ""}`) });
+    setActions(current => [...current.filter(item => !response.actions.some(action => action.id === item.id)), ...response.actions]);
+    append({ role: "agent", text: response.answer.conclusion, saves: response.knowledge_saves, protected: response.protected_results,
+      items: [...response.tool_activity.map(item => `${item.stage === "plan" ? "계획" : item.stage === "query" ? "조회 완료" : "작업 제안"}: ${item.summary}`),
+        ...response.answer.evidence.map(item => `${item.title ?? item.type}${item.date ? ` · ${item.date.slice(0, 10)}` : ""}`)] });
   }
 
   function beginDecision(approval: PendingApproval, decision: "approve" | "reject"): void {
@@ -164,14 +189,34 @@ function AgentPanelWorkspace({ stored }: Readonly<{ stored: SessionState }>) {
       <div className="agent-panel__header"><div><span className="eyebrow eyebrow--ai">ORBITFLOW AI</span><h2>{stored.name}님, 무엇을 도와드릴까요?</h2></div>
         <Button tone="neutral" size="small" onClick={close} aria-label="Agent 패널 닫기">닫기</Button></div>
       <div className="agent-panel__body">
-        <p className="agent-hint" data-vault-mode="off">조직 권한 안의 서버 데이터를 근거로 답합니다. 개인 Vault는 이 대화의 근거에서 제외됩니다.</p>
+        <label className="agent-mode">지식 범위<select aria-label="지식 범위" value={mode} onChange={event => setMode(event.target.value === "company" ? "company" : "personal")}>
+          <option value="personal">개인 AI</option><option value="company">회사 AI</option></select></label>
+        <p className="agent-hint" data-vault-mode={mode === "personal" ? "on" : "off"}>{mode === "personal"
+          ? "내 개인 지식과 접근 가능한 회사 자료를 참고합니다. 개인 자료의 외부 전송은 별도 동의가 필요합니다."
+          : "회사 권한 안의 자료만 참고합니다. 개인 노트·대화·첨부는 제외됩니다."}</p>
         {log.length > 0 && <div className="agent-log" aria-live="polite">{log.map(entry => <article key={entry.id} className={`agent-log__${entry.role}`}>
           <p>{entry.text}</p>{entry.items && <ul>{entry.items.map(item => <li key={item}>{item}</li>)}</ul>}
+          {entry.saves && entry.saves.length > 0 && <AgentKnowledgeReceipts saves={entry.saves} />}
+          {entry.protected && entry.protected.length > 0 && <AgentProtectedResults results={entry.protected} />}
         </article>)}</div>}
+        {actions.map(action => <AgentActionCard key={action.id} initial={action} session={session} active={agentOpen} knowledgeMode={mode} />)}
+        {turn && !busy && <div className="agent-workflow"><p>완료 여부를 확인하지 못했습니다. 재시도는 같은 요청 키를 사용합니다.</p>
+          <Button size="small" disabled={knowledge.busy} onClick={() => void submitTurn(turn)}>같은 대화 요청 재시도</Button>
+          {mode === "personal" && <Button size="small" disabled={knowledge.busy} onClick={() => void knowledge.preview(turn)}>개인 자료 전송 범위 확인</Button>}
+          <Button size="small" tone="neutral" disabled={knowledge.busy} onClick={() => { setTurn(null); knowledge.cancelConsent(); }}>대기 요청 닫기</Button></div>}
+        {knowledge.consent && <AgentKnowledgeConsent key={knowledge.consent.preview.token} preview={knowledge.consent.preview} busy={busy !== null || knowledge.busy}
+          onCancel={knowledge.cancelConsent} onApprove={() => {
+            const consent = knowledge.consent;
+            if (consent) { knowledge.cancelConsent(); void submitTurn({ ...consent.turn, cloud_consent: { token: consent.preview.token, confirmed: true } }); }
+          }} />}
         <div className="prompt-list" aria-label="대화형 빠른 작업">
           <Button tone="ghost" onClick={() => void showBrief()} disabled={busy !== null}>오늘 브리핑 보기</Button>
           <Button tone="ghost" onClick={() => void showPending()} disabled={busy !== null}>결재 대기 항목 보기</Button>
-          <Button tone="ghost" onClick={() => void showMemory()} disabled={busy !== null}>AI 기억 관리</Button>
+          {mode === "personal" && <Button tone="ghost" onClick={() => void showMemory()} disabled={busy !== null}>AI 기억 관리</Button>}
+          <Button tone="ghost" disabled={busy !== null} onClick={() => void run("operations", async signal => {
+            const items = await listAgentOperations(session, mode, signal);
+            if (!signal.aborted) setActions(items);
+          })}>저장된 작업 보기</Button>
         </div>
         {pending && <section className="agent-workflow" aria-label="결재 대기 항목"><h3>결재 대기 항목</h3>
           {pending.length === 0 ? <p>처리할 결재가 없습니다.</p> : <ul>{pending.map(approval => <li key={approval.id}>
@@ -198,10 +243,11 @@ function AgentPanelWorkspace({ stored }: Readonly<{ stored: SessionState }>) {
         </section>}
         {busy && <p role="status">서버 데이터를 확인하는 중입니다...</p>}
         {error && <p role="alert">{error}</p>}
+        <AgentAttachments knowledge={knowledge} disabled={busy !== null || turn !== null} />
       </div>
       <form className="agent-compose" onSubmit={send}><label htmlFor="agent-message">Agent에게 요청</label><textarea id="agent-message" rows={3}
         placeholder="예: 오늘 우선 처리할 업무를 근거와 함께 알려줘" value={message} onChange={event => setMessage(event.target.value)} disabled={busy === "chat"} />
-        <Button tone="ai" type="submit" disabled={busy !== null || !message.trim()}>전송</Button></form>
+        <Button tone="ai" type="submit" disabled={busy !== null || turn !== null || knowledge.busy || !message.trim()}>전송</Button></form>
     </aside>
   );
 }

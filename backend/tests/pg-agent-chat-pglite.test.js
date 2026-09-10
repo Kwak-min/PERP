@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { after, before, describe, it } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 
@@ -11,13 +12,14 @@ describe("PG agent chat against an actual isolated PGlite engine", { timeout: 12
   let pool;
   let originalQuery;
   let actor;
+  let workspaceDocumentId;
   const sqlLog = [];
 
   before(async () => {
     process.env.OPENROUTER_API_KEY = "";
     engine = new PGlite();
     await engine.exec(`
-      CREATE SCHEMA auth; CREATE SCHEMA org; CREATE SCHEMA project; CREATE SCHEMA notes; CREATE SCHEMA ai;
+      CREATE SCHEMA auth; CREATE SCHEMA org; CREATE SCHEMA project; CREATE SCHEMA notes; CREATE SCHEMA ai; CREATE SCHEMA files;
       CREATE TABLE auth.users(id bigint PRIMARY KEY,company_id bigint,department_id bigint,position_id bigint,email text,name text,is_admin boolean DEFAULT false,
         account_status text DEFAULT 'active',approval_status text DEFAULT 'approved');
       CREATE TABLE auth.sessions(id uuid PRIMARY KEY,user_id bigint,session_token uuid,is_active boolean DEFAULT true,login_at timestamptz DEFAULT now());
@@ -31,13 +33,16 @@ describe("PG agent chat against an actual isolated PGlite engine", { timeout: 12
       CREATE TABLE org.approval_requests(id bigint PRIMARY KEY,company_id bigint,requester_id bigint,title text,request_type text,status text,
         created_at timestamptz DEFAULT now(),workflow_locked boolean DEFAULT true,version integer DEFAULT 1);
       CREATE TABLE project.projects(id bigint PRIMARY KEY,company_id bigint,name text);
-      CREATE TABLE project.documents(id bigint PRIMARY KEY,project_id bigint,title text,content_md text,updated_at timestamptz DEFAULT now());
+      CREATE TABLE files.objects(id bigint PRIMARY KEY);
+      CREATE TABLE project.documents(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,project_id bigint,title text,content_md text,
+        file_id bigint,author_id bigint,version integer DEFAULT 1,created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now());
       CREATE TABLE project.tasks(id bigint PRIMARY KEY,project_id bigint,assignee_id bigint,title text,due_on date,status text);
       CREATE TABLE notes.vaults(id bigint PRIMARY KEY,owner_id bigint);
       CREATE TABLE notes.notes(id bigint PRIMARY KEY,vault_id bigint,title text,content_md text,updated_at timestamptz DEFAULT now());
       CREATE TABLE ai.agent_memory(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,company_id bigint,user_id bigint,key text,value text,
         updated_at timestamptz DEFAULT now(),UNIQUE(user_id,key));
     `);
+    await engine.exec(await readFile(new URL("../../db/perp_additions_v24_workspace_documents.sql", import.meta.url), "utf8"));
     const token = randomUUID();
     await engine.query("INSERT INTO auth.users(id,company_id,email,name) VALUES(501,77,'native@example.invalid','Native Agent')");
     await engine.query("INSERT INTO auth.sessions(id,user_id,session_token) VALUES($1,501,$2)", [randomUUID(), token]);
@@ -50,7 +55,11 @@ describe("PG agent chat against an actual isolated PGlite engine", { timeout: 12
     await engine.query("INSERT INTO org.user_roles(user_id,role_id) VALUES(501,1)");
     for (const module of ["agent", "documents", "tasks", "approvals"]) await engine.query("INSERT INTO org.company_modules(company_id,module_key) VALUES(77,$1)", [module]);
     await engine.query("INSERT INTO project.projects(id,company_id,name) VALUES(7,77,'Native Project')");
-    await engine.query("INSERT INTO project.documents(id,project_id,title,content_md) VALUES(31,7,'Native document','nativecompanyneedle')");
+    await engine.query("INSERT INTO project.documents(id,project_id,title,content_md) OVERRIDING SYSTEM VALUE VALUES(31,7,'Native document','nativecompanyneedle')");
+    workspaceDocumentId = String((await engine.query(`INSERT INTO workspace.documents(company_id,title,content_md,owner_id,author_id)
+      VALUES(77,'Workspace document','nativecompanyneedle workspacecanonicalneedle',501,501) RETURNING id`)).rows[0].id);
+    await engine.query(`INSERT INTO workspace.documents(company_id,title,content_md,owner_id,author_id,visibility)
+      VALUES(77,'Private workspace document','nativecompanyneedle PRIVATE_WORKSPACE_CANARY',501,501,'private')`);
     await engine.query("INSERT INTO project.tasks(id,project_id,assignee_id,title,due_on,status) VALUES(41,7,501,'NATIVE_CHAT_TASK',$1,'todo')", [new Date().toISOString().slice(0, 10)]);
     await engine.query("INSERT INTO org.approval_requests(id,company_id,requester_id,title,request_type,status) VALUES(51,77,700,'NATIVE_CHAT_APPROVAL','generic','pending')");
     await engine.query("INSERT INTO notes.vaults(id,owner_id) VALUES(9,501)");
@@ -77,7 +86,8 @@ describe("PG agent chat against an actual isolated PGlite engine", { timeout: 12
     const chat = await request("/pg/agent/chat", { method: "POST", body: { message: "nativecompanyneedle nativevaultneedle", vault_mode: "off" } });
     assert.equal(chat.status, 200, JSON.stringify(chat.body));
     assert.equal(chat.body.scope.vault_mode, "off");
-    assert.deepEqual(chat.body.answer.evidence.map(item => item.id), ["31"]);
+    assert.deepEqual(chat.body.answer.evidence.map(item => item.id).sort(), ["31", workspaceDocumentId].sort());
+    assert.ok(!JSON.stringify(chat.body.answer.evidence).includes("PRIVATE_WORKSPACE_CANARY"));
     assert.ok(!sqlLog.slice(start).some(sql => sql.includes("notes.notes")));
 
     const brief = await request("/pg/agent/brief");

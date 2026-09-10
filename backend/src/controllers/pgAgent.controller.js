@@ -8,8 +8,11 @@ import { resolvePgCompanyPrincipal } from "../middleware/pgAccess.js";
 import { pgEnabledFeatures } from "../middleware/features.js";
 import { getScoped, insert, newId, nowIso, update } from "../models/base.js";
 import { completeForUser } from "../services/ai-key.service.js";
+import { requireTurnKey } from "../services/agent-run.service.js";
+import { agentChat, requestKnowledgeMode } from "../services/agent-chat.service.js";
 import { localDate } from "../services/analytics-contract.service.js";
 import { canReadPgApproval } from "../services/pg-approval-read-policy.service.js";
+import { listPgDocuments } from "../services/pg-documents.service.js";
 import * as rag from "../services/rag.service.js";
 import { ApiError, notFound } from "../utils/errors.js";
 
@@ -18,6 +21,10 @@ const chatSchema = z.object({
   conversation_id: z.string().nullable().optional(),
   data_class: z.enum(["public", "internal", "personal", "sensitive", "confidential"]).default("internal"),
   vault_mode: z.enum(["off", "on"]).optional(),
+  agent_mode: z.boolean().optional(),
+  knowledge_mode: z.enum(["personal", "company"]).optional(),
+  attachment_ids: z.array(z.string().uuid()).max(5).optional(),
+  cloud_consent: z.object({ token: z.string().min(1).max(10000), confirmed: z.literal(true) }).strict().optional(),
 }).strict();
 const memorySchema = z.object({ key: z.string().trim().min(1).max(200), value: z.string().trim().max(2000).default("") }).strict();
 const credentialLike = (value) => [/비밀번호/i, /password/i, /api[_ -]?key/i, /secret/i, /주민등록번호/, /계좌\s*비밀/, /\b\d{6}-\d{7}\b/]
@@ -38,16 +45,12 @@ function canReadCompanySource(principal, permission, menu, module) {
 }
 
 async function contextFor(principal, query, vaultMode) {
-  const documents = canReadCompanySource(principal, "document.read", "menu.documents", "documents") ? (await pgQuery(
-    `SELECT d.id,d.title,COALESCE(d.content_md,'') AS content_md,d.updated_at
-       FROM project.documents d JOIN project.projects p ON p.id=d.project_id
-      WHERE p.company_id=$1 ORDER BY d.updated_at DESC,d.id LIMIT 1000`,
-    [principal.companyId],
-  )).rows : [];
+  const documents = canReadCompanySource(principal, "document.read", "menu.documents", "documents")
+    ? await listPgDocuments({ query: pgQuery }, principal, { limit: 1000, knowledgeMode: vaultMode === "on" ? "personal" : "company" }) : [];
   const citations = scoreRows(documents, query, (row) => `${row.title} ${row.content_md}`).map(([score, row]) => ({
     type: "document", id: String(row.id), title: row.title, excerpt: row.content_md.slice(0, 200),
     date: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at ?? ""),
-    link: `/documents/${row.id}`, score, sensitivity: "internal",
+    link: `/documents/${row.id}`, score, sensitivity: row.sensitivity,
   }));
   if (vaultMode === "on") {
     const notes = (await pgQuery(
@@ -78,9 +81,24 @@ function providerScope(req, principal) {
   };
 }
 
+export async function operationContext(req) {
+  const principal = await resolvePgCompanyPrincipal(req);
+  principal.require("agent.chat");
+  principal.require("menu.agent");
+  if (!principal.modules.includes("agent")) throw new ApiError("MODULE_DISABLED", "AI 모듈이 비활성화되어 있습니다.");
+  return { source: "pg", request: req, principal, credentialPrincipal: providerScope(req, principal),
+    actorId: String(principal.userId), workspaceId: String(principal.companyId), requestId: req.requestId,
+    knowledgeMode: requestKnowledgeMode(req) };
+}
+
 export async function chat(req, res) {
   const principal = await resolvePgCompanyPrincipal(req);
   const payload = chatSchema.parse(req.body);
+  if (payload.agent_mode) {
+    requireTurnKey(req);
+    return agentChat(await operationContext(req), payload, res);
+  }
+  if (payload.knowledge_mode || payload.attachment_ids || payload.cloud_consent) throw new ApiError("VALIDATION_ERROR", "지식 범위와 첨부는 Agent 모드에서 사용하세요.");
   const scope = providerScope(req, principal);
   let conversation = null;
   if (payload.conversation_id) {

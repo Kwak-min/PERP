@@ -18,6 +18,7 @@ import { pgRoute, pgRecordRoute } from "../middleware/pgAccess.js";
 import { asyncRoute } from "../middleware/error.js";
 import { withPgFeature } from "../middleware/features.js";
 import { pgAgentKeyRouter } from "./pg-agent-key.routes.js";
+import { agentOperationsRouter } from "./agent-operations.routes.js";
 import { decidePgApproval as decideLegacyPgApproval } from '../controllers/pgApprovalDecision.controller.js';
 import { createPgDraft, patchPgDraft, submitPgDraft, getPgApproval, pgApprovalHistory, decidePgApproval,
   withdrawPgApproval, resubmitPgApproval, listPgForms, savePgForm } from '../controllers/pgApprovals.controller.js';
@@ -57,6 +58,7 @@ pgRouter.use('/documents/wiki', knowledgeWikiPublicationRouter('pg', 'company'))
 pgRouter.use('/documents/wiki', knowledgeWikiRouter('pg', 'company'));
 
 pgRouter.use("/agent/api-key", pgAgentKeyRouter);
+pgRouter.use("/agent", agentOperationsRouter(agent.operationContext));
 pgRouter.get("/health", asyncRoute(controller.health));
 pgRouter.post("/auth/signup", asyncRoute(controller.signup));
 pgRouter.post("/companies", asyncRoute(createCompany));

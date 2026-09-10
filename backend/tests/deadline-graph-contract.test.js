@@ -151,8 +151,7 @@ describe("PG company graph and generic document version contracts", () => {
   test("typed project hubs remain distinct and generic PATCH requires and returns the scoped version", async () => {
     const fixture = await startPgDocumentFixture();
     try {
-      fixture.state.projects.find((project) => project.id === "10").name = "Duplicate project";
-      fixture.state.projects.find((project) => project.id === "11").name = "Duplicate project";
+      await fixture.engine.query("UPDATE project.projects SET name='Duplicate project' WHERE id IN (10,11)");
       const graph = await request(fixture, fixture.actors.writer, "/pg/documents/graph");
       assert.equal(graph.status, 200, JSON.stringify(graph.body));
       const hub = graph.body.nodes.find((node) => node.kind === "space" && node.identity.opaque_id === "10");
@@ -186,7 +185,8 @@ describe("PG company graph and generic document version contracts", () => {
       });
       assert.equal(stale.status, 409);
       assert.equal((await request(fixture, fixture.actors.writer, "/pg/documents/1")).body.content, "saved");
-      assert.ok(fixture.queries.some(({ sql }) => /project_id IN \(SELECT id FROM project\.projects WHERE company_id = \$2\)/.test(sql) && /t\.version = \$\d+/.test(sql)));
+      assert.deepEqual((await fixture.engine.query('SELECT revision,content FROM workspace.document_versions WHERE document_id=1 ORDER BY revision')).rows,
+        [{revision:1,content:'SYNTH_RELATED pglaunch'},{revision:2,content:'saved'}]);
     } finally {
       await fixture.close();
     }

@@ -1,3 +1,4 @@
+import { pgDocumentReadScope, canReadPgDocumentRestrictions } from './pg-documents.service.js';
 import { randomUUID } from 'node:crypto';
 import { types } from 'node:util';
 import { db } from '../config/db.js';
@@ -148,7 +149,7 @@ class WikiTransaction {
         const grants = yield* this.rows(`SELECT p.code,r.name AS role FROM org.user_roles ur JOIN org.roles r ON r.id=ur.role_id AND r.company_id=? AND r.deleted_at IS NULL
           JOIN org.role_permissions rp ON rp.role_id=r.id JOIN org.permissions p ON p.id=rp.permission_id WHERE ur.user_id=? AND ur.workspace_id IS NULL`,[c.companyId,c.actorId]);
         const permissions = new Set(effectivePgPermissions(grants));
-        this.authority = { has: p => permissions.has(p) };
+        this.authority = { companyId:c.companyId,userId:c.actorId,has: p => permissions.has(p) };
         if (!permissions.has(action) || !permissions.has('menu.documents')) fail('PERMISSION_DENIED',403);
         if (!(yield* this.one("SELECT 1 FROM org.company_modules WHERE company_id=? AND module_key='documents'",[c.companyId]))) fail('MODULE_DISABLED',403);
       }
@@ -179,14 +180,25 @@ class WikiTransaction {
       return { title:row.title,content:row.content,version:String(row.version),restrictions:{ owner_id:row.owner_id,visibility:kind === 'note' ? 'private' : row.visibility,sensitivity:row.sensitivity,...(kind==='note' ? {agent_enabled:Boolean(row.agent_enabled)} : {}) } };
     }
     if (!/^[1-9]\d*$/.test(id)) return null;
-    const row = kind === 'note' ? yield* this.one(`SELECT n.title,COALESCE(n.content_md,'') AS content,n.xmin::text AS version FROM notes.notes n
-      JOIN notes.vaults v ON v.id=n.vault_id WHERE n.id=? AND v.owner_id=?${this.write ? ' FOR SHARE OF n,v' : ''}`,[id,c.actorId]) :
-      yield* this.one(`SELECT d.title,COALESCE(d.content_md,'') AS content,d.version FROM project.documents d JOIN project.projects p ON p.id=d.project_id WHERE d.id=? AND p.company_id=?${this.write ? ' FOR SHARE OF d,p' : ''}`,[id,c.companyId]);
-    return row ? { ...row,version:String(row.version),restrictions:{ owner_id:c.scope === 'personal' ? c.actorId : null,visibility:c.scope === 'personal' ? 'private' : 'org',sensitivity:c.scope === 'personal' ? 'personal' : 'internal' } } : null;
+    if (kind === 'note') {
+      const row = yield* this.one(`SELECT n.title,COALESCE(n.content_md,'') AS content,n.xmin::text AS version FROM notes.notes n
+        JOIN notes.vaults v ON v.id=n.vault_id WHERE n.id=? AND v.owner_id=?${this.write ? ' FOR SHARE OF n,v' : ''}`,[id,c.actorId]);
+      return row ? { ...row,restrictions:{owner_id:c.actorId,visibility:'private',sensitivity:'personal'} } : null;
+    }
+    const scope = pgDocumentReadScope(this.authority, 'company');
+    const sql = `SELECT d.* FROM workspace.document_catalog d WHERE ${scope.sql.replace(/\$\d+/g,'?')} AND d.id=?`;
+    let row = yield* this.one(sql,[...scope.values,id]);
+    if (row && this.write) {
+      yield* this.one(`SELECT id FROM ${row.storage === 'workspace' ? 'workspace.documents' : 'project.documents'} WHERE id=? FOR SHARE`,[id]);
+      row = yield* this.one(sql,[...scope.values,id]);
+    }
+    return row ? { title:row.title,content:row.content_md,version:String(row.version),
+      restrictions:{owner_id:row.owner_id == null ? null : String(row.owner_id),visibility:row.visibility,sensitivity:row.sensitivity} } : null;
   }
   restrictionsAllowed(revision) {
     const r = JSON.parse(revision.restrictions_json), c = this.context;
     if (r.visibility === 'private' && r.owner_id !== c.actorId) return false;
+    if (this.pg && c.scope === 'company') return canReadPgDocumentRestrictions(this.authority,r,'company');
     if (!this.pg && c.scope === 'company') return canReadDocument(this.authority,{ ...r,tenant_id:c.tenantId,org_id:c.companyId });
     return true;
   }

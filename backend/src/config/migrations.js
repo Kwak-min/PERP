@@ -1,4 +1,6 @@
 import { migrateProjectMoney } from './project-money-migration.js';
+import { migrateInappAgent } from './inapp-agent-migration.js';
+import { migrateAgentKnowledge } from './agent-knowledge-migration.js';
 import { migrateReceipts } from './receipt-migration.js';
 import { migrateExpenses } from './expense-migration.js';
 import { migrateApprovalWorkflow, migrateApprovalSnapshotBoundary } from './approval-migration.js';
@@ -263,6 +265,8 @@ MIGRATIONS.push({ version: 13, up: migrateExpenseImports });
 MIGRATIONS.push({ version: 14, up(conn) { conn.exec(knowledgeInvalidationDDL('sqlite')); } });
 
 MIGRATIONS.push({ version: 21, up: migrateProjectMoney });
+MIGRATIONS.push({ version: 22, up: migrateInappAgent });
+MIGRATIONS.push({ version: 23, up: migrateAgentKnowledge });
 
 export function applyMigrations(conn) {
   conn.exec(`

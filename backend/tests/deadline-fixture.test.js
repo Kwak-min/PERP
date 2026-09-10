@@ -18,7 +18,7 @@ function migrationEffects(conn) {
 }
 
 function assertMigrationEffects(effects) {
-  assert.deepEqual(effects.versions, [1,2,3,4,5,6,7,8,9,10,11,12,13,14,21]);
+  assert.deepEqual(effects.versions, [1,2,3,4,5,6,7,8,9,10,11,12,13,14,21,22,23]);
   assert.ok(effects.membershipColumns.includes('roles_version'));
   for (const column of ['counterparty','occurred_at','input_currency','no_receipt_reason']) assert.ok(effects.transactionColumns.includes(column));
   for (const column of ['org_id','receipt_upload_id']) assert.ok(effects.evidenceColumns.includes(column));

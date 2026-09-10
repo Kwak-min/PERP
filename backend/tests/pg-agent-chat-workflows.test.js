@@ -40,7 +40,13 @@ describe("PG scoped AI chat workflows", { timeout: 30000 }, () => {
     fixtureQuery = pgPool.query;
     pgPool.query = async (sql, values = []) => {
       observedSql.push(sql);
-      if (sql.includes("FROM project.documents")) return { rows: [{ id: "31", project_id: "7", title: "운영 문서", content_md: "companychatneedle", updated_at: new Date("2026-09-09T00:00:00Z") }] };
+      if (sql.includes("FROM workspace.document_catalog")) {
+        assert.equal(String(values[0]), "77");
+        assert.equal(String(values[1]), "501");
+        return { rows: [{ id: "31", company_id: "77", project_id: "7", owner_id: "501", author_id: "501",
+          title: "운영 문서", content_md: "companychatneedle", sensitivity: "internal", visibility: "org", version: 1,
+          updated_at: new Date("2026-09-09T00:00:00Z") }] };
+      }
       if (sql.includes("FROM notes.notes")) return { rows: [{ id: "99", title: "개인 노트", content_md: "personalpgvaultneedle", updated_at: new Date("2026-09-09T00:00:00Z") }] };
       if (sql.includes("FROM project.tasks") && sql.includes("assignee_id")) return { rows: [{ id: "41", title: "PG_CHAT_TASK", due_on: "2026-09-09", status: "todo" }] };
       if (sql.includes("FROM org.approval_requests")) return { rows: [{ id: "51", requester_id: "700", title: "PG_CHAT_APPROVAL", request_type: "generic", status: "pending", created_at: new Date("2026-09-09T00:00:00Z"), workflow_locked: true }] };
@@ -108,7 +114,7 @@ describe("PG scoped AI chat workflows", { timeout: 30000 }, () => {
         assert.equal(response.status, 200, `${scenario.label}: ${JSON.stringify(response.body)}`);
         assert.deepEqual(response.body.answer.evidence, [], scenario.label);
         assert.equal(providerCalls.length, providerStart + 1, scenario.label);
-        assert.ok(!observedSql.slice(start).some(sql => sql.includes("FROM project.documents")), scenario.label);
+        assert.ok(!observedSql.slice(start).some(sql => sql.includes("FROM workspace.document_catalog")), scenario.label);
         assert.ok(!providerCalls.at(-1).body.messages[0].content.includes("companychatneedle"), scenario.label);
 
         start = observedSql.length;
