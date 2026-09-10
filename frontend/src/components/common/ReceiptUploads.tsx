@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { createRequestKey } from '../../services/requestKey';
 import { apiReceiptUpload, userMessageOf, type ApiSession } from '../../services/api';
 import { financePath, uploadSchema, type Receipt, type UploadSlot } from '../../screens/expenses/model';
 import { Button } from '../ui/Button';
@@ -26,7 +27,7 @@ export function ReceiptUploads({ session, slots, setSlots, locked, existing = []
     if (files.some(file => file.size > 10 * 1024 * 1024 || !['image/jpeg', 'image/png', 'application/pdf'].includes(file.type) || !/\.(?:jpe?g|png|pdf)$/i.test(file.name))) {
       setError('JPEG·PNG·PDF 파일만 가능하며 파일당 10MiB 이하여야 합니다.'); return;
     }
-    const next: UploadSlot[] = files.map(file => ({ id: crypto.randomUUID(), file, state: 'pending' }));
+    const next: UploadSlot[] = files.map(file => ({ id: createRequestKey(), file, state: 'pending' }));
     setSlots(current => [...current, ...next]);
     for (const slot of next) void upload(slot);
   }

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { dom } from './deadline-expense-actions.mjs';
+import { fixtureFetch } from './insecure-origin.mjs';
 
 export async function recoverMoneyEntry({ page, origin, kind, amount, accountId }) {
   const form = page.locator(`[data-${kind}-form]`);
@@ -40,7 +41,7 @@ export async function assertMoneyLogout({ page, origin, session, incomeId, apiPr
   const form = page.locator('[data-income-form]');
   await form.locator('[name="amount"]').fill('5.03'); await form.locator('[name="income_date"]').fill('2026-09-09');
   await form.locator('[name="payer"]').fill('로그아웃 검증'); await form.locator('[name="account_id"]').selectOption(incomeId); await form.locator('[name="memo"]').fill('LOGOUT_PENDING'); await form.locator('input[type="checkbox"]').check();
-  await page.route('**' + apiPrefix + '/incomes', async route => { const response = await route.fetch(); assert.equal(response.status(), 201); await route.fulfill({ status: 201, contentType: 'application/json', body: '{' }); });
+  await page.route('**' + apiPrefix + '/incomes', async route => { const response = await fixtureFetch(route); assert.equal(response.status(), 201); await route.fulfill({ status: 201, contentType: 'application/json', body: '{' }); });
   const uncertain = dom(page, '[data-income-form][data-money-state="uncertain"]'); await form.locator('button[type="submit"]').click(); await uncertain;
   assert.equal((await moneyPendingKeys(page)).length, 1);
   const logout = page.getByRole('button', { name: '로그아웃', exact: true });

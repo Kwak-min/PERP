@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createRequestKey } from '../../services/requestKey';
 import { Link } from 'react-router-dom';
 import { apiRequest, userMessageOf, type ApiSession } from '../../services/api';
 import { isPgWorkspace } from '../../services/workspace';
@@ -42,7 +43,7 @@ export function ExpenseForm({ session, attemptScope, initialAttempt, onSaved, on
       const parsed = expenseSchema.safeParse({ ...values, ...(linkedProjectId ? { project_id: linkedProjectId } : {}), expense_time: values.expense_time || undefined, budget_id: values.budget_id || null, currency: 'KRW', receipt_tokens: slots.flatMap(slot => slot.upload ? [slot.upload.token] : []) });
       if (!parsed.success) { setError(parsed.error.issues[0]?.message ?? '입력값을 확인하세요.'); return; }
       if (!confirmed) { setError('확정 후 원금과 내용을 변경할 수 없음을 확인해 주세요.'); return; }
-      const attempt = { kind: 'expense' as const, key: crypto.randomUUID(), body: parsed.data };
+      const attempt = { kind: 'expense' as const, key: createRequestKey(), body: parsed.data };
       try { saveMoneyAttempt(attemptScope, attempt); }
       catch (caught: unknown) { setError(`요청을 보관하지 못해 전송하지 않았습니다. ${userMessageOf(caught)}`); return; }
       pending.current = attempt;

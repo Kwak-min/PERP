@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createRequestKey } from '../../services/requestKey';
 import { Link } from 'react-router-dom';
 import { z } from 'zod';
 import { apiRequest, ApiError, userMessageOf, type ApiSession } from '../../services/api';
@@ -113,7 +114,7 @@ function ProjectBudgetForm({ endpoint, projectId, session, available, onSaved, o
       if (mode === 'create' && (!name.trim() || !/^(?:0|[1-9]\d{0,15})(?:\.\d{1,2})?$/.test(amount) || !/[1-9]/.test(amount))) { setError('예산 이름과 0보다 큰 금액을 소수점 두 자리 이내로 입력하세요.'); return; }
       const budget = available.find(row => row.id === selected);
       if (mode === 'associate' && !budget) { setError('연결할 예산을 선택하세요.'); return; }
-      pending.current = { key: crypto.randomUUID(), route: mode === 'create' ? `${endpoint}/budgets` : `${endpoint}/budgets/${encodeURIComponent(selected)}/associate`, body: mode === 'create' ? { name: name.trim(), amount, currency: 'KRW' } : { expected_version: budget!.version } };
+      pending.current = { key: createRequestKey(), route: mode === 'create' ? `${endpoint}/budgets` : `${endpoint}/budgets/${encodeURIComponent(selected)}/associate`, body: mode === 'create' ? { name: name.trim(), amount, currency: 'KRW' } : { expected_version: budget!.version } };
     }
     const request = pending.current, controller = scope.current; setSaving(true);
     try { z.object({ id: z.string().min(1), project_id: z.literal(projectId), version: z.number().int().positive() }).parse(await apiRequest(request.route, { session, signal: controller.signal, method: 'POST', body: request.body, headers: { 'Idempotency-Key': request.key } })); if (!controller.signal.aborted) onSaved(); }

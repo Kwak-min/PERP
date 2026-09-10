@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createRequestKey } from '../../services/requestKey';
 
 import { apiRequest, userMessageOf, type ApiSession } from "../../services/api";
 import { useModalFocus } from "../../hooks/useModalFocus";
@@ -21,7 +22,7 @@ type Props = Readonly<{
 export function CreateFormModal({ entityLabel, config, session, onClose, onCreated, method = "POST", initialValues, versionField }: Props) {
   const firstRef = useRef<HTMLInputElement>(null);
   // Keep the same request key after a timeout/error, including changed payload conflicts.
-  const requestKey = useRef(crypto.randomUUID());
+  const requestKey = useRef(createRequestKey());
   const isEdit = method === "PATCH";
   const documentTarget = isEdit ? /^\/pg\/records\/documents\/([^/]+)$/.exec(config.endpoint)?.[1] : undefined;
   const [values, setValues] = useState<Record<string, string>>(initialValues ?? {});

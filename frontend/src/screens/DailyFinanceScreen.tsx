@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createRequestKey } from '../services/requestKey';
 import { z } from 'zod';
 import type { ScreenDefinition } from '../routes/catalog';
 import { useSession } from '../store/session';
@@ -123,7 +124,7 @@ function ApprovalRow({ row, canDecide, session, refresh }: Readonly<{ row: Appro
 function PaymentPanel({ id, session, canWrite, refresh, close }: Readonly<{ id: string; session: ApiSession; canWrite: boolean; refresh: () => void; close: () => void }>) {
   const [history, setHistory] = useState<z.infer<typeof historySchema> | null>(null);
   const [amount, setAmount] = useState(''); const [error, setError] = useState<string | null>(null); const [saving, setSaving] = useState(false);
-  const [revision, setRevision] = useState(0); const key = useRef(crypto.randomUUID());
+  const [revision, setRevision] = useState(0); const key = useRef(createRequestKey());
   useEffect(() => {
     const controller = new AbortController();
     apiRequest(`/pg/finance/dues/${id}/payments`, { session, signal: controller.signal }).then(payload => {
@@ -136,10 +137,10 @@ function PaymentPanel({ id, session, canWrite, refresh, close }: Readonly<{ id: 
     setSaving(true); setError(null);
     try {
       await apiRequest(`/pg/finance/dues/${id}/payments`, { session, method: 'POST', headers: { 'Idempotency-Key': key.current }, body: { amount, expected_version: history.version, method: 'manual' } });
-      key.current = crypto.randomUUID(); setAmount(''); setRevision(n => n + 1); refresh();
+      key.current = createRequestKey(); setAmount(''); setRevision(n => n + 1); refresh();
     } catch (caught: unknown) {
       setError(userMessageOf(caught));
-      if (caught instanceof ApiError && caught.code === 'VERSION_CONFLICT') { key.current = crypto.randomUUID(); setRevision(n => n + 1); refresh(); }
+      if (caught instanceof ApiError && caught.code === 'VERSION_CONFLICT') { key.current = createRequestKey(); setRevision(n => n + 1); refresh(); }
     } finally { setSaving(false); }
   }
   return <section className="daily-finance__payments" data-payment-panel aria-label="납부 이력">

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createRequestKey } from '../../services/requestKey';
 import { z } from 'zod';
 import { ApiError, apiBlob, apiRequest, userMessageOf, type ApiSession } from '../../services/api';
 import { Button } from '../../components/ui/Button';
@@ -40,7 +41,7 @@ export function ExpenseDetail({ id, session, canWrite, onClose, onChanged }: Rea
     if (!pending.current) {
       const tokens = slots.flatMap(slot => slot.upload ? [slot.upload.token] : []);
       if (!tokens.length || slots.some(slot => slot.state !== 'ready')) return;
-      pending.current = { key: crypto.randomUUID(), body: { expected_version: detail.receiptToken, receipt_tokens: tokens } };
+      pending.current = { key: createRequestKey(), body: { expected_version: detail.receiptToken, receipt_tokens: tokens } };
     }
     const request = pending.current, controller = scope.current;
     setSaving(true); setError(null); setMessage(null);

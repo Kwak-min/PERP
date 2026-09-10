@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createRequestKey } from '../../services/requestKey';
 import { z } from 'zod';
 import { ApiError, apiCsvUpload, apiRequest, userMessageOf, type ApiSession } from '../../services/api';
 import { Button } from '../../components/ui/Button';
@@ -134,7 +135,7 @@ export function ExpenseImportPanel({ session, onClose, onCompleted }: Props) {
   async function commit() {
     if (busy || (!frozen.current && !canCommit)) return;
     const recovering = Boolean(frozen.current);
-    if (!frozen.current && job) frozen.current = Object.freeze({ jobId: job.job_id, key: crypto.randomUUID(), body: Object.freeze({}) });
+    if (!frozen.current && job) frozen.current = Object.freeze({ jobId: job.job_id, key: createRequestKey(), body: Object.freeze({}) });
     const request = frozen.current;
     if (!request) return;
     setBusy(true); setError(null);

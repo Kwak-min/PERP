@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { browserFixtureOrigin, routeFixture, fixtureFetch, assertFixtureSecurity, insecureOriginRequested } from './insecure-origin.mjs';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
@@ -14,7 +15,7 @@ import { createOwnerOrg } from '../../backend/tests/http.js';
 import { startDailyNativePostgres } from '../../backend/tests/daily-native-fixture.js';
 
 assert.equal(process.env.DEADLINE_ISOLATED, '1');
-const root = fileURLToPath(new URL('../../', import.meta.url)), evidence = path.join(root, '.omo/project-money/browser');
+const root = fileURLToPath(new URL('../../', import.meta.url)), evidence = path.join(root, insecureOriginRequested ? `.omo/project-actions/request-key-adoption/project-money/${process.env.DEADLINE_RUN_ID}` : '.omo/project-money/browser');
 await mkdir(evidence, { recursive: true });
 const result = { passed: false, cases: [], screenshots: [], pageErrors: [] };
 let native, server, vite, browserServer, browser, closeDb, closePgPool;
@@ -28,8 +29,8 @@ try {
   server = createServer(createApp()); const ready = once(server, 'listening', { signal: AbortSignal.timeout(10000) }); server.listen(0, '127.0.0.1'); await ready;
   const base = `http://127.0.0.1:${server.address().port}`;
   vite = await preview({ configFile: false, root: path.join(root, 'frontend'), envDir: process.env.DEADLINE_TEMP_ROOT, preview: { host: '127.0.0.1', port: 0, proxy: { '/api': base } } });
-  const origin = `http://127.0.0.1:${vite.httpServer.address().port}`;
-  browserServer = await chromium.launchServer({ channel: 'chrome', headless: false, args: ['--disable-background-networking', '--disable-component-update', '--disable-sync'] });
+  const origin = browserFixtureOrigin(vite.httpServer.address().port);
+  browserServer = await chromium.launchServer({ channel: 'chrome', headless: insecureOriginRequested, args: ['--disable-background-networking', '--disable-component-update', '--disable-sync'] });
   browser = await chromium.connect(browserServer.wsEndpoint()); result.chrome = browser.version();
   for (const pg of [false, true]) {
     const prefix = pg ? '/pg' : '';
@@ -50,7 +51,7 @@ try {
       const project = await request(actor, '/projects', { name: `프로젝트 ${pg ? 'PG' : 'SQLite'} ${width}` });
       const otherProject = width === 375 ? await request(actor, '/projects', { name: '다른 프로젝트로 옮기지 않음' }) : null;
       const context = await browser.newContext({ viewport: { width, height: 1000 }, timezoneId: 'Asia/Seoul', reducedMotion: 'reduce', serviceWorkers: 'block' });
-      await context.route('**/*', route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
+      await routeFixture(context, origin);
       await context.addInitScript(session => localStorage.setItem('orbitflow.session.v1', JSON.stringify(session)), { ...actor, name: '프로젝트 재무 검증', email: 'money-browser@example.invalid', mustChangePassword: false, organizations: [{ org_id: actor.orgId, org_name: '프로젝트 재무', org_type: pg ? 'perp_db' : 'custom', roles: ['owner'] }] });
       const page = await context.newPage(); page.setDefaultTimeout(15000); page.on('pageerror', error => result.pageErrors.push(error.message));
       if (width === 375) {
@@ -68,6 +69,7 @@ try {
       const moneyRoute = `/projects/${project.id}/money`, routePath = prefix + moneyRoute;
       const summaryResponse = page.waitForResponse(response => new URL(response.url()).pathname.endsWith(routePath) && response.request().method() === 'GET');
       await page.goto(`${origin}/projects/${project.id}`, { waitUntil: 'domcontentloaded' });
+      result.browserSecurity ??= []; result.browserSecurity.push(await assertFixtureSecurity(page));
       assert.equal((await summaryResponse).status(), 200);
       const panel = page.locator('[data-project-money]'); await expect(panel.locator('[data-money-empty]')).toBeVisible();
       if (width === 375) {
@@ -95,7 +97,7 @@ try {
       if (width === 375) {
         await page.route('**/api/v1' + prefix + '/finance/expenses', async route => {
           expenseAttempts.push({ key: route.request().headers()['idempotency-key'], body: route.request().postDataJSON() });
-          const response = await route.fetch(); assert.equal(response.status(), 201);
+          const response = await fixtureFetch(route); assert.equal(response.status(), 201);
           if (expenseAttempts.length === 1) await route.fulfill({ status: 201, contentType: 'application/json', body: '{' }); else await route.fulfill({ response });
         });
         const uncertain = dom(page, '[data-expense-form][data-money-state=uncertain]');
@@ -115,7 +117,7 @@ try {
       if (width === 375) {
         await page.route('**/api/v1' + prefix + '/finance/incomes', async route => {
           attempts.push({ key: route.request().headers()['idempotency-key'], body: route.request().postDataJSON() });
-          const response = await route.fetch(); assert.equal(response.status(), 201); const payload = await response.json();
+          const response = await fixtureFetch(route); assert.equal(response.status(), 201); const payload = await response.json();
           if (attempts.length === 1) await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ ...payload, project_id: 'wrong-project' }) });
           else await route.fulfill({ response });
         });

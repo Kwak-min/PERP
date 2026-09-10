@@ -12,14 +12,16 @@ import { createOwnerOrg } from '../../backend/tests/http.js';
 import { startDailyNativePostgres } from '../../backend/tests/daily-native-fixture.js';
 import { dom, downloadedBytes } from './deadline-expense-actions.mjs';
 import { recoverMoneyEntry, switchMoneySession, assertMoneyScopeIsolation, moneyPendingKeys, assertMoneyLogout } from './money-retry-actions.mjs';
+import { browserFixtureOrigin, routeFixture, fixtureFetch, assertFixtureSecurity, insecureOriginRequested } from './insecure-origin.mjs';
+import { receiptRetry } from './request-key-receipt-retry.mjs';
 
 assert.equal(process.env.DEADLINE_ISOLATED, '1');
-const root = fileURLToPath(new URL('../../', import.meta.url)), evidence = path.join(root, '.omo/evidence/money-retry' + (process.argv[2] ? '-' + process.argv[2] : ''));
+const root = fileURLToPath(new URL('../../', import.meta.url)), evidence = path.join(root, insecureOriginRequested ? `.omo/project-actions/request-key-adoption/money/${process.env.DEADLINE_RUN_ID}` : '.omo/evidence/money-retry' + (process.argv[2] ? '-' + process.argv[2] : ''));
 await mkdir(evidence, { recursive: true });
 process.env.ORBITFLOW_UPLOAD_DIR = path.join(process.env.DEADLINE_TEMP_ROOT, 'first-money-browser-receipts');
 const native = await startDailyNativePostgres();
-let server, vite, browserServer, browser, closeDb, closePgPool;
-const result = { status: 'running', cases: [], screenshots: [], pageErrors: [] };
+let server, vite, browserServer, browser, closeDb, closePgPool, failurePage, ledgerProbe;
+const result = { status: 'running', cases: [], screenshots: [], pageErrors: [], browserSecurity: [], moneyPosts: [] };
 try {
   // 전체 앱 셸이 조회하는 부서 접근 테이블도 격리 클러스터에 기존 DDL로 준비한다.
   await native.pool.query(await readFile(new URL('../../db/perp_additions_v8.sql', import.meta.url), 'utf8'));
@@ -31,8 +33,8 @@ try {
   const listening = once(server, 'listening', { signal: AbortSignal.timeout(10000) }); server.listen(0, '127.0.0.1'); await listening;
   const base = `http://127.0.0.1:${server.address().port}`;
   vite = await preview({ configFile: false, root: path.join(root, 'frontend'), envDir: process.env.DEADLINE_TEMP_ROOT, preview: { host: '127.0.0.1', port: 0, proxy: { '/api': base } } });
-  const origin = `http://127.0.0.1:${vite.httpServer.address().port}`;
-  browserServer = await chromium.launchServer({ channel: 'chrome', headless: false, args: ['--disable-background-networking', '--disable-component-update', '--disable-sync'] });
+  const origin = browserFixtureOrigin(vite.httpServer.address().port);
+  browserServer = await chromium.launchServer({ channel: 'chrome', headless: insecureOriginRequested, args: ['--disable-background-networking', '--disable-component-update', '--disable-sync'] });
   browser = await chromium.connect(browserServer.wsEndpoint()); result.chrome = browser.version(); result.chromePid = browserServer.process().pid;
   for (const pg of [false, true]) for (const width of [1280, 375]) {
     const prefix = pg ? '/pg' : '', apiPrefix = '/api/v1' + prefix + '/finance';
@@ -48,7 +50,7 @@ try {
     } else actor = await createOwnerOrg(base + '/api/v1', ['finance']);
     assert.equal((await request(actor, '/finance/accounts')).items.length, 0);
     const context = await browser.newContext({ viewport: { width, height: 900 }, timezoneId: 'Asia/Seoul', reducedMotion: 'reduce', serviceWorkers: 'block' });
-    await context.route('**/*', route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
+    await routeFixture(context, origin);
     const me = await request(actor, '/auth/me');
     const browserSession = { ...actor, name: '검증 관리자', email: pg ? me.user.email : me.email, mustChangePassword: false, organizations: [{ org_id: actor.orgId, org_name: '처음 돈 관리', org_type: pg ? 'perp_db' : 'custom', roles: ['owner'] }] };
     const otherSignup = await request(null, '/auth/signup', { name: '다른 계정', email: `${randomUUID()}@example.invalid`, password: 'password-1234' });
@@ -64,7 +66,10 @@ try {
     await request(otherSpaceSession, '/finance/setup', {});
     const otherAccountSession = { ...browserSession, token: pg ? otherSignup.token : otherSignup.access_token, email: otherSignup.user.email };
     const page = await context.newPage(); page.setDefaultTimeout(15000); page.on('pageerror', error => result.pageErrors.push(error.message));
+    failurePage = page; ledgerProbe = () => request(actor, '/finance/transactions');
+    page.on('request', item => { if (item.method() === 'POST' && /\/(incomes|expenses)$/.test(new URL(item.url()).pathname)) result.moneyPosts.push({ pg, width, path: new URL(item.url()).pathname, key: item.headers()['idempotency-key'], body: item.postDataJSON() }); });
     await page.goto(origin + '/login', { waitUntil: 'domcontentloaded' });
+    result.browserSecurity.push(await assertFixtureSecurity(page));
     await switchMoneySession(page, origin, browserSession);
     const capture = async state => {
       await page.evaluate(() => document.fonts.ready);
@@ -86,7 +91,7 @@ try {
     const attempts = []; let committed;
     await page.route('**' + apiPrefix + '/incomes', async route => {
       attempts.push({ key: route.request().headers()['idempotency-key'], body: route.request().postDataJSON() });
-      const response = await route.fetch(); assert.equal(response.status(), 201); committed = await response.json();
+      const response = await fixtureFetch(route); assert.equal(response.status(), 201); committed = await response.json();
       if (attempts.length === 1) await route.fulfill({ status: 201, contentType: 'application/json', body: '{"id":' });
       else if (attempts.length === 2) await route.fulfill({ status: 400, contentType: 'text/html', body: '<h1>Unknown upstream response</h1>' });
       else if (attempts.length === 3) await route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: { code: 'PERMISSION_DENIED', message: 'Current request denied', details: {}, request_id: 'retry-test' } }) });
@@ -120,7 +125,7 @@ try {
     const expenseAttempts = [];
     await page.route('**' + apiPrefix + '/expenses', async route => {
       expenseAttempts.push({ key: route.request().headers()['idempotency-key'], body: route.request().postDataJSON() });
-      const response = await route.fetch(); assert.equal(response.status(), 201); committed = await response.json();
+      const response = await fixtureFetch(route); assert.equal(response.status(), 201); committed = await response.json();
       if (expenseAttempts.length === 1) await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ id: committed.id, status: 'confirmed' }) }); else await route.fulfill({ response });
     });
     const expenseUncertain = dom(page, '[data-expense-form][data-money-state="uncertain"]'); await expenseForm.locator('button[type="submit"]').click(); await expenseUncertain;
@@ -138,15 +143,22 @@ try {
     const download = page.waitForEvent('download', { timeout: 10000 }); await page.locator('[data-receipt-download]').click(); assert.deepEqual(await downloadedBytes(await download), png);
     const csvDownload = page.waitForEvent('download', { timeout: 10000 }); await page.getByRole('button', { name: '필터 결과 전체 CSV 내보내기', exact: true }).click(); const csv = (await downloadedBytes(await csvDownload)).toString('utf8'); assert.match(csv, /FIRST_INCOME/); assert.match(csv, /FIRST_EXPENSE/); assert.match(csv, /100\.01/); assert.match(csv, /40\.02/);
     if (pg) { await page.locator('[data-expense-detail] details summary').click(); assert.equal(await page.locator('[data-expense-detail] tbody tr').count(), 2); }
+    const receiptRecovery = insecureOriginRequested ? await receiptRetry({ page, apiPrefix, actor, request, id: savedExpenseId, capture }) : null;
     await capture('reload-ledger');
     const entries = (await request(actor, '/finance/transactions')).items; assert.equal(entries.length, 2);
     const audit = pg ? (await native.pool.query('SELECT resource,resource_id FROM accounting.record_events WHERE company_id=$1 ORDER BY id', [actor.orgId.slice(3)])).rows : database.db().prepare("SELECT action,resource_id FROM audit_event WHERE resource_id IN (?,?,?) ORDER BY rowid").all(actor.orgId, savedIncomeId, savedExpenseId);
     await assertMoneyLogout({ page, origin, session: browserSession, incomeId, apiPrefix, request, pg });
-    result.cases.push({ pg, width, entries, audit, sameIncomeKey: attempts.every(item => item.key === attempts[0].key), sameExpenseKey: expenseAttempts.every(item => item.key === expenseAttempts[0].key), reloadNavigationRestored: true, otherAccountAndSpaceExcluded: true, confirmedAndLogoutCleared: true, net: '59.99' });
+    result.cases.push({ pg, width, entries, audit, receiptRecovery, sameIncomeKey: attempts.every(item => item.key === attempts[0].key), sameExpenseKey: expenseAttempts.every(item => item.key === expenseAttempts[0].key), reloadNavigationRestored: true, otherAccountAndSpaceExcluded: true, confirmedAndLogoutCleared: true, net: '59.99' });
     await context.close();
   }
   assert.deepEqual(result.pageErrors, []); result.status = 'passed';
-} catch (error) { result.status = 'failed'; result.error = error.stack; throw error; }
+} catch (error) {
+  result.status = 'failed'; result.error = error.stack;
+  if (ledgerProbe) result.persistedAtFailure = (await ledgerProbe()).items;
+  if (failurePage && !failurePage.isClosed()) await failurePage.screenshot({ path: path.join(evidence, 'failure.png'), fullPage: true });
+  console.error(JSON.stringify({ pageErrors: result.pageErrors, moneyPosts: result.moneyPosts, persistedAtFailure: result.persistedAtFailure }));
+  throw error;
+}
 finally {
   await browser?.close(); await browserServer?.close();
   if (vite) await new Promise((resolve, reject) => { vite.httpServer.close(error => error ? reject(error) : resolve()); vite.httpServer.closeAllConnections(); });
