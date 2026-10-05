@@ -44,7 +44,6 @@ Pretendard → Noto Sans KR → system-ui.
 | `SectionCard` | 제목 + 부제 + 우상단 액션 슬롯 + 본문 | — |
 | `ListRow` | 좌측 마크 + 2줄(제목/부제) + 우측 메타·액션 | hover |
 | `DataTable` | 낮은 행 높이, 헤더 대문자, 가로 스크롤 | 빈 상태 |
-| `MemberListModal` | 구성원 전체 목록과 즉시 검색 | 로딩/빈 결과/오류/모바일/키보드 닫기 |
 | `OrgTreeEditor` | 상하 연결선 + 담당자·직급·부서 + 권한 배지 + 하위 직급 추가 | 편집/저장/취소/비활성 |
 
 ## 4. 레이아웃

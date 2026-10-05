@@ -580,11 +580,11 @@ export const fixtures: Readonly<Record<string, ScreenFixture>> = {
       { label: "연차 잔여", value: "11.5", unit: "일", delta: "부여 15일", trend: "flat", foot: UPDATED },
       { label: "승인 대기", value: "2", unit: "건", delta: "SLA 1일", trend: "down", foot: UPDATED },
       { label: "이번 달 사용", value: "3", unit: "일", delta: "+1", trend: "up", foot: UPDATED },
-      { label: "업무대행 지정", value: "2", unit: "건", delta: "확인 완료", trend: "up", foot: UPDATED },
+      { label: "대직 지정", value: "2", unit: "건", delta: "확인 완료", trend: "up", foot: UPDATED },
     ],
     filters: ["전체", "대기", "승인", "반려"],
     table: {
-      columns: ["신청자", "유형", "시작", "종료", "일수", "업무대행", "상태"],
+      columns: ["신청자", "유형", "시작", "종료", "일수", "대직자", "상태"],
       rows: [
         ["최회원", "연차", "2026-03-05", "2026-03-07", "3", "정하나", "승인"],
         ["정하나", "연차", "2026-03-12", "2026-03-12", "1", "최회원", "대기"],
