@@ -108,7 +108,108 @@ async function main() {
   // 4) 데모 업무 데이터 (프로젝트 + 업무) — API 사용, 멱등(이름 기준)
   await seedWork(token, orgId);
 
+  // 5) 데모 재무 데이터 (계정 + 거래 + 예산 + 청구)
+  await seedFinance(token, orgId);
+
   console.log("비밀번호 — 오너(김경준/a@naver.com): aaaaaaaa · 나머지 데모 계정: demo1234");
+}
+
+const ACCOUNTS = [
+  { code: "4200", name: "후원금", kind: "income" },
+  { code: "5200", name: "물품·비품", kind: "expense" },
+  { code: "5300", name: "인쇄·홍보", kind: "expense" },
+  { code: "5400", name: "다과·식비", kind: "expense" },
+];
+const TXS = [
+  { kind: "income", account: "학생회비", amount: 1_200_000, occurred_on: "2026-09-12", memo: "9월 정기 회비", confirm: true },
+  { kind: "income", account: "후원금", amount: 500_000, occurred_on: "2026-09-06", memo: "동문회 학술제 후원", confirm: true },
+  { kind: "expense", account: "행사비", amount: 450_000, occurred_on: "2026-09-10", memo: "정기총회 대관료", confirm: true },
+  { kind: "expense", account: "인쇄·홍보", amount: 180_000, occurred_on: "2026-09-08", memo: "학술제 포스터 인쇄", confirm: true },
+  { kind: "expense", account: "다과·식비", amount: 62_000, occurred_on: "2026-09-05", memo: "회의 다과", confirm: false },
+  { kind: "expense", account: "물품·비품", amount: 88_000, occurred_on: "2026-09-03", memo: "행사 소모품", confirm: false },
+];
+const BUDGETS = [
+  { name: "행사비", account: "행사비", amount: 5_000_000 },
+  { name: "인쇄·홍보", account: "인쇄·홍보", amount: 1_500_000 },
+  { name: "다과·식비", account: "다과·식비", amount: 1_200_000 },
+];
+
+async function seedFinance(token, orgId) {
+  const opt = (body, method = "POST") => ({ method, token, orgId, body });
+  // 계정 확보
+  let accounts = (await api("/finance/accounts", { token, orgId })).items ?? [];
+  const accByName = new Map(accounts.map((a) => [a.name, a.id]));
+  let newA = 0;
+  for (const a of ACCOUNTS) {
+    if (accByName.has(a.name)) continue;
+    const created = await api("/finance/accounts", opt(a));
+    accByName.set(a.name, created.id ?? created.account?.id);
+    newA += 1;
+  }
+  // 재조회(id 확보)
+  accounts = (await api("/finance/accounts", { token, orgId })).items ?? [];
+  for (const a of accounts) accByName.set(a.name, a.id);
+
+  // 거래 (+확정)
+  const existingTx = (await api("/finance/transactions", { token, orgId })).items ?? [];
+  const txMemos = new Set(existingTx.map((t) => t.memo));
+  let newT = 0;
+  for (const t of TXS) {
+    if (txMemos.has(t.memo)) continue;
+    const created = await api(
+      "/finance/transactions",
+      opt({
+        kind: t.kind,
+        amount_minor: t.amount,
+        occurred_on: t.occurred_on,
+        account_id: accByName.get(t.account) ?? null,
+        memo: t.memo,
+      }),
+    );
+    const txId = created.id ?? created.transaction?.id;
+    if (t.confirm && txId) {
+      await api(`/finance/transactions/${txId}/confirm`, opt({}));
+    }
+    newT += 1;
+  }
+
+  // 예산
+  const existingB = (await api("/finance/budgets", { token, orgId })).items ?? [];
+  const bNames = new Set(existingB.map((b) => b.name));
+  let newB = 0;
+  for (const b of BUDGETS) {
+    if (bNames.has(b.name)) continue;
+    await api(
+      "/finance/budgets",
+      opt({ name: b.name, amount_minor: b.amount, account_id: accByName.get(b.account) ?? null }),
+    );
+    newB += 1;
+  }
+
+  // 지출 거래를 같은 이름(계정=예산) 예산에 연결 → 집행률 반영
+  const accById = new Map(accounts.map((a) => [a.id, a.name]));
+  const budgets = (await api("/finance/budgets", { token, orgId })).items ?? [];
+  const budgetByName = new Map(budgets.map((b) => [b.name, b]));
+  const txs = (await api("/finance/transactions", { token, orgId })).items ?? [];
+  let linked = 0;
+  for (const t of txs) {
+    if (t.kind !== "expense" || t.budget_id) continue;
+    const budget = budgetByName.get(accById.get(t.account_id));
+    if (!budget) continue;
+    try {
+      await api(
+        `/finance/transactions/${t.id}`,
+        opt({ budget_id: budget.id, version: t.version }, "PATCH"),
+      );
+      linked += 1;
+    } catch {
+      /* 확정 거래는 수정 불가일 수 있음 — 무시 */
+    }
+  }
+
+  console.log(
+    `demo finance ensured: accounts +${newA}, transactions +${newT}, budgets +${newB}, linked ${linked}`,
+  );
 }
 
 const PROJECTS = [

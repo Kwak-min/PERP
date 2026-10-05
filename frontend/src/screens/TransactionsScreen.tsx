@@ -1,43 +1,74 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Icon } from "../components/ui/Icon";
-import { demoEntries, type DemoEntry } from "./mockup/demo";
 import { Empty, PageHead, Pill, Tabs, won } from "./mockup/lib";
+import { useApi } from "./mockup/useApi";
 
-const sum = (list: DemoEntry[]) => list.reduce((a, e) => a + e.amount, 0);
+type Tx = {
+  id: string;
+  kind: "income" | "expense";
+  account_id: string | null;
+  amount_minor: number;
+  occurred_on: string;
+  memo: string;
+  status: string;
+  evidence_count: number;
+  project_id: string | null;
+  ai_generated?: boolean;
+};
+type Account = { id: string; code: string; name: string; kind: string };
 
-// FIN-002 거래·전표 — 목업 transactions 이식
+// FIN-002 거래·전표 — 실제 백엔드(/finance/transactions) 연동
 export function TransactionsScreen() {
   const [tab, setTab] = useState("list");
   const [st, setSt] = useState("");
   const [type, setType] = useState("");
   const [q, setQ] = useState("");
 
-  const list = demoEntries
+  const txRes = useApi<{ items: Tx[] }>("/finance/transactions");
+  const accRes = useApi<{ items: Account[] }>("/finance/accounts");
+
+  const accById = useMemo(() => {
+    const m = new Map((accRes.data?.items ?? []).map((a) => [a.id, a]));
+    return (id: string | null) => (id ? m.get(id) : undefined);
+  }, [accRes.data]);
+
+  const all = txRes.data?.items ?? [];
+  const list = all
     .filter(
       (e) =>
         (!st || e.status === st) &&
-        (!type || e.type === type) &&
-        (!q || `${e.vendor} ${e.memo}`.includes(q)),
+        (!type || e.kind === type) &&
+        (!q || e.memo.includes(q)),
     )
-    .sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+    .sort((a, b) => b.occurred_on.localeCompare(a.occurred_on));
 
   const conf = list.filter((e) => e.status === "confirmed");
-  const txInc = sum(conf.filter((e) => e.type === "income"));
-  const txExp = sum(conf.filter((e) => e.type === "expense"));
+  const txInc = conf.filter((e) => e.kind === "income").reduce((a, e) => a + e.amount_minor, 0);
+  const txExp = conf.filter((e) => e.kind === "expense").reduce((a, e) => a + e.amount_minor, 0);
   const drafts = list.filter((e) => e.status === "draft");
 
-  // 원장: 계정별 집계
-  const byAcc = new Map<string, { code: string; type: "income" | "expense"; es: DemoEntry[] }>();
-  for (const e of conf) {
-    const cur = byAcc.get(e.account) ?? { code: e.accountCode, type: e.type, es: [] };
-    cur.es.push(e);
-    byAcc.set(e.account, cur);
-  }
-  const ledger = [...byAcc.entries()].map(([name, v]) => ({ name, ...v }));
-  const ledInc = sum(ledger.filter((x) => x.type === "income").flatMap((x) => x.es));
-  const ledExp = sum(ledger.filter((x) => x.type === "expense").flatMap((x) => x.es));
+  // 원장: 계정별 집계(확정)
+  const ledger = useMemo(() => {
+    const map = new Map<string, { account: Account; es: Tx[] }>();
+    for (const e of conf) {
+      const acc = accById(e.account_id);
+      if (!acc) continue;
+      const cur = map.get(acc.id) ?? { account: acc, es: [] };
+      cur.es.push(e);
+      map.set(acc.id, cur);
+    }
+    return [...map.values()];
+  }, [conf, accById]);
+  const ledInc = ledger
+    .filter((x) => x.account.kind === "income")
+    .reduce((a, x) => a + x.es.reduce((s, e) => s + e.amount_minor, 0), 0);
+  const ledExp = ledger
+    .filter((x) => x.account.kind === "expense")
+    .reduce((a, x) => a + x.es.reduce((s, e) => s + e.amount_minor, 0), 0);
   const ok = txInc - txExp === ledInc - ledExp;
+
+  const loading = txRes.loading || accRes.loading;
 
   return (
     <>
@@ -45,7 +76,7 @@ export function TransactionsScreen() {
         title="거래·전표"
         id="FIN-002"
         fr="SFR-010"
-        desc="초안(draft) → 확정(confirmed). 확정 전표만 원장·보고서에 반영됩니다. AI는 초안까지만 만들 수 있습니다."
+        desc="초안(draft) → 확정(confirmed). 확정 전표만 원장·보고서에 반영됩니다."
         actions={
           <>
             <button type="button" className="btn btn-primary">
@@ -80,38 +111,40 @@ export function TransactionsScreen() {
         </select>
         <input
           type="search"
-          placeholder="거래처·적요 검색"
+          placeholder="적요 검색"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           aria-label="검색"
         />
-        {drafts.length > 0 && (
-          <>
-            <span className="grow" />
-            <button type="button" className="btn btn-sm">
-              초안 {drafts.length}건 일괄 확정
-            </button>
-          </>
-        )}
       </div>
 
-      <div className={`callout ${ok ? "ok" : "bad"}`} style={{ marginBottom: 12 }}>
-        <Icon name={ok ? "check" : "alert"} />
-        <div className="recon">
-          <b>{ok ? "합계 일치" : "합계 불일치"}</b>
-          <span>
-            거래 합계 <b>{won(txInc - txExp)}</b>
-          </span>
-          <span>
-            = 원장 합계 <b>{won(ledInc - ledExp)}</b>
-          </span>
-          <span className="muted">
-            초안 {drafts.length}건({won(sum(drafts))})은 제외
-          </span>
+      {!loading && (
+        <div className={`callout ${ok ? "ok" : "bad"}`} style={{ marginBottom: 12 }}>
+          <Icon name={ok ? "check" : "alert"} />
+          <div className="recon">
+            <b>{ok ? "합계 일치" : "합계 불일치"}</b>
+            <span>
+              거래 합계 <b>{won(txInc - txExp)}</b>
+            </span>
+            <span>
+              = 원장 합계 <b>{won(ledInc - ledExp)}</b>
+            </span>
+            <span className="muted">
+              초안 {drafts.length}건({won(drafts.reduce((a, e) => a + e.amount_minor, 0))})은 제외
+            </span>
+          </div>
         </div>
-      </div>
+      )}
 
-      {tab === "ledger" ? (
+      {loading ? (
+        <div className="panel">
+          <Empty title="불러오는 중…" icon="clock" />
+        </div>
+      ) : txRes.error ? (
+        <div className="panel">
+          <Empty title="전표를 불러오지 못했습니다" desc={txRes.error} icon="alert" />
+        </div>
+      ) : tab === "ledger" ? (
         <div className="panel tbl-wrap">
           <table className="tbl">
             <thead>
@@ -125,16 +158,16 @@ export function TransactionsScreen() {
             </thead>
             <tbody>
               {ledger.map((x) => (
-                <tr key={x.name}>
-                  <td className="mono">{x.code}</td>
-                  <td className="t-title">{x.name}</td>
+                <tr key={x.account.id}>
+                  <td className="mono">{x.account.code}</td>
+                  <td className="t-title">{x.account.name}</td>
                   <td>
-                    <Pill tone={x.type === "income" ? "info" : "muted"}>
-                      {x.type === "income" ? "수입" : "지출"}
+                    <Pill tone={x.account.kind === "income" ? "info" : "muted"}>
+                      {x.account.kind === "income" ? "수입" : "지출"}
                     </Pill>
                   </td>
                   <td className="num">{x.es.length}</td>
-                  <td className="num">{won(sum(x.es))}</td>
+                  <td className="num">{won(x.es.reduce((s, e) => s + e.amount_minor, 0))}</td>
                 </tr>
               ))}
             </tbody>
@@ -156,38 +189,33 @@ export function TransactionsScreen() {
                 <th>일자</th>
                 <th>구분</th>
                 <th>계정</th>
-                <th>거래처 · 적요</th>
+                <th>적요</th>
                 <th className="num">금액</th>
                 <th>증빙</th>
                 <th>상태</th>
-                <th />
               </tr>
             </thead>
             <tbody>
               {list.length ? (
                 list.map((e) => (
                   <tr key={e.id} className={e.status === "draft" ? "is-draft" : ""}>
-                    <td className="nowrap tnum">{e.date}</td>
+                    <td className="nowrap tnum">{e.occurred_on}</td>
                     <td>
-                      <Pill tone={e.type === "income" ? "info" : "muted"}>
-                        {e.type === "income" ? "수입" : "지출"}
+                      <Pill tone={e.kind === "income" ? "info" : "muted"}>
+                        {e.kind === "income" ? "수입" : "지출"}
                       </Pill>
                     </td>
-                    <td className="nowrap">{e.account}</td>
+                    <td className="nowrap">{accById(e.account_id)?.name ?? "-"}</td>
                     <td>
-                      <span className="t-title">{e.vendor}</span>
-                      <span className="sub">
-                        {e.memo}
-                        {e.project ? ` · ${e.project}` : ""}
-                      </span>
+                      <span className="t-title">{e.memo || "-"}</span>
                     </td>
                     <td className="num b">
-                      {e.type === "expense" ? "−" : ""}
-                      {won(e.amount)}
+                      {e.kind === "expense" ? "−" : ""}
+                      {won(e.amount_minor)}
                     </td>
                     <td>
-                      {e.type === "expense" ? (
-                        e.receipt ? (
+                      {e.kind === "expense" ? (
+                        e.evidence_count > 0 ? (
                           <span className="pill muted">
                             <Icon name="clip" />
                             첨부
@@ -205,32 +233,19 @@ export function TransactionsScreen() {
                       ) : (
                         <Pill tone="warn">초안</Pill>
                       )}
-                      {e.ai && (
+                      {e.ai_generated && (
                         <>
                           {" "}
                           <Pill tone="ai">AI 초안</Pill>
                         </>
                       )}
                     </td>
-                    <td className="nowrap">
-                      {e.status === "draft" && (
-                        <button type="button" className="btn btn-xs btn-primary">
-                          확정
-                        </button>
-                      )}{" "}
-                      <button type="button" className="btn btn-xs">
-                        수정
-                      </button>
-                    </td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={8}>
-                    <Empty
-                      title="조건에 맞는 전표가 없습니다"
-                      desc="기간이나 상태 필터를 바꿔 보세요."
-                    />
+                  <td colSpan={7}>
+                    <Empty title="조건에 맞는 전표가 없습니다" />
                   </td>
                 </tr>
               )}
@@ -241,7 +256,7 @@ export function TransactionsScreen() {
                   확정 합계 · 수입 {won(txInc)} / 지출 {won(txExp)}
                 </td>
                 <td className="num">{won(txInc - txExp)}</td>
-                <td colSpan={3} />
+                <td colSpan={2} />
               </tr>
             </tfoot>
           </table>
