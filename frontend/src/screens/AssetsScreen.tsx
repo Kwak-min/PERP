@@ -1,29 +1,68 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Icon } from "../components/ui/Icon";
-import {
-  AST_TONE,
-  assetCategories,
-  assetStatuses,
-  demoAssets,
-} from "./mockup/demo";
 import { Empty, PageHead, Pill } from "./mockup/lib";
+import { useApi } from "./mockup/useApi";
 
-// AST-001 자산·재고 — 목업 assetsView() 이식
+type Asset = {
+  id: string;
+  asset_no: string;
+  name: string;
+  category: string;
+  quantity: number;
+  threshold: number;
+  status: string;
+  location: string | null;
+  custodian_id: string | null;
+  low_stock: boolean;
+};
+type Member = { user_id: string; name: string };
+
+const STATUS_LABEL: Record<string, string> = {
+  available: "사용가능",
+  loaned: "대여중",
+  in_use: "대여중",
+  repair: "수리중",
+  under_repair: "수리중",
+  damaged: "파손 보고",
+  lost: "분실",
+  disposed: "폐기",
+};
+const STATUS_TONE: Record<string, string> = {
+  available: "ok",
+  loaned: "info",
+  in_use: "info",
+  repair: "warn",
+  under_repair: "warn",
+  damaged: "bad",
+  lost: "bad",
+  disposed: "muted",
+};
+
+// AST-001 자산·재고 — 실제 백엔드(/assets) 연동
 export function AssetsScreen() {
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("");
   const [st, setSt] = useState("");
 
-  const list = demoAssets.filter(
+  const res = useApi<{ items: Asset[] }>("/assets");
+  const memberRes = useApi<{ items: Member[] }>("/members");
+  const custodian = useMemo(() => {
+    const m = new Map((memberRes.data?.items ?? []).map((x) => [x.user_id, x.name]));
+    return (id: string | null) => (id ? (m.get(id) ?? "-") : "-");
+  }, [memberRes.data]);
+
+  const assets = res.data?.items ?? [];
+  const categories = [...new Set(assets.map((a) => a.category))];
+  const statuses = [...new Set(assets.map((a) => a.status))];
+  const list = assets.filter(
     (a) =>
-      (a.status !== "폐기" || st === "폐기") &&
-      (!q || `${a.code} ${a.name} ${a.location}`.includes(q)) &&
+      (!q || `${a.asset_no} ${a.name} ${a.location ?? ""}`.includes(q)) &&
       (!cat || a.category === cat) &&
       (!st || a.status === st),
   );
-  const low = demoAssets.filter((a) => a.minQty && a.qty < a.minQty && a.status !== "폐기");
+  const low = assets.filter((a) => a.low_stock && a.status !== "disposed");
 
   return (
     <>
@@ -50,7 +89,7 @@ export function AssetsScreen() {
           <Icon name="alert" />
           <div>
             <b>재고 임계치 미만 {low.length}건</b> —{" "}
-            {low.map((a) => `${a.name} ${a.qty}/${a.minQty}`).join(", ")}
+            {low.map((a) => `${a.name} ${a.quantity}/${a.threshold}`).join(", ")}
           </div>
         </div>
       )}
@@ -64,7 +103,7 @@ export function AssetsScreen() {
         />
         <select value={cat} onChange={(e) => setCat(e.target.value)} aria-label="분류">
           <option value="">모든 분류</option>
-          {assetCategories.map((c) => (
+          {categories.map((c) => (
             <option key={c} value={c}>
               {c}
             </option>
@@ -72,9 +111,9 @@ export function AssetsScreen() {
         </select>
         <select value={st} onChange={(e) => setSt(e.target.value)} aria-label="상태">
           <option value="">모든 상태</option>
-          {assetStatuses.map((s) => (
+          {statuses.map((s) => (
             <option key={s} value={s}>
-              {s}
+              {STATUS_LABEL[s] ?? s}
             </option>
           ))}
         </select>
@@ -93,30 +132,41 @@ export function AssetsScreen() {
             </tr>
           </thead>
           <tbody>
-            {list.length ? (
-              list.map((a) => {
-                const lowQ = a.minQty && a.qty < a.minQty;
-                return (
-                  <tr key={a.id}>
-                    <td className="mono xs nowrap">{a.code}</td>
-                    <td>
-                      <Link className="t-title" to={`/assets/${a.id}`}>
-                        {a.name}
-                      </Link>
-                    </td>
-                    <td>{a.category}</td>
-                    <td className="muted">{a.location}</td>
-                    <td className="nowrap">{a.owner}</td>
-                    <td className={`num ${lowQ ? "ink-bad b" : ""}`}>
-                      {a.qty}
-                      {a.minQty && <span className="sub">최소 {a.minQty}</span>}
-                    </td>
-                    <td>
-                      <Pill tone={AST_TONE[a.status]}>{a.status}</Pill>
-                    </td>
-                  </tr>
-                );
-              })
+            {res.loading ? (
+              <tr>
+                <td colSpan={7}>
+                  <Empty title="불러오는 중…" icon="clock" />
+                </td>
+              </tr>
+            ) : res.error ? (
+              <tr>
+                <td colSpan={7}>
+                  <Empty title="자산을 불러오지 못했습니다" desc={res.error} icon="alert" />
+                </td>
+              </tr>
+            ) : list.length ? (
+              list.map((a) => (
+                <tr key={a.id}>
+                  <td className="mono xs nowrap">{a.asset_no}</td>
+                  <td>
+                    <Link className="t-title" to={`/assets/${a.id}`}>
+                      {a.name}
+                    </Link>
+                  </td>
+                  <td>{a.category}</td>
+                  <td className="muted">{a.location ?? "-"}</td>
+                  <td className="nowrap">{custodian(a.custodian_id)}</td>
+                  <td className={`num ${a.low_stock ? "ink-bad b" : ""}`}>
+                    {a.quantity}
+                    {a.threshold > 0 && <span className="sub">최소 {a.threshold}</span>}
+                  </td>
+                  <td>
+                    <Pill tone={STATUS_TONE[a.status] ?? "muted"}>
+                      {STATUS_LABEL[a.status] ?? a.status}
+                    </Pill>
+                  </td>
+                </tr>
+              ))
             ) : (
               <tr>
                 <td colSpan={7}>

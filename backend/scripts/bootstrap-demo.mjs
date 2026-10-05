@@ -111,7 +111,50 @@ async function main() {
   // 5) 데모 재무 데이터 (계정 + 거래 + 예산 + 청구)
   await seedFinance(token, orgId);
 
+  // 6) 데모 자산 + 일정
+  await seedAssets(token, orgId);
+  await seedCalendar(token, orgId);
+
   console.log("비밀번호 — 오너(김경준/a@naver.com): aaaaaaaa · 나머지 데모 계정: demo1234");
+}
+
+const ASSETS = [
+  { asset_no: "AST-0001", name: "무선 마이크", category: "음향장비", quantity: 1, threshold: 3, location: "동아리방 A" },
+  { asset_no: "AST-0002", name: "빔 프로젝터", category: "영상장비", quantity: 2, threshold: 0, location: "세미나실" },
+  { asset_no: "AST-0003", name: "접이식 테이블", category: "행사비품", quantity: 8, threshold: 0, location: "창고" },
+  { asset_no: "AST-0004", name: "노트북 (공용)", category: "전자기기", quantity: 1, threshold: 0, location: "운영국" },
+  { asset_no: "AST-0005", name: "A4 용지", category: "소모품", quantity: 5, threshold: 10, location: "운영국" },
+];
+
+async function seedAssets(token, orgId) {
+  const existing = (await api("/assets", { token, orgId })).items ?? [];
+  const nums = new Set(existing.map((a) => a.asset_no));
+  let newA = 0;
+  for (const a of ASSETS) {
+    if (nums.has(a.asset_no)) continue;
+    await api("/assets", { method: "POST", token, orgId, body: a });
+    newA += 1;
+  }
+  console.log(`demo assets ensured: +${newA}`);
+}
+
+const EVENTS = [
+  { title: "운영진 정기회의", calendar: "org", start_at: "2026-09-15T18:00:00", end_at: "2026-09-15T19:30:00", location: "동아리방 A" },
+  { title: "학술제 준비 미팅", calendar: "project", start_at: "2026-09-16T17:00:00", end_at: "2026-09-16T18:00:00", location: "세미나실" },
+  { title: "예산 심의", calendar: "org", start_at: "2026-09-18T16:00:00", end_at: "2026-09-18T17:00:00", location: "운영국" },
+  { title: "정기총회", calendar: "org", start_at: "2026-09-25T14:00:00", end_at: "2026-09-25T17:00:00", location: "대강당" },
+];
+
+async function seedCalendar(token, orgId) {
+  const existing = (await api("/calendar", { token, orgId })).items ?? [];
+  const titles = new Set(existing.map((e) => e.title));
+  let newE = 0;
+  for (const e of EVENTS) {
+    if (titles.has(e.title)) continue;
+    await api("/calendar", { method: "POST", token, orgId, body: e });
+    newE += 1;
+  }
+  console.log(`demo events ensured: +${newE}`);
 }
 
 const ACCOUNTS = [

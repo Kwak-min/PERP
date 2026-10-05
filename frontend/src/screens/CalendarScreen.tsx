@@ -1,8 +1,18 @@
 import { useState } from "react";
 
 import { Icon } from "../components/ui/Icon";
-import { demoEvents, type DemoEvent } from "./mockup/demo";
-import { Av, Empty, PageHead, fmtDate, todayStr } from "./mockup/lib";
+import { Empty, PageHead, fmtDate, todayStr } from "./mockup/lib";
+import { useApi } from "./mockup/useApi";
+
+type Scope = "org" | "project" | "personal";
+type Ev = {
+  id: string;
+  calendar: Scope;
+  title: string;
+  start_at: string;
+  end_at: string;
+  location: string | null;
+};
 
 const WD = ["일", "월", "화", "수", "목", "금", "토"];
 const SCOPE_LABEL: Record<string, string> = {
@@ -13,22 +23,24 @@ const SCOPE_LABEL: Record<string, string> = {
 
 const pad = (n: number) => String(n).padStart(2, "0");
 const hm = (iso: string) => iso.slice(11, 16);
-const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
-// CAL-001 통합 캘린더 — 목업 calendar 이식
+// CAL-001 통합 캘린더 — 실제 백엔드(/calendar) 연동
 export function CalendarScreen() {
   const [ym, setYm] = useState(todayStr.slice(0, 7));
   const [view, setView] = useState<"month" | "list">("month");
-  const [scopes, setScopes] = useState({ org: true, project: true, personal: true });
+  const [scopes, setScopes] = useState<Record<Scope, boolean>>({
+    org: true,
+    project: true,
+    personal: true,
+  });
 
-  const evs = demoEvents.filter((e) => scopes[e.scope]);
+  const res = useApi<{ items: Ev[] }>("/calendar");
+  const evs = (res.data?.items ?? []).filter((e) => scopes[e.calendar] ?? true);
+
   const [year, month] = ym.split("-").map(Number) as [number, number];
   const first = new Date(year, month - 1, 1);
   const startOff = first.getDay();
-  const cells = Array.from({ length: 42 }, (_, i) => {
-    const d = new Date(year, month - 1, 1 + i - startOff);
-    return d;
-  });
+  const cells = Array.from({ length: 42 }, (_, i) => new Date(year, month - 1, 1 + i - startOff));
 
   const shiftMonth = (delta: number) => {
     if (delta === 0) return setYm(todayStr.slice(0, 7));
@@ -85,11 +97,13 @@ export function CalendarScreen() {
             {SCOPE_LABEL[k]}
           </label>
         ))}
-        <span className="grow" />
-        <span className="muted xs">Google Calendar 미연결</span>
       </div>
 
-      {view === "month" ? (
+      {res.loading ? (
+        <div className="panel">
+          <Empty title="불러오는 중…" icon="clock" />
+        </div>
+      ) : view === "month" ? (
         <div className="cal">
           {WD.map((d) => (
             <div className="cal-h" key={d}>
@@ -97,21 +111,20 @@ export function CalendarScreen() {
             </div>
           ))}
           {cells.map((d, i) => {
-            const key = ymd(d);
+            const key = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
             const out = d.getMonth() + 1 !== month;
             const de = evs
-              .filter((e) => e.start.slice(0, 10) === key)
-              .sort((a, b) => a.start.localeCompare(b.start));
+              .filter((e) => e.start_at.slice(0, 10) === key)
+              .sort((a, b) => a.start_at.localeCompare(b.start_at));
             return (
               <div
                 className={`cal-d${out ? " out" : ""}${key === todayStr ? " today" : ""}`}
                 key={i}
-                aria-label={`${key} 일정 ${de.length}건`}
               >
                 <span className="cal-n">{d.getDate()}</span>
                 {de.slice(0, 3).map((e) => (
-                  <button type="button" className={`ev ${e.scope}`} key={e.id} title={e.title}>
-                    <span className="t">{hm(e.start)}</span>
+                  <button type="button" className={`ev ${e.calendar}`} key={e.id} title={e.title}>
+                    <span className="t">{hm(e.start_at)}</span>
                     {e.title}
                   </button>
                 ))}
@@ -123,30 +136,25 @@ export function CalendarScreen() {
       ) : (
         <div className="panel">
           <div className="list agenda">
-            {evs.filter((e) => e.start.slice(0, 7) === ym).length ? (
+            {evs.filter((e) => e.start_at.slice(0, 7) === ym).length ? (
               evs
-                .filter((e) => e.start.slice(0, 7) === ym)
-                .sort((a, b) => a.start.localeCompare(b.start))
-                .map((e: DemoEvent) => (
-                  <button type="button" className="li pop-i" key={e.id}>
+                .filter((e) => e.start_at.slice(0, 7) === ym)
+                .sort((a, b) => a.start_at.localeCompare(b.start_at))
+                .map((e) => (
+                  <div className="li" key={e.id}>
                     <span className="agenda-time">
-                      {fmtDate(e.start.slice(0, 10))}
+                      {fmtDate(e.start_at.slice(0, 10))}
                       <br />
-                      {hm(e.start)}–{hm(e.end)}
+                      {hm(e.start_at)}–{hm(e.end_at)}
                     </span>
                     <span className="li-t">
                       <b>{e.title}</b>
                       <small>
-                        {SCOPE_LABEL[e.scope]}
+                        {SCOPE_LABEL[e.calendar]}
                         {e.location ? ` · ${e.location}` : ""}
                       </small>
                     </span>
-                    <span className="av-stack">
-                      {e.attendees.slice(0, 4).map((a) => (
-                        <Av key={a} name={a} size="sm" />
-                      ))}
-                    </span>
-                  </button>
+                  </div>
                 ))
             ) : (
               <Empty title="이 달에 일정이 없습니다" />
