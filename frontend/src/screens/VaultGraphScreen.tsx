@@ -1,15 +1,19 @@
 import { useEffect, useRef } from "react";
 
 import { Icon } from "../components/ui/Icon";
-import { demoNotes, noteLinks } from "./mockup/demo";
-import { PageHead, clamp } from "./mockup/lib";
+import { Empty, PageHead, clamp } from "./mockup/lib";
+import { useApi } from "./mockup/useApi";
+
+type GraphNode = { id: string; title: string; folder: string };
+type GraphEdge = { source: string; target_id: string | null; target_title: string };
+type Graph = { nodes: GraphNode[]; edges: GraphEdge[] };
 
 type GNode = {
   id: string;
   label: string;
   isAi?: boolean | undefined;
   ghost?: boolean | undefined;
-  noteId?: number | undefined;
+  noteId?: string | undefined;
   x: number;
   y: number;
   z: number;
@@ -23,20 +27,19 @@ type GNode = {
   projZ?: number;
 };
 
-// VLT-002 Vault 3D 지식 그래프 — 목업 drawGraph3D 이식
+// VLT-002 Vault 3D 지식 그래프 — 실제 백엔드(/vault/graph) 연동
 export function VaultGraphScreen() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const view = useRef({ autoRot: true, rotX: 0.3, rotY: 0.5, zoom: 1.0 });
+  const graphRes = useApi<Graph>("/vault/graph");
+  const graph = graphRes.data;
 
   useEffect(() => {
     const cv = canvasRef.current;
-    if (!cv) return;
-    const notes = demoNotes;
-    const byTitle = new Map(notes.map((n) => [n.title, n]));
-    const nodes: GNode[] = notes.map((n) => ({
-      id: "n" + n.id,
+    if (!cv || !graph) return;
+    const nodes: GNode[] = graph.nodes.map((n) => ({
+      id: n.id,
       label: n.title,
-      isAi: n.agent,
       noteId: n.id,
       x: 0,
       y: 0,
@@ -47,20 +50,19 @@ export function VaultGraphScreen() {
     }));
     const ghosts = new Map<string, GNode>();
     const edges: [string, string][] = [];
-    notes.forEach((n) =>
-      noteLinks(n).forEach((t) => {
-        const tgt = byTitle.get(t);
-        let tid: string;
-        if (tgt) tid = "n" + tgt.id;
-        else {
-          if (!ghosts.has(t))
-            ghosts.set(t, { id: "g" + t, label: t, ghost: true, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 });
-          tid = "g" + t;
-        }
-        edges.push(["n" + n.id, tid]);
-      }),
-    );
+    for (const e of graph.edges) {
+      let tid: string;
+      if (e.target_id) tid = e.target_id;
+      else {
+        const key = "ghost:" + e.target_title;
+        if (!ghosts.has(key))
+          ghosts.set(key, { id: key, label: e.target_title, ghost: true, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 });
+        tid = key;
+      }
+      edges.push([e.source, tid]);
+    }
     nodes.push(...ghosts.values());
+    if (nodes.length === 0) return;
 
     const parent = cv.parentElement!;
     const W = parent.clientWidth || 800,
@@ -317,7 +319,16 @@ export function VaultGraphScreen() {
       cv.removeEventListener("wheel", onWheel);
       cv.removeEventListener("click", onClick);
     };
-  }, []);
+  }, [graph]);
+
+  // 하단 표용: 노드별 나가는 링크·백링크 수
+  const nodeRows = (graph?.nodes ?? []).map((n) => {
+    const outgoing = (graph?.edges ?? [])
+      .filter((e) => e.source === n.id)
+      .map((e) => e.target_title);
+    const backlinks = (graph?.edges ?? []).filter((e) => e.target_id === n.id).length;
+    return { ...n, outgoing, backlinks };
+  });
 
   return (
     <>
@@ -363,7 +374,11 @@ export function VaultGraphScreen() {
               "radial-gradient(circle at center, var(--surface-2) 0%, var(--panel) 100%)",
           }}
         >
-          <canvas ref={canvasRef} role="img" aria-label={`노트 ${demoNotes.length}개의 3D 지식 그래프`} />
+          <canvas
+            ref={canvasRef}
+            role="img"
+            aria-label={`노트 ${graph?.nodes.length ?? 0}개의 3D 지식 그래프`}
+          />
         </div>
       </div>
       <div className="legend" style={{ marginTop: 10 }}>
@@ -395,15 +410,23 @@ export function VaultGraphScreen() {
               </tr>
             </thead>
             <tbody>
-              {demoNotes.map((n) => (
-                <tr key={n.id}>
-                  <td>
-                    <a href={`#/vault/${n.id}`}>{n.title}</a>
+              {nodeRows.length ? (
+                nodeRows.map((n) => (
+                  <tr key={n.id}>
+                    <td>
+                      <a href={`#/vault/${n.id}`}>{n.title}</a>
+                    </td>
+                    <td>{n.outgoing.join(", ") || "-"}</td>
+                    <td>{n.backlinks}개</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={3}>
+                    <Empty title="노트가 없습니다" />
                   </td>
-                  <td>{noteLinks(n).join(", ") || "-"}</td>
-                  <td>{demoNotes.filter((x) => noteLinks(x).includes(n.title)).length}개</td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>

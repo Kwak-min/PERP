@@ -1,11 +1,23 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
 import { Icon } from "../components/ui/Icon";
-import { demoNotes, noteLinks, type DemoNote } from "./mockup/demo";
 import { Empty, PageHead } from "./mockup/lib";
+import { useApi } from "./mockup/useApi";
 
-// [[위키링크]] 렌더링
+type NoteListItem = {
+  id: string;
+  folder: string;
+  title: string;
+  pinned: boolean;
+  agent_enabled: boolean;
+};
+type NoteDetail = NoteListItem & {
+  content: string;
+  backlinks: string[];
+  tags: string[];
+};
+
 function renderWiki(body: string): ReactNode {
   return body.split("\n").map((line, li) => {
     const parts: ReactNode[] = [];
@@ -27,19 +39,27 @@ function renderWiki(body: string): ReactNode {
   });
 }
 
-// VLT-001 개인 Vault — 목업 vaultView 이식
+// VLT-001 개인 Vault — 실제 백엔드(/vault/notes) 연동
 export function VaultScreen() {
-  const notes = demoNotes;
-  const [selId, setSelId] = useState(notes.find((x) => x.pinned)?.id ?? notes[0]?.id ?? 0);
+  const listRes = useApi<{ items: NoteListItem[] }>("/vault/notes");
+  const notes = listRes.data?.items ?? [];
+  const [selId, setSelId] = useState<string | null>(null);
   const [q, setQ] = useState("");
-  const n = notes.find((x) => x.id === selId);
+
+  useEffect(() => {
+    if (!selId && notes.length) {
+      setSelId(notes.find((n) => n.pinned)?.id ?? notes[0]!.id);
+    }
+  }, [notes, selId]);
+
+  const detailRes = useApi<NoteDetail>(selId ? `/vault/notes/${selId}` : null);
+  const n = detailRes.data;
+
   const list = notes
-    .filter((x) => !q || `${x.title} ${x.body}`.includes(q))
-    .sort(
-      (a, b) => Number(!!b.pinned) - Number(!!a.pinned) || b.updatedAt.localeCompare(a.updatedAt),
-    );
+    .filter((x) => !q || x.title.includes(q))
+    .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || a.title.localeCompare(b.title));
   const folders = [...new Set(notes.map((x) => x.folder))];
-  const backlinks = n ? notes.filter((x) => noteLinks(x).includes(n.title)) : [];
+  const titleById = new Map(notes.map((x) => [x.id, x.title]));
 
   return (
     <>
@@ -97,7 +117,7 @@ export function VaultScreen() {
                       >
                         {x.title}
                       </span>
-                      {x.agent && (
+                      {x.agent_enabled && (
                         <span className="pill ai" title="Agent 사용 동의">
                           AI
                         </span>
@@ -108,7 +128,11 @@ export function VaultScreen() {
             ))}
           </div>
         </nav>
-        {n ? (
+        {listRes.loading ? (
+          <div className="panel">
+            <Empty title="불러오는 중…" icon="clock" />
+          </div>
+        ) : n ? (
           <div className="grid g-main">
             <div className="stack">
               <div className="row between">
@@ -127,7 +151,7 @@ export function VaultScreen() {
               <textarea
                 className="doc-editor"
                 style={{ minHeight: 260 }}
-                defaultValue={n.body}
+                defaultValue={n.content}
                 key={`b${n.id}`}
                 aria-label="본문"
               />
@@ -136,7 +160,7 @@ export function VaultScreen() {
                   <h2>미리보기</h2>
                   <span className="muted xs">위키링크 렌더링</span>
                 </div>
-                <div className="panel-b note-body">{renderWiki(n.body)}</div>
+                <div className="panel-b note-body">{renderWiki(n.content)}</div>
               </section>
             </div>
             <aside className="stack">
@@ -149,11 +173,8 @@ export function VaultScreen() {
                     <input type="checkbox" defaultChecked={n.pinned} /> 고정
                   </label>
                   <label className="check">
-                    <input type="checkbox" defaultChecked={n.agent} />{" "}
-                    <span>
-                      Agent 검색에 사용{" "}
-                      <span className="hint">(원본 범위 동의 필요 · 개인 등급 → 외부 LLM 차단)</span>
-                    </span>
+                    <input type="checkbox" defaultChecked={n.agent_enabled} />{" "}
+                    <span>Agent 검색에 사용</span>
                   </label>
                   <div className="field">
                     <label>폴더</label>
@@ -167,20 +188,15 @@ export function VaultScreen() {
               </section>
               <section className="panel">
                 <div className="panel-h">
-                  <h2>백링크 {backlinks.length}</h2>
+                  <h2>백링크 {n.backlinks.length}</h2>
                 </div>
                 <div className="list">
-                  {backlinks.length ? (
-                    backlinks.map((b) => (
-                      <button
-                        type="button"
-                        className="li"
-                        key={b.id}
-                        onClick={() => setSelId(b.id)}
-                      >
+                  {n.backlinks.length ? (
+                    n.backlinks.map((bid) => (
+                      <button type="button" className="li" key={bid} onClick={() => setSelId(bid)}>
                         <Icon name="file" />
                         <span className="li-t">
-                          <b>{b.title}</b>
+                          <b>{titleById.get(bid) ?? bid}</b>
                         </span>
                       </button>
                     ))
@@ -200,5 +216,3 @@ export function VaultScreen() {
     </>
   );
 }
-
-export type { DemoNote };
