@@ -21,12 +21,13 @@ const MEMBERS = [
   { email: "dohyun@demo.perp", name: "이도현", roles: "guest", title: "외부 협력자" },
 ];
 
-async function api(path, { method = "GET", token, body } = {}) {
+async function api(path, { method = "GET", token, orgId, body } = {}) {
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(orgId ? { "X-Org-Id": orgId } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
@@ -103,7 +104,64 @@ async function main() {
     }
   }
   console.log(`demo members ensured: ${MEMBERS.length} (newly added memberships: ${added})`);
+
+  // 4) 데모 업무 데이터 (프로젝트 + 업무) — API 사용, 멱등(이름 기준)
+  await seedWork(token, orgId);
+
   console.log("비밀번호 — 오너(김경준/a@naver.com): aaaaaaaa · 나머지 데모 계정: demo1234");
+}
+
+const PROJECTS = [
+  { name: "2026 정기총회", description: "상반기 결산 보고와 임원 선출을 위한 정기총회 준비", start_date: "2026-08-20", end_date: "2026-09-30", budget_amount: 1_500_000 },
+  { name: "가을 학술제", description: "학과 학술 세미나와 부스 운영 행사", start_date: "2026-09-01", end_date: "2026-10-15", budget_amount: 3_200_000 },
+  { name: "회계 운영", description: "분기 회계 마감과 예산 집행 관리", start_date: "2026-07-01", end_date: "2026-12-31", budget_amount: 800_000 },
+  { name: "조직 운영", description: "부원 관리와 정기 회의 운영", start_date: "2026-09-01", end_date: "2026-11-30", budget_amount: 500_000 },
+];
+
+const TASKS = [
+  { title: "정기총회 준비 자료 취합", project: "2026 정기총회", assignee: "이서연", priority: "high", due_at: "2026-09-10" },
+  { title: "학술 세미나 연사 섭외", project: "가을 학술제", assignee: "박준호", priority: "high", due_at: "2026-09-18" },
+  { title: "홍보 포스터 시안 검토", project: "가을 학술제", assignee: "김민지", priority: "normal", due_at: "2026-09-16" },
+  { title: "예산 집행 내역 정리", project: "회계 운영", assignee: "정하늘", priority: "normal", due_at: "2026-09-20" },
+  { title: "신입 부원 오리엔테이션 자료", project: "조직 운영", assignee: "최우진", priority: "low", due_at: "2026-09-25" },
+  { title: "동아리방 비품 재고 점검", project: "조직 운영", assignee: "정하늘", priority: "normal", due_at: "2026-09-14" },
+  { title: "학술제 부스 배치도 확정", project: "가을 학술제", assignee: "박준호", priority: "high", due_at: "2026-09-15" },
+];
+
+async function seedWork(token, orgId) {
+  const members = (await api("/members", { token, orgId })).items ?? [];
+  const uid = (name) => members.find((m) => m.name === name)?.user_id ?? null;
+
+  const existing = (await api("/projects", { token, orgId })).items ?? [];
+  const byName = new Map(existing.map((p) => [p.name, p.id]));
+  let newP = 0;
+  for (const p of PROJECTS) {
+    if (byName.has(p.name)) continue;
+    const created = await api("/projects", { method: "POST", token, orgId, body: p });
+    byName.set(p.name, created.id);
+    newP += 1;
+  }
+
+  const existingTasks = (await api("/tasks", { token, orgId })).items ?? [];
+  const taskTitles = new Set(existingTasks.map((t) => t.title));
+  let newT = 0;
+  for (const t of TASKS) {
+    if (taskTitles.has(t.title)) continue;
+    await api("/tasks", {
+      method: "POST",
+      token,
+      orgId,
+      body: {
+        title: t.title,
+        project_id: byName.get(t.project) ?? null,
+        assignee_id: uid(t.assignee),
+        priority: t.priority,
+        due_at: t.due_at,
+      },
+    });
+    newT += 1;
+  }
+  console.log(`demo work ensured: projects +${newP}, tasks +${newT}`);
 }
 
 async function resolveTenant(orgId) {
