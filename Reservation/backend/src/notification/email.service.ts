@@ -28,9 +28,79 @@ function loadTemplate(name: string): HandlebarsTemplateDelegate {
   return templateCache[name];
 }
 
-async function sendMail(to: string, subject: string, html: string) {
-  await transporter.sendMail({ from: FROM, to, subject, html });
-  console.log(`[EMAIL] 발송 완료 → ${to} | ${subject}`);
+// ── ics (iCalendar) 파일 생성 헬퍼 ──────────────────────────────────────────
+function formatIcsDate(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    date.getUTCFullYear() +
+    pad(date.getUTCMonth() + 1) +
+    pad(date.getUTCDate()) +
+    'T' +
+    pad(date.getUTCHours()) +
+    pad(date.getUTCMinutes()) +
+    pad(date.getUTCSeconds()) +
+    'Z'
+  );
+}
+
+function generateIcsContent(event: {
+  title: string;
+  description?: string | null;
+  location?: string | null;
+  startTime: Date;
+  endTime: Date;
+}): string {
+  const dtStart = formatIcsDate(new Date(event.startTime));
+  const dtEnd = formatIcsDate(new Date(event.endTime));
+  const dtStamp = formatIcsDate(new Date());
+  const uid = `rsv-${Date.now()}-${Math.random().toString(36).slice(2)}@orbitflow.com`;
+
+  return [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//OrbitFlow//Reservation System//KO',
+    'CALSCALE:GREGORIAN',
+    'METHOD:REQUEST',
+    'BEGIN:VEVENT',
+    `UID:${uid}`,
+    `DTSTAMP:${dtStamp}`,
+    `DTSTART:${dtStart}`,
+    `DTEND:${dtEnd}`,
+    `SUMMARY:${event.title.replace(/\n/g, ' ')}`,
+    `DESCRIPTION:${(event.description || '').replace(/\n/g, ' ')}`,
+    `LOCATION:${(event.location || '').replace(/\n/g, ' ')}`,
+    'STATUS:CONFIRMED',
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\r\n');
+}
+
+interface SendMailOptions {
+  to: string;
+  subject: string;
+  html: string;
+  icsContent?: string;
+}
+
+async function sendMail(options: SendMailOptions) {
+  const attachments = options.icsContent
+    ? [
+        {
+          filename: 'invite.ics',
+          content: options.icsContent,
+          contentType: 'text/calendar; charset=utf-8; method=REQUEST',
+        },
+      ]
+    : undefined;
+
+  await transporter.sendMail({
+    from: FROM,
+    to: options.to,
+    subject: options.subject,
+    html: options.html,
+    attachments,
+  });
+  console.log(`[EMAIL] 발송 완료 → ${options.to} | ${options.subject}`);
 }
 
 // ── 공개 API ──────────────────────────────────────────────────────────────────
@@ -38,7 +108,7 @@ async function sendMail(to: string, subject: string, html: string) {
 export const emailService = {
   // 1. 예약 확정 (예약자)
   sendReservationConfirmed: async (reservation: {
-    id: number; title: string; startTime: Date; endTime: Date; userId: number;
+    id: number; title: string; description?: string | null; startTime: Date; endTime: Date; userId: number;
     space: { name: string };
   }) => {
     const user = await getUserById(reservation.userId);
@@ -53,14 +123,23 @@ export const emailService = {
       startTime: reservation.startTime.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }),
       endTime: reservation.endTime.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }),
     });
-    await sendMail(user.email, `[예약 확정] ${reservation.title}`, html);
+
+    const icsContent = generateIcsContent({
+      title: reservation.title,
+      description: reservation.description,
+      location: reservation.space.name,
+      startTime: reservation.startTime,
+      endTime: reservation.endTime,
+    });
+
+    await sendMail({ to: user.email, subject: `[예약 확정] ${reservation.title}`, html, icsContent });
   },
 
   // 2. 참석자 초대
   sendAttendeeInvite: async (attendee: {
     id: number; name: string; email: string;
     inviteToken: string;
-    reservation: { title: string; startTime: Date; endTime: Date; space: { name: string } };
+    reservation: { title: string; description?: string | null; startTime: Date; endTime: Date; space: { name: string } };
   }) => {
     const acceptUrl  = `${BASE_URL}/api/v1/attendees/${attendee.inviteToken}/respond?accept=true`;
     const declineUrl = `${BASE_URL}/api/v1/attendees/${attendee.inviteToken}/respond?accept=false`;
@@ -74,7 +153,16 @@ export const emailService = {
       acceptUrl,
       declineUrl,
     });
-    await sendMail(attendee.email, `[회의 초대] ${attendee.reservation.title}`, html);
+
+    const icsContent = generateIcsContent({
+      title: attendee.reservation.title,
+      description: attendee.reservation.description,
+      location: attendee.reservation.space.name,
+      startTime: attendee.reservation.startTime,
+      endTime: attendee.reservation.endTime,
+    });
+
+    await sendMail({ to: attendee.email, subject: `[회의 초대] ${attendee.reservation.title}`, html, icsContent });
   },
 
   // 3. 참석자 응답 알림 (예약자에게)
@@ -97,7 +185,11 @@ export const emailService = {
       statusClass: isAccepted ? 'accepted' : 'declined',
       statusEmoji: isAccepted ? '✅' : '❌',
     });
-    await sendMail(user.email, `[참석 ${statusText}] ${attendee.name}님이 '${attendee.reservation.title}' 미팅을 ${statusText}했습니다.`, html);
+    await sendMail({
+      to: user.email,
+      subject: `[참석 ${statusText}] ${attendee.name}님이 '${attendee.reservation.title}' 미팅을 ${statusText}했습니다.`,
+      html,
+    });
   },
 
   // 4. 예약 취소 (참석자 전원)
@@ -115,7 +207,7 @@ export const emailService = {
 
     await Promise.allSettled(
       reservation.attendees.map((a) =>
-        sendMail(a.email, `[예약 취소] ${reservation.title}`, html),
+        sendMail({ to: a.email, subject: `[예약 취소] ${reservation.title}`, html }),
       ),
     );
   },
@@ -135,7 +227,7 @@ export const emailService = {
 
     await Promise.allSettled(
       reservation.attendees.map((a) =>
-        sendMail(a.email, `[30분 후 회의] ${reservation.title}`, html),
+        sendMail({ to: a.email, subject: `[30분 후 회의] ${reservation.title}`, html }),
       ),
     );
   },
@@ -158,12 +250,12 @@ export const emailService = {
       endTime: entry.endTime.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }),
       position,
     });
-    await sendMail(user.email, `[대기 등록] ${entry.title} (${position}번 대기)`, html);
+    await sendMail({ to: user.email, subject: `[대기 등록] ${entry.title} (${position}번 대기)`, html });
   },
 
   // 7. 대기 승격 알림 (예약으로 자동 전환됨)
   sendWaitlistPromoted: async (
-    reservation: { id: number; userId: number; title: string; startTime: Date; endTime: Date; space: { name: string } },
+    reservation: { id: number; userId: number; title: string; description?: string | null; startTime: Date; endTime: Date; space: { name: string } },
     _origin: { id: number },
   ) => {
     const user = await getUserById(reservation.userId);
@@ -176,6 +268,15 @@ export const emailService = {
       endTime: reservation.endTime.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }),
       reservationId: reservation.id,
     });
-    await sendMail(user.email, `[예약 확정] 대기하신 회의실이 확보되었습니다 — ${reservation.title}`, html);
+
+    const icsContent = generateIcsContent({
+      title: reservation.title,
+      description: reservation.description,
+      location: reservation.space.name,
+      startTime: reservation.startTime,
+      endTime: reservation.endTime,
+    });
+
+    await sendMail({ to: user.email, subject: `[예약 확정] 대기하신 회의실이 확보되었습니다 — ${reservation.title}`, html, icsContent });
   },
 };
