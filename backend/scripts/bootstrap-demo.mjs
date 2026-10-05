@@ -115,7 +115,112 @@ async function main() {
   await seedAssets(token, orgId);
   await seedCalendar(token, orgId);
 
+  // 7) 모듈 활성화(hr·analytics) + 문서·노트·승인·인수인계
+  await enableModules(token, orgId);
+  await seedDocs(token, orgId);
+  await seedVault(token, orgId);
+  await seedApprovals(token, orgId);
+  await seedHandover(token, orgId);
+
   console.log("비밀번호 — 오너(김경준/a@naver.com): aaaaaaaa · 나머지 데모 계정: demo1234");
+}
+
+async function enableModules(token, orgId) {
+  const cur = await api("/tenants/current", { token, orgId });
+  const mods = [...new Set([...(cur.modules ?? []), "hr", "analytics"])];
+  await api("/tenants/current", { method: "PATCH", token, orgId, body: { modules: mods } });
+  console.log("modules enabled: hr, analytics");
+}
+
+const DOCS = [
+  { title: "2026 정기총회 안건", doc_type: "wiki", sensitivity: "internal", content: "회의 일시: 2026-09-25 14:00\n참석자: 운영진 전원\n안건 1. 상반기 결산 보고" },
+  { title: "학술제 기획안", doc_type: "wiki", sensitivity: "internal", content: "행사명: 가을 학술제\n일시·장소: 2026-10-15 대강당\n예산: 3,200,000원" },
+  { title: "동아리 회칙", doc_type: "wiki", sensitivity: "internal", content: "제1조 (명칭) 본회는 남부대학교 OO학생회라 한다." },
+  { title: "예산 집행 지침", doc_type: "wiki", sensitivity: "internal", content: "3만원 이상 지출은 반드시 증빙을 첨부한다." },
+];
+async function seedDocs(token, orgId) {
+  const existing = (await api("/documents", { token, orgId })).items ?? [];
+  const titles = new Set(existing.map((d) => d.title));
+  let n = 0;
+  for (const d of DOCS) {
+    if (titles.has(d.title)) continue;
+    await api("/documents", { method: "POST", token, orgId, body: d });
+    n += 1;
+  }
+  console.log(`demo documents ensured: +${n}`);
+}
+
+const NOTES = [
+  { title: "학생회 운영 메모", folder: "운영", pinned: true, content: "정기총회는 [[정기총회 준비]] 노트 참고. 예산은 [[예산 아이디어]]에 정리." },
+  { title: "정기총회 준비", folder: "운영", content: "일시: 2026-09-25 14:00\n장소: 대강당\n- 자료 취합 → [[학생회 운영 메모]]" },
+  { title: "예산 아이디어", folder: "재무", content: "학술제 예산 재분배 검토. [[학술제 기획]]과 연계." },
+  { title: "학술제 기획", folder: "행사", content: "부스 6개 · 세미나 2세션. 연계: [[예산 아이디어]]" },
+];
+async function seedVault(token, orgId) {
+  const existing = (await api("/vault/notes", { token, orgId })).items ?? [];
+  const titles = new Set(existing.map((n) => n.title));
+  let n = 0;
+  for (const note of NOTES) {
+    if (titles.has(note.title)) continue;
+    await api("/vault/notes", { method: "POST", token, orgId, body: note });
+    n += 1;
+  }
+  console.log(`demo vault notes ensured: +${n}`);
+}
+
+async function seedApprovals(token, orgId) {
+  const members = (await api("/members", { token, orgId })).items ?? [];
+  const uid = (name) => members.find((m) => m.name === name)?.user_id ?? null;
+  const existing = (await api("/approvals/requests", { token, orgId })).items ?? [];
+  const titles = new Set(existing.map((a) => a.title));
+  const reqs = [
+    { title: "정기총회 대관료 지출결의", approver: "이서연" },
+    { title: "학술제 부스 소품 정산", approver: "박준호" },
+    { title: "AI 고위험 실행 · 회비 일괄 청구 발송", approver: "이서연" },
+  ];
+  let n = 0;
+  for (const r of reqs) {
+    if (titles.has(r.title)) continue;
+    const approver = uid(r.approver);
+    if (!approver) continue;
+    await api("/approvals/requests", {
+      method: "POST",
+      token,
+      orgId,
+      body: { title: r.title, form_key: "generic", steps: [{ approver_id: approver }] },
+    });
+    n += 1;
+  }
+  console.log(`demo approvals ensured: +${n}`);
+}
+
+async function seedHandover(token, orgId) {
+  const members = (await api("/members", { token, orgId })).items ?? [];
+  const uid = (name) => members.find((m) => m.name === name)?.user_id ?? null;
+  const existing = (await api("/handovers", { token, orgId })).items ?? [];
+  const titles = new Set(existing.map((h) => h.title));
+  const pkgs = [
+    { title: "총무 업무 인수인계 (2026)", predecessor: "정하늘", successor: "김민지", position: "총무" },
+  ];
+  let n = 0;
+  for (const p of pkgs) {
+    if (titles.has(p.title)) continue;
+    const pre = uid(p.predecessor);
+    if (!pre) continue;
+    await api("/handovers", {
+      method: "POST",
+      token,
+      orgId,
+      body: {
+        predecessor_id: pre,
+        successor_id: uid(p.successor),
+        title: p.title,
+        position: p.position,
+      },
+    });
+    n += 1;
+  }
+  console.log(`demo handover ensured: +${n}`);
 }
 
 const ASSETS = [
