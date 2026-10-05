@@ -1,37 +1,22 @@
-// 목업 로그인의 시연 계정 — 백엔드 없이 세션을 주입해 역할별 화면을 확인한다.
-import type { SessionState } from "./session";
-
+// 목업 로그인의 시연 계정 — 백엔드에 실제로 시드된 계정으로 로그인한다.
+// (backend/scripts/bootstrap-demo.mjs 로 생성: 남부대 학생회 조직 + 구성원)
 export type DemoAccount = {
-  id: number;
   name: string;
   email: string;
+  password: string;
   title: string;
   roleName: string;
   orgName: string;
-  orgType: string;
   note?: string;
 };
 
 export const DEMO_ACCOUNTS: DemoAccount[] = [
-  { id: 1, name: "김경준", email: "rudwns1536@gmail.com", title: "회장", roleName: "대표/회장", orgName: "남부대 학생회", orgType: "student", note: "오르빗랩 겸직" },
-  { id: 2, name: "이서연", email: "seoyeon@example.com", title: "부회장", roleName: "부서장/팀장", orgName: "남부대 학생회", orgType: "student" },
-  { id: 3, name: "박준호", email: "junho@example.com", title: "학술부장", roleName: "부서장/팀장", orgName: "남부대 학생회", orgType: "student" },
-  { id: 4, name: "정하늘", email: "haneul@example.com", title: "총무", roleName: "총무/회계", orgName: "남부대 학생회", orgType: "student" },
-  { id: 5, name: "김민지", email: "minji@example.com", title: "홍보부원", roleName: "일반 구성원", orgName: "남부대 학생회", orgType: "student" },
-  { id: 8, name: "최우진", email: "woojin@example.com", title: "일반부원", roleName: "일반 구성원", orgName: "남부대 학생회", orgType: "student" },
-  { id: 12, name: "한지우", email: "jiwoo@example.com", title: "감사", roleName: "감사자/열람자", orgName: "남부대 학생회", orgType: "student" },
-  { id: 6, name: "이도현", email: "dohyun@example.com", title: "외부 협력자", roleName: "외부 협력자", orgName: "가을 학술제", orgType: "club" },
+  { name: "김경준", email: "a@naver.com", password: "aaaaaaaa", title: "회장", roleName: "소유자", orgName: "남부대 학생회", note: "모든 권한" },
+  { name: "이서연", email: "seoyeon@demo.perp", password: "demo1234", title: "부회장", roleName: "대표/회장", orgName: "남부대 학생회" },
+  { name: "박준호", email: "junho@demo.perp", password: "demo1234", title: "학술부장", roleName: "부서장", orgName: "남부대 학생회" },
+  { name: "정하늘", email: "haneul@demo.perp", password: "demo1234", title: "총무", roleName: "총무/회계", orgName: "남부대 학생회" },
+  { name: "김민지", email: "minji@demo.perp", password: "demo1234", title: "홍보부원", roleName: "일반 구성원", orgName: "남부대 학생회" },
+  { name: "최우진", email: "woojin@demo.perp", password: "demo1234", title: "일반부원", roleName: "일반 구성원", orgName: "남부대 학생회" },
+  { name: "한지우", email: "jiwoo@demo.perp", password: "demo1234", title: "감사", roleName: "감사/열람자", orgName: "남부대 학생회" },
+  { name: "이도현", email: "dohyun@demo.perp", password: "demo1234", title: "외부 협력자", roleName: "게스트", orgName: "남부대 학생회" },
 ];
-
-export function sessionForDemo(a: DemoAccount): SessionState {
-  return {
-    token: `demo-${a.id}`,
-    orgId: `org-${a.id}`,
-    name: a.name,
-    email: a.email,
-    mustChangePassword: false,
-    organizations: [
-      { org_id: `org-${a.id}`, org_name: a.orgName, org_type: a.orgType, roles: [a.roleName] },
-    ],
-  };
-}

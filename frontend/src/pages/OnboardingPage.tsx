@@ -3,7 +3,17 @@ import { useNavigate } from "react-router-dom";
 
 import { Icon } from "../components/ui/Icon";
 import { PageHead } from "../screens/mockup/lib";
-import { sessionStore } from "../store/session";
+import { apiRequest, userMessageOf } from "../services/api";
+import { refreshSession } from "../services/auth";
+import { sessionStore, useSession } from "../store/session";
+
+// 목업 조직 유형 → 백엔드 조직 유형 키
+const TYPE_MAP: Record<string, string> = {
+  student: "student_council",
+  club: "club",
+  lab: "lab",
+  company: "company",
+};
 
 const ORG_TYPES: Array<[string, string]> = [
   ["student", "학생회"],
@@ -30,6 +40,8 @@ const ONB_STEPS = ["조직 유형", "이름·규모", "통화·회계연도", "�
 // ONB-001 새 조직 만들기 — 목업 onboarding 이식
 export function OnboardingPage() {
   const navigate = useNavigate();
+  const session = useSession();
+  const [creating, setCreating] = useState(false);
   const [step, setStep] = useState(0);
   const [type, setType] = useState("club");
   const [name, setName] = useState("");
@@ -52,23 +64,37 @@ export function OnboardingPage() {
     setStep((s) => Math.max(0, Math.min(5, s + delta)));
   }
 
-  function create(): void {
+  async function create(): Promise<void> {
     if (!name.trim()) {
       setStep(1);
       setErr("조직 이름을 입력하세요.");
       return;
     }
-    sessionStore.set({
-      token: "demo-onb",
-      orgId: "org-onb",
-      name: "김경준",
-      email: "rudwns1536@gmail.com",
-      mustChangePassword: false,
-      organizations: [
-        { org_id: "org-onb", org_name: name.trim(), org_type: type, roles: ["조직 소유자"] },
-      ],
-    });
-    navigate("/", { replace: true });
+    if (!session) {
+      navigate("/login", { replace: true });
+      return;
+    }
+    setCreating(true);
+    setErr(null);
+    try {
+      const res = (await apiRequest("/tenants", {
+        method: "POST",
+        session: { token: session.token, orgId: null },
+        body: {
+          name: name.trim(),
+          type: TYPE_MAP[type] ?? "club",
+          currency,
+          fiscal_year_start: Number(fiscalStart) || 1,
+        },
+      })) as { org_id: string };
+      const refreshed = await refreshSession(session.token, res.org_id);
+      sessionStore.set(refreshed);
+      navigate("/", { replace: true });
+    } catch (caught) {
+      setErr(userMessageOf(caught));
+    } finally {
+      setCreating(false);
+    }
   }
 
   return (
@@ -228,8 +254,8 @@ export function OnboardingPage() {
               다음
             </button>
           ) : (
-            <button type="button" className="btn btn-primary" onClick={create}>
-              조직 만들기
+            <button type="button" className="btn btn-primary" onClick={create} disabled={creating}>
+              {creating ? "만드는 중…" : "조직 만들기"}
             </button>
           )}
         </div>

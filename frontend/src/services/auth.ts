@@ -45,6 +45,26 @@ async function hydrateSession(
   };
 }
 
+// 조직 생성/전환 등으로 조직 목록이 바뀐 뒤 세션을 다시 구성한다.
+export async function refreshSession(
+  token: string,
+  preferOrgId?: string | null,
+): Promise<SessionState> {
+  const me = meSchema.parse(await apiRequest("/auth/me", { session: { token, orgId: null } }));
+  const orgId =
+    (preferOrgId && me.organizations.some((o) => o.org_id === preferOrgId)
+      ? preferOrgId
+      : me.organizations[0]?.org_id) ?? null;
+  return {
+    token,
+    orgId,
+    name: me.name,
+    email: me.email,
+    mustChangePassword: me.must_change_password,
+    organizations: me.organizations,
+  };
+}
+
 export async function login(email: string, password: string): Promise<SessionState> {
   const payload = identitySchema.parse(
     await apiRequest("/auth/login", {

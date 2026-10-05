@@ -1,31 +1,62 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { Icon } from "../components/ui/Icon";
-import {
-  MEM_LABEL,
-  MEM_TONE,
-  demoInvites,
-  demoMemberRows,
-  demoRoles,
-} from "./mockup/demo";
 import { Av, Empty, PageHead, Pill, Tabs, maskPhone } from "./mockup/lib";
+import { useApi } from "./mockup/useApi";
 
-// ORG-002 회원 — 목업 membersView() 이식
+type Member = {
+  membership_id: string;
+  user_id: string;
+  email: string;
+  name: string;
+  roles: string[];
+  status: string;
+  department_id: string | null;
+  title: string | null;
+  phone: string | null;
+};
+type RoleDef = { key: string; label: string; scope: string };
+type Dept = { id: string; name: string };
+
+const STATUS_TONE: Record<string, string> = { active: "ok", inactive: "muted", left: "muted" };
+const STATUS_LABEL: Record<string, string> = {
+  active: "활성",
+  inactive: "비활성",
+  left: "탈퇴",
+};
+
+// ORG-002 회원 — 실제 백엔드(/members) 연동, 목업 디자인 유지
 export function MembersScreen() {
   const [tab, setTab] = useState("list");
   const [q, setQ] = useState("");
   const [role, setRole] = useState("");
   const [st, setSt] = useState("active");
-  const pii = false; // 개인정보 열람 권한 없음 → 마스킹 (목업 기본)
+  const pii = false; // 연락처는 개인 등급 → 권한 없으면 마스킹
 
-  const rows = demoMemberRows.filter(
+  const membersRes = useApi<{ items: Member[] }>("/members");
+  const rolesRes = useApi<{ items: RoleDef[] }>("/members/roles");
+  const deptsRes = useApi<{ items: Dept[] }>("/members/departments");
+
+  const members = membersRes.data?.items ?? [];
+  const roleLabel = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of rolesRes.data?.items ?? []) map.set(r.key, r.label);
+    return (keys: string[]) => keys.map((k) => map.get(k) ?? k).join(", ");
+  }, [rolesRes.data]);
+  const deptName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const d of deptsRes.data?.items ?? []) map.set(d.id, d.name);
+    return (id: string | null) => (id ? (map.get(id) ?? "-") : "-");
+  }, [deptsRes.data]);
+
+  const rows = members.filter(
     (m) =>
       (!st || m.status === st) &&
-      (!role || m.role === role) &&
+      (!role || m.roles.includes(role)) &&
       (!q || `${m.name} ${m.email}`.includes(q)),
   );
-  const activeCount = demoMemberRows.filter((m) => m.status === "active").length;
+  const activeCount = members.filter((m) => m.status === "active").length;
 
   return (
     <>
@@ -54,45 +85,18 @@ export function MembersScreen() {
       <Tabs
         items={[
           ["list", "회원", activeCount],
-          ["invites", "초대", demoInvites.length],
+          ["invites", "초대"],
         ]}
         cur={tab}
         onChange={setTab}
       />
 
       {tab === "invites" ? (
-        <div className="panel tbl-wrap">
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>이메일</th>
-                <th>역할</th>
-                <th>초대한 사람</th>
-                <th>만료</th>
-                <th>상태</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {demoInvites.map((i) => (
-                <tr key={i.email}>
-                  <td className="t-title">{i.email}</td>
-                  <td>{i.role}</td>
-                  <td>{i.invitedBy}</td>
-                  <td className="nowrap">{i.expiresAt}</td>
-                  <td>{i.expired ? <Pill tone="bad">만료</Pill> : <Pill tone="warn">대기</Pill>}</td>
-                  <td className="nowrap">
-                    <button type="button" className="btn btn-xs">
-                      재발송
-                    </button>{" "}
-                    <button type="button" className="btn btn-xs btn-ghost">
-                      회수
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="panel">
+          <Empty
+            title="대기 중인 초대가 없습니다"
+            desc="상단 '초대' 버튼으로 이메일을 초대하면 여기에 표시됩니다."
+          />
         </div>
       ) : (
         <>
@@ -106,16 +110,16 @@ export function MembersScreen() {
             />
             <select value={role} onChange={(e) => setRole(e.target.value)} aria-label="역할">
               <option value="">모든 역할</option>
-              {demoRoles.map((r) => (
-                <option key={r} value={r}>
-                  {r}
+              {(rolesRes.data?.items ?? []).map((r) => (
+                <option key={r.key} value={r.key}>
+                  {r.label}
                 </option>
               ))}
             </select>
             <select value={st} onChange={(e) => setSt(e.target.value)} aria-label="상태">
               <option value="active">활성</option>
               <option value="inactive">비활성</option>
-              <option value="withdrawn">탈퇴</option>
+              <option value="left">탈퇴</option>
               <option value="">전체</option>
             </select>
           </div>
@@ -129,33 +133,47 @@ export function MembersScreen() {
                   <th>역할</th>
                   <th>부서</th>
                   <th>상태</th>
-                  <th>가입</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.length ? (
+                {membersRes.loading ? (
+                  <tr>
+                    <td colSpan={6}>
+                      <Empty title="불러오는 중…" icon="clock" />
+                    </td>
+                  </tr>
+                ) : membersRes.error ? (
+                  <tr>
+                    <td colSpan={6}>
+                      <Empty title="회원을 불러오지 못했습니다" desc={membersRes.error} icon="alert" />
+                    </td>
+                  </tr>
+                ) : rows.length ? (
                   rows.map((m) => (
-                    <tr key={m.email}>
+                    <tr key={m.membership_id}>
                       <td className="nowrap">
                         <Av name={m.name} size="sm" />{" "}
-                        <Link className="t-title" to={`/members/${m.name}`}>
+                        <Link className="t-title" to={`/members/${m.user_id}`}>
                           {m.name}
                         </Link>
-                        <span className="sub">{m.title}</span>
+                        {m.title && <span className="sub">{m.title}</span>}
                       </td>
                       <td className="muted">{m.email}</td>
-                      <td className="mono xs nowrap">{pii ? m.phone : maskPhone(m.phone)}</td>
-                      <td>{m.role}</td>
-                      <td>{m.dept}</td>
-                      <td>
-                        <Pill tone={MEM_TONE[m.status]}>{MEM_LABEL[m.status]}</Pill>
+                      <td className="mono xs nowrap">
+                        {m.phone ? (pii ? m.phone : maskPhone(m.phone)) : "-"}
                       </td>
-                      <td className="muted nowrap">{m.joinedAt}</td>
+                      <td>{roleLabel(m.roles)}</td>
+                      <td>{deptName(m.department_id)}</td>
+                      <td>
+                        <Pill tone={STATUS_TONE[m.status] ?? "muted"}>
+                          {STATUS_LABEL[m.status] ?? m.status}
+                        </Pill>
+                      </td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={7}>
+                    <td colSpan={6}>
                       <Empty title="조건에 맞는 회원이 없습니다" />
                     </td>
                   </tr>

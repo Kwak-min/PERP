@@ -5,8 +5,8 @@ import { Icon } from "../components/ui/Icon";
 import { OrbitArt } from "../components/ui/OrbitArt";
 import { login } from "../services/auth";
 import { userMessageOf } from "../services/api";
-import { DEMO_ACCOUNTS, sessionForDemo, type DemoAccount } from "../store/demoAccounts";
-import { sessionStore } from "../store/session";
+import { DEMO_ACCOUNTS, type DemoAccount } from "../store/demoAccounts";
+import { sessionStore, type SessionState } from "../store/session";
 
 function LogoMark() {
   return (
@@ -27,10 +27,24 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const nextPath = new URLSearchParams(location.search).get("next") || "/";
 
-  function demoLogin(a: DemoAccount): void {
+  function routeFor(session: SessionState): string {
+    if (session.mustChangePassword) return "/change-password";
+    if (!session.orgId) return "/onboarding/organization";
+    return nextPath;
+  }
+
+  async function demoLogin(a: DemoAccount): Promise<void> {
+    setBusy(true);
     setError(null);
-    sessionStore.set(sessionForDemo(a));
-    navigate(nextPath, { replace: true });
+    try {
+      const session = await login(a.email, a.password);
+      sessionStore.set(session);
+      navigate(routeFor(session), { replace: true });
+    } catch (caught) {
+      setError(userMessageOf(caught));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function submit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
@@ -41,7 +55,7 @@ export function LoginPage() {
     try {
       const session = await login(String(form.get("email")), String(form.get("password")));
       sessionStore.set(session);
-      navigate(session.mustChangePassword ? "/change-password" : nextPath, { replace: true });
+      navigate(routeFor(session), { replace: true });
     } catch (caught) {
       setError(userMessageOf(caught));
     } finally {
@@ -140,7 +154,7 @@ export function LoginPage() {
           <div className="or">시연 계정 (역할별 권한이 다릅니다)</div>
           <div className="demo-acc">
             {DEMO_ACCOUNTS.map((a) => (
-              <button type="button" key={a.id} onClick={() => demoLogin(a)}>
+              <button type="button" key={a.email} onClick={() => demoLogin(a)}>
                 <span className="av" title={a.name}>
                   {a.name.slice(-2)}
                 </span>
