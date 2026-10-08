@@ -1,30 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useParams } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { Link, useParams } from "react-router-dom";
 
+import { BarChart, DonutChart, ProgressList, Timeline } from "../components/data/Charts";
+import { MonthCalendar } from "../components/data/MonthCalendar";
+import { GanttChart } from "../components/data/GanttChart";
+import { KanbanBoard } from "../components/data/KanbanBoard";
+import { OrgTree } from "../components/data/OrgTree";
+import { FlowCanvas, NodeGraph } from "../components/data/Graphs";
+import { PermissionMatrix, WorkloadHeatmap } from "../components/data/Matrix";
 import { StateBoundary } from "../components/common/StateBoundary";
-import { AssetCustodyModal } from '../components/common/AssetCustodyModal';
-import { CalendarSurface } from "../components/data/CalendarSurface";
-import { isOperationalScreen, OperationalSurface } from "../components/data/OperationalSurface";
-import { CreateFormModal } from "../components/common/CreateFormModal";
-import { parseDocumentFormDetail } from "../components/common/createFormContract";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
+import { ListRow } from "../components/ui/ListRow";
 import { SectionCard } from "../components/ui/SectionCard";
 import { StatCard, type Stat } from "../components/ui/StatCard";
 import { StatTrendModal, metricKeyOf, type MetricKey } from "../components/data/StatTrendModal";
-import { MemberListModal, membersSchema, type Member } from "../components/data/MemberListModal";
-import { HomeDetailModal } from '../components/data/HomeDetailModal';
-import { homeCategories, type HomeSelection } from '../components/data/homeDetailModel';
-import { allFilter, screenFilters } from "./screenFilters";
-import { downloadCsv, filterTable, liveTable, notificationTaskLink, paginateTable, type TableData, type TableRow } from "./screenTable";
-import { apiRequest, userMessageOf } from "../services/api";
-import { isPgWorkspace, workspaceEndpoint } from "../services/workspace";
-import { useDepartments } from "../hooks/useDepartments";
+import { fixtureFor, type ScreenFixture, type TableFixture } from "../fixtures/screens";
 import { useResource } from "../hooks/useResource";
-import { useRoles } from "../hooks/useRoles";
-import { sectionLabels, type ScreenDefinition, type CreateConfig } from "../routes/catalog";
+import { sectionLabels, type ScreenDefinition } from "../routes/catalog";
 import { useSession } from "../store/session";
 import { useBranch } from "../store/branch";
+import { useDemoMode } from "../store/demo";
 
 const NUMERIC_HINT = ["금액", "수량", "진행률", "시간", "건수", "잔액"];
 
@@ -51,7 +47,7 @@ function liveStats(data: unknown): readonly Stat[] | null {
         { label: "전체 항목", value: String(records.length), unit: "건", delta: "실시간 조회", trend: "flat", foot: "서버 데이터" },
         { label: "완료·확정", value: String(done), unit: "건", delta: `${rate}%`, trend: rate >= 50 ? "up" : "down", foot: "서버 데이터" },
         { label: "확인 필요", value: String(risk), unit: "건", delta: risk > 0 ? "처리 권장" : "없음", trend: risk > 0 ? "down" : "flat", foot: "서버 데이터" },
-        { label: "조회 항목", value: String(records.length), unit: "건", delta: "전체 목록", trend: "flat", foot: "서버 데이터" },
+        { label: "표시 중", value: String(Math.min(records.length, 8)), unit: "건", delta: "상위 8건", trend: "flat", foot: "서버 데이터" },
       ];
     }
   }
@@ -59,34 +55,9 @@ function liveStats(data: unknown): readonly Stat[] | null {
     ([, value]) => typeof value === "number" || typeof value === "string",
   );
   if (scalars.length >= 3) {
-    const labels: Readonly<Record<string, string>> = {
-      members: "구성원",
-      projects: "프로젝트",
-      tasks: "업무",
-      documents: "문서",
-      assets: "자산",
-      notifications: "알림",
-      org_id: "조직",
-      tenant_id: "테넌트",
-      mode: "운영 모드",
-      policy_mode: "정책 모드",
-      provider: "제공자",
-      status: "상태",
-    };
-    const valueLabels: Readonly<Record<string, string>> = {
-      active: "활성",
-      inactive: "비활성",
-      strict: "엄격",
-      balanced: "균형",
-      permissive: "허용",
-      enabled: "사용",
-      disabled: "사용 안 함",
-    };
     return scalars.slice(0, 4).map(([key, value]) => ({
-      label: labels[key] ?? key.replaceAll("_", " "),
-      value: typeof value === "number"
-        ? value.toLocaleString("ko-KR")
-        : valueLabels[String(value)] ?? (/^[0-9a-f-]{32,}$/i.test(String(value)) ? "내부 식별자" : String(value)),
+      label: key.replaceAll("_", " "),
+      value: typeof value === "number" ? value.toLocaleString("ko-KR") : String(value),
       delta: "실시간",
       trend: "flat" as const,
       foot: "서버 데이터",
@@ -95,212 +66,62 @@ function liveStats(data: unknown): readonly Stat[] | null {
   return null;
 }
 
-const MEMBER_STATUS_LABELS: Readonly<Record<string, string>> = {
-  active: "활성",
-  inactive: "휴면",
-  left: "탈퇴",
-};
-
-function membersTable(
-  data: unknown,
-  departments: readonly { id: string; name: string }[],
-  roles: readonly { key: string; label: string }[],
-): TableData | null {
+function liveTable(data: unknown): TableFixture | null {
   if (!data || typeof data !== "object" || !("items" in data)) return null;
   const items = (data as { items?: unknown }).items;
   if (!Array.isArray(items) || items.length === 0) return null;
-  const parsed = membersSchema.safeParse(data);
-  if (!parsed.success) return null;
-
-  const deptName = new Map(departments.map((department) => [department.id, department.name]));
-  const roleLabel = new Map(roles.map((role) => [role.key, role.label]));
-  const columns = ["이름", "이메일", "역할", "부서", "상태"];
-  const rows = parsed.data.items.map((member: Member): TableRow => {
-    const role = member.roles.map((key) => roleLabel.get(key) ?? key).join(" · ") || "역할 미지정";
-    const department = member.department_id
-      ? deptName.get(member.department_id) ?? member.department_id
-      : "미지정";
-    const status = MEMBER_STATUS_LABELS[member.status] ?? member.status;
-    return { id: member.membership_id, values: member, cells: [member.name, member.email, role, department, status] };
-  });
-  return { columns, rows };
-}
-
-function liveFacts(data: unknown): Readonly<{ key: string; value: string }[]> | null {
-  if (!data || typeof data !== "object" || !("items" in data)) return null;
-  const items = (data as { items?: unknown }).items;
-  if (!Array.isArray(items) || items.length === 0) return null;
-  const record = items[0];
-  if (!record || typeof record !== "object") return null;
-  const FACT_LABELS: Readonly<Record<string, string>> = {
-    id: "식별자",
-    name: "이름",
-    email: "이메일",
-    status: "상태",
-    created_at: "생성일",
-    updated_at: "수정일",
+  const records = items.filter(
+    (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object",
+  );
+  if (records.length === 0) return null;
+  const columns = Object.keys(records[0] ?? {}).slice(0, 6);
+  return {
+    columns,
+    rows: records.slice(0, 8).map((record) =>
+      columns.map((column) => {
+        const value = record[column];
+        if (value === null || value === undefined) return "—";
+        if (typeof value === "number") return value.toLocaleString("ko-KR");
+        if (typeof value === "boolean") return value ? "예" : "아니요";
+        if (Array.isArray(value)) return `${value.length}개`;
+        if (typeof value === "object") return "상세";
+        return String(value);
+      }),
+    ),
   };
-  return Object.entries(record as Record<string, unknown>)
-    .slice(0, 6)
-    .map(([key, value]) => ({
-      key: FACT_LABELS[key] ?? key.replaceAll("_", " "),
-      value: value === null || value === undefined ? "—" : String(value),
-    }));
 }
 
-function passedDetailFacts(state: unknown): Readonly<{ key: string; value: string }[]> | null {
-  if (!state || typeof state !== "object") return null;
-  const { columns, row } = state as { columns?: unknown; row?: unknown };
-  if (!Array.isArray(columns) || !Array.isArray(row)) return null;
-  return columns.map((column, index) => ({
-    key: String(column).replaceAll("_", " "),
-    value: row[index] === undefined || row[index] === null ? "—" : String(row[index]),
-  }));
-}
-
-const PASSED_STAT_LABELS: Readonly<Record<string, string>> = {
-  id: "식별자",
-  status: "상태",
-  name: "이름",
-  category: "분류",
-  quantity: "수량",
-  threshold: "임계",
-  assignee: "담당자",
-  owner: "책임자",
-};
-
-const PASSED_STAT_VALUE_LABELS: Readonly<Record<string, string>> = {
-  active: "활성",
-  available: "사용 가능",
-  inactive: "비활성",
-  disposed: "폐기",
-  maintained: "점검 중",
-};
-
-function passedStatValue(raw: string): string {
-  const localized = PASSED_STAT_VALUE_LABELS[raw];
-  if (localized) return localized;
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
-    return "내부 식별자";
-  }
-  return raw;
-}
-
-function passedDetailStats(state: unknown): readonly Stat[] | null {
-  if (!state || typeof state !== "object") return null;
-  const { columns, row } = state as { columns?: unknown; row?: unknown };
-  if (!Array.isArray(columns) || !Array.isArray(row)) return null;
-  const stats: Stat[] = [];
-  for (let index = 0; index < Math.min(columns.length, row.length); index += 1) {
-    const key = String(columns[index]);
-    const label = PASSED_STAT_LABELS[key] ?? key.replaceAll("_", " ");
-    const raw = row[index] === undefined || row[index] === null ? "—" : String(row[index]);
-    stats.push({
-      label,
-      value: passedStatValue(raw),
-      delta: "실측",
-      trend: "flat",
-      foot: "서버 데이터",
-    });
-  }
-  return stats.length > 0 ? stats : null;
-}
-
-function DataTable({
-  table,
-  onRowClick,
-  onDelete,
-  onEdit,
-  onCustody,
-  taskLinks = false,
-}: Readonly<{
-  table: TableData;
-  taskLinks?: boolean;
-  onRowClick?: (row: readonly string[], index: number) => void;
-  onDelete?: (row: TableRow) => void;
-  onEdit?: (id: string) => void;
-  onCustody?: (row: TableRow) => void;
-}>) {
-  const canDelete = Boolean(onDelete);
-  const canEdit = Boolean(onEdit);
-  const canAct = canDelete || canEdit || Boolean(onCustody);
+function DataTable({ table }: Readonly<{ table: TableFixture }>) {
   return (
     <div className="table-wrap" role="region" aria-label="데이터 표" tabIndex={0}>
       <p className="table-scroll-hint">표를 좌우로 스크롤해 모든 열을 확인할 수 있습니다.</p>
       <table>
         <thead>
           <tr>
-            {taskLinks && <th>업무</th>}
             {table.columns.map((column) => (
               <th key={column} className={isNumericColumn(column) ? "num" : undefined}>
                 {column.replaceAll("_", " ")}
               </th>
             ))}
-            {canAct && <th aria-label="작업" />}
           </tr>
         </thead>
         <tbody>
-          {table.rows.map((row, index) => {
-            const taskLink = taskLinks ? notificationTaskLink(row) : null;
-            return <tr
-              key={row.id ?? index}
-              className={onRowClick ? "table-row--interactive" : undefined}
-              tabIndex={onRowClick ? 0 : undefined}
-              onClick={onRowClick ? () => onRowClick(row.cells, index) : undefined}
-              onKeyDown={onRowClick ? (event) => {
-                if (event.key === "Enter" || event.key === " ") onRowClick(row.cells, index);
-              } : undefined}
-            >
-              {taskLinks && <td>{taskLink ? <Link to={taskLink}>업무 보기</Link> : '—'}</td>}
-              {row.cells.map((cell, cellIndex) => (
+          {table.rows.map((row, index) => (
+            <tr key={index}>
+              {row.map((cell, cellIndex) => (
                 <td key={cellIndex} className={isNumericColumn(table.columns[cellIndex] ?? "") ? "num" : undefined}>
                   {cell}
                 </td>
               ))}
-              {canAct && (
-                <td>
-                  <span className="row-actions">
-                    {onCustody && row.id && <Button tone="ghost" size="small" onClick={event => { event.stopPropagation(); onCustody(row); }}>담당·상태</Button>}
-                    {canEdit && row.id ? (
-                      <Button
-                        tone="ghost"
-                        size="small"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          if (row.id) onEdit?.(row.id);
-                        }}
-                      >
-                        수정
-                      </Button>
-                    ) : null}
-                    {canDelete && row.id ? (
-                      <Button
-                        tone="ghost"
-                        size="small"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          if (row.id && window.confirm("이 항목을 삭제할까요?")) onDelete?.(row);
-                        }}
-                      >
-                        삭제
-                      </Button>
-                    ) : null}
-                  </span>
-                </td>
-              )}
-            </tr>;
-          })}
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
   );
 }
 
-function DetailAction({
-  to,
-  onClick,
-  label = "자세히 보기",
-}: Readonly<{ to?: string; onClick?: () => void; label?: string }>) {
+function DetailAction({ to, onClick }: Readonly<{ to?: string; onClick?: () => void }>) {
   if (to) {
     return (
       <Link className="button button--ghost button--small" to={to}>
@@ -309,27 +130,29 @@ function DetailAction({
     );
   }
   return (
-    <Button tone="ghost" size="small" onClick={onClick} aria-label={label}>
+    <Button tone="ghost" size="small" onClick={onClick} aria-label="자세히 보기">
       자세히
     </Button>
   );
 }
 
+function toCsv(table: TableFixture): string {
+  const escape = (cell: string) => (/[",\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell);
+  return [table.columns.map(escape).join(","), ...table.rows.map((row) => row.map(escape).join(","))].join("\n");
+}
+
+function downloadCsv(name: string, table: TableFixture): void {
+  const blob = new Blob(["\uFEFF" + toCsv(table)], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${name}.csv`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
-  if (screen.id === "CAL-001" || screen.id === "CAL-002") return <CalendarSurface screen={screen} />;
-  if (screen.id === 'DASH-001') return <HomeScreenPage screen={screen} />;
-  return <GenericScreenPage screen={screen} />;
-}
-
-// 회사·로그인 변경 시 홈 집계와 열린 상세를 함께 버려 이전 회사의 내용을 남기지 않는다.
-function HomeScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const session = useSession();
-  return <GenericScreenPage key={`${session?.token}:${session?.orgId}`} screen={screen} />;
-}
-
-function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
-  const session = useSession();
-  const location = useLocation();
   const params = useParams();
   const isDetail = Object.keys(params).length > 0;
   const apiSession = useMemo(
@@ -341,114 +164,76 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const branchScoped = screen.module === "projects" && branchId !== null;
   const endpoint = useMemo(() => {
     if (!screen.endpoint) return null;
-    const separator = screen.endpoint.includes("?") ? "&" : "?";
-    // 레거시 자산은 제한 없는 조회 후 검색/10건 페이지를 적용한다. PG는 원래 전체 조회다.
-    if (screen.id === 'AST-001' && !isPgWorkspace(session?.orgId)) return `${screen.endpoint}${separator}limit=-1`;
     if (!branchScoped || !branchId) return screen.endpoint;
+    const separator = screen.endpoint.includes("?") ? "&" : "?";
     return `${screen.endpoint}${separator}department_id=${encodeURIComponent(branchId)}`;
-  }, [screen.id, screen.endpoint, session?.orgId, branchScoped, branchId]);
-  const [reloadKey, setReloadKey] = useState(0);
-  const resource = useResource(endpoint, apiSession, reloadKey);
+  }, [screen.endpoint, branchScoped, branchId]);
+  const resource = useResource(endpoint, apiSession);
+  const fixture: ScreenFixture = useMemo(
+    () => fixtureFor(screen.id, isDetail),
+    [screen.id, isDetail],
+  );
+
+  const demoMode = useDemoMode();
   const [query, setQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState(0);
-  const [page, setPage] = useState(1);
+  const [monthOffset, setMonthOffset] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   // 구성원 지표는 실제 가입·탈퇴 기록으로 기간별 추이를 보여줄 수 있다.
   const trendable = (screen.endpoint ?? "").startsWith("/members");
   const [trend, setTrend] = useState<{ stat: Stat; metric: MetricKey } | null>(null);
-  const [showMembers, setShowMembers] = useState(false);
-  const [homeDetail, setHomeDetail] = useState<HomeSelection | null>(null);
-  const isHome = screen.id === 'DASH-001';
-  const [custodyId, setCustodyId] = useState<string | null>(null);
-  const [quickModal, setQuickModal] = useState<"create" | "edit" | null>(null);
-  const [editModal, setEditModal] = useState<{ config: CreateConfig; initialValues: Record<string, string> } | null>(null);
-  const departments = useDepartments(apiSession);
-  const roles = useRoles(apiSession);
 
-  useEffect(() => {
-    setQuery(new URLSearchParams(location.search).get("q") ?? "");
-    setPage(1);
-  }, [location.search]);
-
-  useEffect(() => {
-    setActiveFilter(0);
-    setPage(1);
-  }, [screen.id, session?.orgId, endpoint]);
-
-  // 로딩·오류·빈 응답은 서버 상태 그대로 표시한다.
+  // 서버가 응답했으면(빈 결과 포함) 서버가 진실이다. 데모는 서버가 없을 때만 쓴다.
   const serverAnswered = resource.status === "ready" || resource.status === "empty";
-  const blocked = resource.status === "forbidden" || resource.status === "error";
-  const serverStats = serverAnswered ? liveStats(resource.data) : null;
-  const serverTable =
-    serverAnswered
-      ? screen.path === "/members"
-        ? membersTable(resource.data, departments, roles)
-        : liveTable(resource.data)
-      : null;
-  const serverFacts = serverAnswered ? liveFacts(resource.data) : null;
-  const hasServerContent = Boolean(serverStats || serverTable || serverFacts);
-  const serverEmpty = resource.status === "empty" && !hasServerContent;
+  const blocked = !demoMode && (resource.status === "forbidden" || resource.status === "error");
+  const serverStats = serverAnswered && !demoMode ? liveStats(resource.data) : null;
+  const serverTable = serverAnswered && !demoMode ? liveTable(resource.data) : null;
+  const serverEmpty = !demoMode && resource.status === "empty";
+  const usingDemo = demoMode || !screen.endpoint || (!serverAnswered && !blocked);
+  const stats = serverStats ?? (usingDemo ? fixture.stats : []);
+  const baseTable = serverTable ?? (usingDemo ? fixture.table : undefined);
+  const filters = fixture.filters ?? ["전체"];
+  const filterWord = activeFilter === 0 ? "" : (filters[activeFilter] ?? "");
 
-  const pgWorkspace = isPgWorkspace(session?.orgId);
-  const deleteResource = pgWorkspace && screen.id !== 'AST-001' ? screen.deleteResource : undefined;
-  const handleDelete = deleteResource
-    ? async (row: TableRow) => {
-        try {
-          const financial = ['transactions', 'budgets', 'settlements', 'dues'].includes(deleteResource);
-          await apiRequest(`/pg/records/${deleteResource}/${row.id}`, {
-            method: "DELETE",
-            ...(financial ? { body: { expected_version: row.values.__version ?? row.values.version } } : {}),
-            ...(apiSession ? { session: apiSession } : {}),
-          });
-          setReloadKey((key) => key + 1);
-          setNotice("삭제했습니다.");
-        } catch (error) {
-          setNotice(userMessageOf(error));
-        }
-      }
-    : undefined;
+  const table = useMemo(() => {
+    if (!baseTable) return undefined;
+    const needle = query.trim().toLowerCase();
+    let rows = baseTable.rows;
+    if (needle) rows = rows.filter((row) => row.some((cell) => cell.toLowerCase().includes(needle)));
+    if (filterWord) rows = rows.filter((row) => row.some((cell) => cell.includes(filterWord)));
+    return { ...baseTable, rows };
+  }, [baseTable, query, filterWord]);
 
-  const editResource = pgWorkspace && screen.id !== 'AST-001' ? screen.editResource : undefined;
-  const editCreateConfig = screen.create;
-  const handleEdit = editResource && editCreateConfig
-    ? async (id: string) => {
-        try {
-          const response = await apiRequest(`/pg/records/${editResource}/${id}`, {
-            ...(apiSession ? { session: apiSession } : {}),
-          });
-          const data = editResource === "documents"
-            ? parseDocumentFormDetail(id, response)
-            : response as Record<string, unknown>;
-          const initialValues: Record<string, string> = {};
-          for (const [key, value] of Object.entries(data)) {
-            initialValues[key] = value == null ? "" : String(value);
-          }
-          // 수정 폼: 생성 필드 중 select(FK) 제외 = 편집 가능한 스칼라 필드.
-          const fields = editCreateConfig.fields.filter((f) => f.type !== "select");
-          setEditModal({
-            config: { endpoint: `/pg/records/${editResource}/${id}`, fields },
-            initialValues,
-          });
-        } catch (error) {
-          setNotice(userMessageOf(error));
-        }
-      }
-    : undefined;
-  const passedFacts = passedDetailFacts(location.state);
-  const passedStats = passedDetailStats(location.state);
-  const detailFacts = passedFacts ?? serverFacts ?? [];
-  const stats = serverStats ?? passedStats ?? [];
-  const baseTable = serverTable;
-  const filters = screenFilters[screen.id] ?? [allFilter];
-  const selectedFilter = filters[activeFilter] ?? allFilter;
-  // 검색/상태는 전체 응답에 적용하고, 화면 페이지만 마지막에 잘라낸다.
-  const table = baseTable ? filterTable(baseTable, { query, filter: selectedFilter }) : undefined;
-  const pagination = table ? paginateTable(table, page) : undefined;
+  const calendarBase = fixture.calendar;
+  const shownDate = new Date(
+    calendarBase?.year ?? 2026,
+    (calendarBase?.month ?? 0) + monthOffset,
+    1,
+  );
+  const shownYear = shownDate.getFullYear();
+  const shownMonth = shownDate.getMonth();
 
-  if (!pgWorkspace && isOperationalScreen(screen.id) && apiSession) {
-    const operationalScreen = { ...screen, endpoint: screen.endpoint ? workspaceEndpoint(screen.endpoint, apiSession.orgId) : null };
-    return <OperationalSurface screen={operationalScreen} session={apiSession} />;
-  }
+  const visibleRows = useMemo(() => {
+    const rows = usingDemo ? (fixture.rows ?? []) : [];
+    const needle = query.trim().toLowerCase();
+    let out = rows;
+    if (needle) {
+      out = out.filter(
+        (row) =>
+          row.title.toLowerCase().includes(needle) ||
+          (row.subtitle ?? "").toLowerCase().includes(needle),
+      );
+    }
+    if (filterWord) {
+      out = out.filter(
+        (row) =>
+          row.title.includes(filterWord) ||
+          (row.subtitle ?? "").includes(filterWord) ||
+          (row.meta ?? "").includes(filterWord),
+      );
+    }
+    return out;
+  }, [fixture.rows, query, usingDemo, filterWord]);
 
   return (
     <div className="screen" data-screen-id={screen.id}>
@@ -459,6 +244,7 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             <Badge>{screen.id}</Badge>
             {screen.module && <Badge>{screen.module}</Badge>}
             {screen.ai && <Badge tone="ai">AI 검토 필요</Badge>}
+            {usingDemo && <Badge tone="warning">데모 데이터</Badge>}
             {blocked && <Badge tone="danger">{resource.status === "forbidden" ? "권한 없음" : "연결 실패"}</Badge>}
             {serverEmpty && <Badge tone="neutral">데이터 없음</Badge>}
           </div>
@@ -473,21 +259,19 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             onClick={() => {
               if (table) {
                 downloadCsv(screen.label, table);
-                setNotice(`${screen.label} 필터 결과 전체 ${table.rows.length}행을 CSV로 내려받았습니다.`);
+                setNotice(`${screen.label} ${table.rows.length}행을 CSV로 내려받았습니다.`);
               }
             }}
           >
-            필터 결과 전체 내보내기
+            내보내기
           </Button>
-          {pgWorkspace && !isDetail && screen.create && (
-            <Button
-              tone={screen.ai ? "ai" : "primary"}
-              size="small"
-              onClick={() => setQuickModal("create")}
-            >
-              새로 만들기
-            </Button>
-          )}
+          <Button
+            tone={screen.ai ? "ai" : "primary"}
+            size="small"
+            onClick={() => setNotice(`${screen.label} ${isDetail ? "편집" : "새로 만들기"}은 데모에서 준비 중입니다.`)}
+          >
+            {isDetail ? "편집" : "새로 만들기"}
+          </Button>
         </div>
       </header>
 
@@ -505,13 +289,8 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             stat={stat}
             action={
               <DetailAction
-                label={isHome ? `${stat.label} 목록 자세히 보기` : screen.path === "/members" ? "구성원 목록 자세히 보기" : "자세히 보기"}
                 onClick={() =>
-                  isHome
-                    ? setHomeDetail(homeCategories.find(item => item.label === stat.label)?.key ?? 'overview')
-                    : screen.path === "/members"
-                    ? setShowMembers(true)
-                    : trendable
+                  trendable
                     ? setTrend({ stat, metric: metricKeyOf(stat, index) })
                     : setNotice(`${stat.label}: ${stat.value}${stat.unit ?? ""} — ${stat.foot ?? "상세 분석 준비 중"}`)
                 }
@@ -520,10 +299,6 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
           />
         ))}
       </section>
-
-      {isHome && homeDetail && apiSession && (
-        <HomeDetailModal initial={homeDetail} session={apiSession} onClose={() => setHomeDetail(null)} />
-      )}
 
       {trend && (
         <StatTrendModal
@@ -534,30 +309,155 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
         />
       )}
 
-      {showMembers && (
-        <MemberListModal
-          session={apiSession}
-          onClose={() => setShowMembers(false)}
-        />
-      )}
-
-      {screen.endpoint && resource.status === "loading" ? (
-        <SectionCard title="불러오는 중" subtitle="서버 응답 대기">
-          <StateBoundary status="loading" error={null}>
-            <div />
-          </StateBoundary>
-        </SectionCard>
-      ) : blocked ? (
+      {blocked ? (
         <SectionCard title="상태" subtitle="서버 응답" >
           <StateBoundary status={resource.status} error={resource.error}>
             <div />
           </StateBoundary>
         </SectionCard>
-      ) : isDetail && !screen.endpoint ? (
+      ) : fixture.layout === "graph" && fixture.graph ? (
+        <SectionCard title="관계 그래프" subtitle="위키링크와 백링크" action={<DetailAction onClick={() => setNotice("노드를 클릭하면 해당 노트로 이동합니다 (데모)")} />} foot="회색 노드는 연결이 없는 고아 노트입니다">
+          <NodeGraph nodes={fixture.graph.nodes} edges={fixture.graph.edges} />
+        </SectionCard>
+      ) : fixture.layout === "flow" && fixture.flow ? (
+        <SectionCard title="워크플로" subtitle="트리거 → 조건 → 액션" action={<DetailAction onClick={() => setNotice("샌드박스 테스트는 데모에서 준비 중입니다.")} />} foot="게시 전 샌드박스에서 실행해 볼 수 있습니다">
+          <FlowCanvas nodes={fixture.flow} />
+        </SectionCard>
+      ) : fixture.layout === "heatmap" && fixture.heatmap ? (
+        <SectionCard title="업무량" subtitle="구성원별 배정 시간" action={<DetailAction onClick={() => setNotice("셀을 클릭하면 해당 일자 업무 목록이 열립니다 (데모)")} />} foot="색이 진할수록 배정 시간이 많습니다 · 붉은 합계는 가용 시간 초과">
+          <WorkloadHeatmap columns={fixture.heatmap.columns} rows={fixture.heatmap.rows} />
+        </SectionCard>
+      ) : fixture.layout === "matrix" && fixture.matrix ? (
+        <SectionCard title="권한 매트릭스" subtitle="역할별 허용 범위" action={<DetailAction onClick={() => setNotice("권한 시뮬레이션은 데모에서 준비 중입니다.")} />} foot="기본 역할의 핵심 권한은 보호되어 변경할 수 없습니다">
+          <PermissionMatrix roles={fixture.matrix.roles} rows={fixture.matrix.rows} />
+        </SectionCard>
+      ) : fixture.layout === "brief" && fixture.brief ? (
+        <SectionCard title="오늘의 브리핑" subtitle="우선순위·결재·위험" action={<DetailAction onClick={() => setNotice("브리핑을 새로 생성했습니다 (데모)")} />} foot="각 항목은 원천 데이터와 연결되어 있습니다">
+          <div className="brief-list">
+            {fixture.brief.map((item) => (
+              <article
+                key={item.title}
+                className={`brief-item${item.kind === "risk" ? " brief-item--risk" : item.kind === "approval" ? " brief-item--approval" : ""}`}
+              >
+                <b>{item.title}</b>
+                <span>{item.note}</span>
+                <cite>근거 · {item.source}</cite>
+              </article>
+            ))}
+          </div>
+        </SectionCard>
+      ) : fixture.layout === "diff" && fixture.diff ? (
+        <div className="detail-layout">
+          <SectionCard title="변경 미리보기" subtitle="실행 전/후 비교" action={<DetailAction onClick={() => setNotice("승인 요청을 전송했습니다 (데모)")} />} foot="승인 후에만 실제 반영됩니다">
+            <div className="diff">
+              {fixture.diff.map((row) => (
+                <div className="diff__row" key={row.field}>
+                  <span className="diff__field">{row.field}</span>
+                  <span className="diff__before">{row.before}</span>
+                  <span className="diff__after">{row.after}</span>
+                </div>
+              ))}
+            </div>
+          </SectionCard>
+          <SectionCard title="실행 정보" subtitle="도구와 승인" action={<DetailAction onClick={() => setNotice("롤백은 실행 후 24시간 이내 가능합니다.")} />}>
+            <dl className="kv-list">
+              {(fixture.facts ?? []).map((fact) => (
+                <div key={fact.key}>
+                  <dt>{fact.key}</dt>
+                  <dd>{fact.value}</dd>
+                </div>
+              ))}
+            </dl>
+          </SectionCard>
+        </div>
+      ) : fixture.layout === "kanban" && fixture.kanban ? (
+        <SectionCard
+          title="업무 보드"
+          subtitle="상태별 진행 현황 · WIP 한도 표시"
+          action={<DetailAction />}
+          foot="열 머리글 수치는 현재 항목 수 / WIP 한도입니다"
+        >
+          <KanbanBoard columns={fixture.kanban} />
+        </SectionCard>
+      ) : fixture.layout === "gantt" && fixture.gantt ? (
+        <SectionCard
+          title="타임라인"
+          subtitle="주 단위 일정과 마일스톤"
+          action={<DetailAction />}
+          foot="막대 수치는 진행률, 마름모는 마일스톤, 노란 막대는 지연 업무입니다"
+        >
+          <GanttChart
+            columns={fixture.gantt.columns}
+            tasks={fixture.gantt.tasks}
+            todayIndex={fixture.gantt.todayIndex}
+          />
+        </SectionCard>
+      ) : fixture.layout === "orgchart" && fixture.orgchart ? (
+        <SectionCard title="조직도" subtitle="부서 구조와 책임자" action={<DetailAction />} foot="괄호 표기는 공석입니다">
+          <OrgTree root={fixture.orgchart} />
+        </SectionCard>
+      ) : fixture.layout === "calendar" && fixture.calendar ? (
+        <div className="grid-12">
+          <div className="col-8">
+            <SectionCard
+              title="월간 일정"
+              subtitle={`${shownYear}년 ${shownMonth + 1}월`}
+              action={
+                <div className="calendar-nav">
+                  <Button tone="neutral" size="small" aria-label="이전 달" onClick={() => setMonthOffset((value) => value - 1)}>‹</Button>
+                  <span className="calendar-nav__label">
+                    {shownYear}. {String(shownMonth + 1).padStart(2, "0")}
+                  </span>
+                  <Button tone="neutral" size="small" aria-label="다음 달" onClick={() => setMonthOffset((value) => value + 1)}>›</Button>
+                </div>
+              }
+              foot="개인·조직·프로젝트 일정을 통합해 표시합니다 · 10분 전 갱신"
+            >
+              <MonthCalendar
+                year={shownYear}
+                month={shownMonth}
+                {...(monthOffset === 0 ? { today: fixture.calendar.today } : {})}
+                events={monthOffset === 0 ? fixture.calendar.events : []}
+              />
+            </SectionCard>
+          </div>
+          <div className="col-4">
+            <SectionCard
+              title={fixture.rowsTitle ?? "다가오는 일정"}
+              subtitle="권한 범위 안의 항목"
+              action={<DetailAction />}
+            >
+              <div className="list-rows">
+                {(fixture.rows ?? []).map((row) => (
+                  <ListRow
+                    key={row.title}
+                    mark={row.mark}
+                    time={row.time}
+                    title={row.title}
+                    subtitle={row.subtitle}
+                    ai={row.ai ?? row.tone === "ai"}
+                    meta={row.meta ? <Badge tone={row.tone ?? "neutral"}>{row.meta}</Badge> : null}
+                  />
+                ))}
+              </div>
+            </SectionCard>
+            {fixture.timeline && (
+              <SectionCard
+                title={fixture.timelineTitle ?? "준비 단계"}
+                subtitle="진행 순서"
+                action={<DetailAction />}
+                className="section-card--stacked"
+              >
+                <Timeline items={fixture.timeline} />
+              </SectionCard>
+            )}
+          </div>
+        </div>
+      ) : fixture.layout === "detail" ? (
         <div className="detail-layout">
           <SectionCard title="상세 정보" subtitle="선택한 항목의 핵심 값" action={<DetailAction />}>
             <dl className="kv-list">
-              {(detailFacts).map((fact) => (
+              {(fixture.facts ?? []).map((fact) => (
                 <div key={fact.key}>
                   <dt>{fact.key}</dt>
                   <dd>{fact.value}</dd>
@@ -569,18 +469,113 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
               </div>
             </dl>
           </SectionCard>
+          <SectionCard title={fixture.timelineTitle ?? "활동 기록"} subtitle="변경 이력" action={<DetailAction />}>
+            <Timeline items={fixture.timeline ?? []} />
+          </SectionCard>
+          {visibleRows.length > 0 && (
+            <SectionCard
+              title={fixture.rowsTitle ?? "연결 항목"}
+              subtitle="관련 항목과 활동"
+              action={<DetailAction />}
+              className="detail-layout__wide"
+            >
+              <div className="list-rows">
+                {visibleRows.map((row) => (
+                  <ListRow
+                    key={row.title}
+                    mark={row.mark}
+                    time={row.time}
+                    title={row.title}
+                    subtitle={row.subtitle}
+                    ai={row.ai ?? row.tone === "ai"}
+                    meta={row.meta ? <Badge tone={row.tone ?? "neutral"}>{row.meta}</Badge> : null}
+                  />
+                ))}
+              </div>
+            </SectionCard>
+          )}
+        </div>
+      ) : fixture.layout === "dashboard" ? (
+        <div className="grid-12">
+          {fixture.bars && (
+            <div className="col-8">
+              <SectionCard
+                title={fixture.barsTitle ?? "추이"}
+                subtitle="최근 기간 기준"
+                action={<DetailAction />}
+                foot="집계 기준: 조직 전체 · 10분 전 갱신"
+              >
+                <BarChart bars={fixture.bars} />
+              </SectionCard>
+            </div>
+          )}
+          {fixture.slices && (
+            <div className="col-4">
+              <SectionCard title={fixture.donutTitle ?? "분포"} subtitle="비중" action={<DetailAction />}>
+                <DonutChart
+                  slices={fixture.slices}
+                  centerValue={fixture.donutValue ?? "—"}
+                  centerLabel={fixture.donutLabel ?? "합계"}
+                />
+              </SectionCard>
+            </div>
+          )}
+          {fixture.rows && (
+            <div className={fixture.progress ? "col-8" : "col-12"}>
+              <SectionCard
+                title={fixture.rowsTitle ?? "최근 항목"}
+                subtitle="권한 범위 안의 항목"
+                action={<DetailAction />}
+              >
+                <StateBoundary
+                  status={visibleRows.length === 0 && !usingDemo ? "empty" : "ready"}
+                  error={resource.error}
+                >
+                  <div className="list-rows">
+                    {visibleRows.map((row) => (
+                      <ListRow
+                        key={row.title}
+                        mark={row.mark}
+                        time={row.time}
+                        title={row.title}
+                        subtitle={row.subtitle}
+                        ai={row.ai ?? row.tone === "ai"}
+                        meta={row.meta ? <Badge tone={row.tone ?? "neutral"}>{row.meta}</Badge> : null}
+                      />
+                    ))}
+                  </div>
+                </StateBoundary>
+              </SectionCard>
+            </div>
+          )}
+          {fixture.progress && (
+            <div className="col-4">
+              <SectionCard title={fixture.progressTitle ?? "진행률"} subtitle="목표 대비" action={<DetailAction />}>
+                <ProgressList items={fixture.progress} />
+              </SectionCard>
+            </div>
+          )}
+          {fixture.timeline && !fixture.rows && (
+            <div className="col-4">
+              <SectionCard title={fixture.timelineTitle ?? "단계"} subtitle="진행 순서" action={<DetailAction />}>
+                <Timeline items={fixture.timeline} />
+              </SectionCard>
+            </div>
+          )}
+          {table && (
+            <div className="col-12">
+              <SectionCard title="상세 목록" subtitle="상위 8건" action={<DetailAction />}>
+                <DataTable table={table} />
+              </SectionCard>
+            </div>
+          )}
         </div>
       ) : (
         <SectionCard
           title="목록"
           subtitle="권한 범위 안의 최신 데이터"
-          action={
-            <DetailAction
-              label={isHome ? '홈 현황 자세히 보기' : screen.path === "/members" ? "구성원 목록 자세히 보기" : "자세히 보기"}
-              {...(isHome ? { onClick: () => setHomeDetail('overview') } : screen.path === "/members" ? { onClick: () => setShowMembers(true) } : {})}
-            />
-          }
-          foot="서버 응답 기준"
+          action={<DetailAction />}
+          foot={usingDemo ? "데모 데이터 · 서버 연결 시 실제 값으로 대체됩니다" : "서버 데이터 · 10분 전 갱신"}
         >
           <div className="filter-bar">
             <label className="compact-search">
@@ -589,29 +584,24 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
                 type="search"
                 placeholder="이 화면에서 검색"
                 value={query}
-                onChange={(event) => { setQuery(event.target.value); setPage(1); }}
+                onChange={(event) => setQuery(event.target.value)}
               />
             </label>
             {filters.map((filter, index) => (
               <button
-                key={filter.id}
+                key={filter}
                 type="button"
                 aria-pressed={index === activeFilter}
                 className={index === activeFilter ? "chip chip--on" : "chip"}
-                onClick={() => { setActiveFilter(index); setPage(1); }}
+                onClick={() => setActiveFilter(index)}
               >
-                {filter.label}
+                {filter}
               </button>
             ))}
             {/* 전체를 포함한 모든 필터에서 같은 자리에 건수를 보여준다. */}
-            {screen.id === 'AST-001' ? (
-              <div className="assets-list-counts" aria-live="polite">
-                <span>전체 <strong>{baseTable?.rows.length ?? 0}</strong> 개</span>
-                <span>검색 <strong>{table?.rows.length ?? 0}</strong> 개</span>
-              </div>
-            ) : (
-              <span className="filter-bar__result">{table?.rows.length ?? 0}건</span>
-            )}
+            <span className="filter-bar__result">
+              {table ? table.rows.length : visibleRows.length}건
+            </span>
           </div>
           <StateBoundary
             status={
@@ -625,79 +615,25 @@ function GenericScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
                 : "첫 항목을 추가하면 팀과 바로 공유할 수 있습니다."
             }
           >
-            {pagination ? (
-              <DataTable
-                table={pagination.table}
-                taskLinks={screen.id === 'NOT-001'}
-                {...(screen.id === 'AST-001' ? { onCustody: (row: TableRow) => {
-                  if (row.id) setCustodyId(row.id);
-                } } : {})}
-                {...(handleDelete ? { onDelete: handleDelete } : {})}
-                {...(handleEdit ? { onEdit: handleEdit } : {})}
-              />
+            {table ? (
+              <DataTable table={table} />
+            ) : visibleRows.length > 0 ? (
+              <div className="list-rows">
+                {visibleRows.map((row) => (
+                  <ListRow
+                    key={row.title}
+                    mark={row.mark}
+                    time={row.time}
+                    title={row.title}
+                    subtitle={row.subtitle}
+                    ai={row.ai ?? row.tone === "ai"}
+                    meta={row.meta ? <Badge tone={row.tone ?? "neutral"}>{row.meta}</Badge> : null}
+                  />
+                ))}
+              </div>
             ) : null}
           </StateBoundary>
-          {screen.id === 'AST-001' && serverAnswered ? (
-            <div className="assets-list-footer">
-              <div className="assets-list-counts" aria-live="polite">
-                <span>전체 <strong>{baseTable?.rows.length ?? 0}</strong> 개</span>
-                <span>검색 <strong>{table?.rows.length ?? 0}</strong> 개</span>
-                <span>{pagination?.start ?? 0}–{pagination?.end ?? 0} 표시</span>
-              </div>
-              <nav className="assets-list-pager" aria-label="목록 페이지">
-                {pagination && pagination.pageCount > 1 && (
-                  <Button tone="ghost" size="small" aria-label="이전 페이지" disabled={pagination.currentPage === 1}
-                    onClick={() => setPage(pagination.currentPage - 1)}>이전</Button>
-                )}
-                <span aria-live="polite">{pagination?.currentPage ?? 1} / {pagination?.pageCount ?? 1} 페이지</span>
-                {pagination && pagination.pageCount > 1 && (
-                  <Button tone="ghost" size="small" aria-label="다음 페이지" disabled={pagination.currentPage === pagination.pageCount}
-                    onClick={() => setPage(pagination.currentPage + 1)}>다음</Button>
-                )}
-              </nav>
-            </div>
-          ) : pagination && table && (
-            <nav className="filter-bar" aria-label="목록 페이지">
-              <Button tone="ghost" size="small" aria-label="이전 페이지" disabled={pagination.currentPage === 1}
-                onClick={() => setPage(pagination.currentPage - 1)}>이전</Button>
-              <span aria-live="polite">{pagination.start}–{pagination.end} / {table.rows.length}건 · {pagination.currentPage} / {pagination.pageCount}페이지</span>
-              <Button tone="ghost" size="small" aria-label="다음 페이지" disabled={pagination.currentPage === pagination.pageCount}
-                onClick={() => setPage(pagination.currentPage + 1)}>다음</Button>
-            </nav>
-          )}
         </SectionCard>
-      )}
-      {quickModal && screen.create && quickModal === "create" && (
-        <CreateFormModal
-          entityLabel={screen.label}
-          config={screen.create}
-          session={apiSession}
-          onClose={() => setQuickModal(null)}
-          onCreated={() => {
-            setReloadKey((key) => key + 1);
-            setNotice(`${screen.label} 항목을 저장했습니다.`);
-          }}
-        />
-      )}
-      {custodyId && apiSession && <AssetCustodyModal id={custodyId} session={apiSession} onClose={() => setCustodyId(null)} onSaved={() => { setReloadKey(key => key + 1); setNotice('자산 담당·상태를 저장했습니다.'); }} />}
-      {editModal && (
-        <CreateFormModal
-          entityLabel={screen.label}
-          config={editModal.config}
-          session={apiSession}
-          method="PATCH"
-          initialValues={editModal.initialValues}
-          {...(editResource === "documents"
-            ? { versionField: "version" as const }
-            : ["transactions", "budgets", "settlements", "dues"].includes(editResource ?? "")
-              ? { versionField: "expected_version" as const }
-              : {})}
-          onClose={() => setEditModal(null)}
-          onCreated={() => {
-            setReloadKey((key) => key + 1);
-            setNotice("수정했습니다.");
-          }}
-        />
       )}
     </div>
   );

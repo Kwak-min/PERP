@@ -1,314 +1,338 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { matchPath, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useAppContext } from "../../context/AppContext";
-import { AccessContext, canOpenScreen, useWorkspaceAccess } from '../../hooks/useWorkspaceAccess';
-import { navigation, screens, sectionLabels, type ScreenDefinition, type ScreenSection } from "../../routes/catalog";
-import { authenticatedUserId, logout as revokeSession } from "../../services/auth";
-import { userMessageOf } from "../../services/api";
-import { isPgWorkspace } from "../../services/workspace";
-import { navPrefKey, readNavPref, selectNavFavorites, updateNavPref, type NavPref, type NavPrefScope } from "../../store/navPref";
+import { apiRequest } from "../../services/api";
 import { sessionStore, useSession } from "../../store/session";
-import { Button } from "../ui/Button";
+import { Icon } from "../ui/Icon";
 import { AgentPanel } from "./AgentPanel";
-import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
-import { NavigationEntry } from './NavigationEntry';
+import { NAV, ORG_TYPES, bestNavPath } from "./shellNav";
 
-const mobilePaths = ['/', '/projects', '/calendar', '/settings'];
-const sidebarMedia = '(max-width: 1100px)';
-const searchCategories = [
-  { path: '/members', label: '구성원' }, { path: '/documents', label: '문서' },
-  { path: '/tasks', label: '업무' }, { path: '/projects', label: '프로젝트' },
+const TABBAR: Array<[string, string, string]> = [
+  ["/", "홈", "home"],
+  ["/tasks", "업무", "tasks"],
+  ["/calendar", "캘린더", "calendar"],
+  ["/notifications", "알림", "bell"],
+  ["/agent", "Agent", "sparkles"],
 ];
-const canFocus = (node: HTMLElement) => node.isConnected && !node.closest('[inert]') && !node.matches(':disabled') && node.checkVisibility({ visibilityProperty: true });
-const sidebarControls = (panel: HTMLElement) => [...panel.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, [tabindex]')]
-  .filter(node => node.tabIndex >= 0 && canFocus(node));
-const emptyNavPref: NavPref = { version: 1, favoriteScreenIds: [], collapsedSectionIds: [], hiddenScreenIds: [] };
-type NavState = Readonly<{ key: string; status: 'loading' | 'ready' | 'unavailable'; value: NavPref; error: string | null }>;
 
-function storageMessage(error: unknown): string {
-  if (error instanceof DOMException && error.name === 'QuotaExceededError') return '브라우저 저장 공간이 부족해 메뉴 설정을 저장하지 못했습니다.';
-  if (error instanceof DOMException && error.name === 'SecurityError') return '브라우저 저장소 접근이 차단되어 메뉴 설정을 사용할 수 없습니다.';
-  return '메뉴 설정을 이 브라우저에 저장하지 못했습니다.';
+type ThemePref = "system" | "light" | "dark";
+
+function readTheme(): ThemePref {
+  try {
+    return (localStorage.getItem("of-theme") as ThemePref) || "system";
+  } catch {
+    return "system";
+  }
+}
+
+function applyTheme(pref: ThemePref): void {
+  const root = document.documentElement;
+  if (pref === "system") {
+    root.removeAttribute("data-theme");
+  } else {
+    root.setAttribute("data-theme", pref);
+  }
+}
+
+function LogoMark() {
+  return (
+    <svg className="logo" viewBox="0 0 32 32" aria-hidden="true">
+      <rect width="32" height="32" rx="8" style={{ fill: "var(--of-primary)" }} />
+      <ellipse
+        cx="16"
+        cy="16"
+        rx="11"
+        ry="5.2"
+        fill="none"
+        stroke="#fff"
+        strokeOpacity=".55"
+        strokeWidth="1.6"
+        transform="rotate(-28 16 16)"
+      />
+      <circle cx="16" cy="16" r="4.2" fill="#fff" />
+      <circle cx="25.2" cy="11.2" r="2.2" fill="#C4B5FD" />
+    </svg>
+  );
 }
 
 export function AppShell() {
   const session = useSession();
   const navigate = useNavigate();
   const location = useLocation();
-  const { sidebarOpen, setSidebarOpen, toggleAgent } = useAppContext();
-  const [responsiveSidebar, setResponsiveSidebar] = useState(() => window.matchMedia(sidebarMedia).matches);
-  const sidebarRef = useRef<HTMLDivElement>(null);
-  const sidebarOpener = useRef<HTMLButtonElement | null>(null);
-  const sidebarFocused = useRef<HTMLElement | null>(null);
-  const modalSidebar = responsiveSidebar && sidebarOpen;
-  const [search, setSearch] = useState(() => new URLSearchParams(location.search).get('q') ?? '');
-  const [searchCategory, setSearchCategory] = useState('');
-  const [openAction, setOpenAction] = useState<string | null>(null);
-  const [managingHidden, setManagingHidden] = useState(false);
-  const hiddenManager = useRef<HTMLButtonElement>(null);
-  useEffect(() => { setSearch(new URLSearchParams(location.search).get('q') ?? ''); }, [location.search]);
-  const [identity, setIdentity] = useState<Readonly<{ token: string; userId: string | null; error: string | null }>>({ token: '', userId: null, error: null });
-  const [navState, setNavState] = useState<NavState>({ key: '', status: 'loading', value: emptyNavPref, error: null });
-  const access = useWorkspaceAccess(session, location.pathname);
-
-  useLayoutEffect(() => {
-    const media = window.matchMedia(sidebarMedia);
-    const onChange = () => { setResponsiveSidebar(media.matches); setSidebarOpen(false); };
-    media.addEventListener('change', onChange);
-    return () => media.removeEventListener('change', onChange);
-  }, [setSidebarOpen]);
-
-  useEffect(() => { setSidebarOpen(false); }, [location.pathname, setSidebarOpen]);
-
-  useLayoutEffect(() => {
-    const panel = sidebarRef.current;
-    if (!panel) return;
-    const frame = panel.parentElement!;
-    const restore = () => {
-      const opener = sidebarOpener.current ?? frame.querySelector<HTMLElement>('.menu-button');
-      const target = opener && canFocus(opener) ? opener : frame.querySelector<HTMLElement>('#main-content');
-      if (target && canFocus(target)) target.focus();
-    };
-    if (!modalSidebar) {
-      // A focused desktop control must not disappear offscreen after a breakpoint change.
-      if (responsiveSidebar && panel.contains(document.activeElement)) restore();
-      return;
-    }
-    // Only this shell's covered siblings are inert; no document-wide keyboard interception.
-    const background = [...frame.children].filter((node): node is HTMLElement => node instanceof HTMLElement && node !== panel && !node.classList.contains('sidebar-scrim'));
-    const previous = background.map(node => ({ node, inert: node.inert }));
-    background.forEach(node => { node.inert = true; });
-    (sidebarControls(panel)[0] ?? panel).focus();
-    return () => {
-      previous.forEach(({ node, inert }) => { node.inert = inert; });
-      if (window.matchMedia(sidebarMedia).matches) restore();
-      else if (panel.contains(document.activeElement) && !canFocus(document.activeElement as HTMLElement)) {
-        (sidebarControls(panel)[0] ?? panel).focus();
-      }
-    };
-  }, [modalSidebar, responsiveSidebar, Boolean(session)]);
-
-  useLayoutEffect(() => {
-    const panel = sidebarRef.current, focused = sidebarFocused.current;
-    // A permission refresh is not a close/open cycle. Recover only a lost control,
-    // never a live focus position or focus intentionally moved to another surface.
-    if (panel && canFocus(panel) && focused && !canFocus(focused)
-      && (document.activeElement === document.body || document.activeElement === focused)) {
-      (sidebarControls(panel)[0] ?? panel).focus();
-    }
-  }, [access.data]);
+  const { agentOpen, sidebarOpen, setSidebarOpen, toggleAgent, toggleSidebar } =
+    useAppContext();
+  const [menu, setMenu] = useState<"org" | "create" | "profile" | null>(null);
+  const [theme, setTheme] = useState<ThemePref>(readTheme);
 
   useEffect(() => {
-    if (!session) return;
-    const token = session.token;
-    const controller = new AbortController();
-    setIdentity({ token, userId: null, error: null });
-    authenticatedUserId(token, controller.signal).then(userId => {
-      if (!controller.signal.aborted) setIdentity({ token, userId, error: null });
-    }).catch(error => {
-      if (!controller.signal.aborted) setIdentity({ token, userId: null, error: userMessageOf(error) });
-    });
-    return () => controller.abort();
-  }, [session?.token]);
+    applyTheme(theme);
+  }, [theme]);
 
-  const userId = session && identity.token === session.token ? identity.userId : null;
-  const scope: NavPrefScope | null = session?.orgId && userId ? {
-    userId,
-    source: isPgWorkspace(session.orgId) ? 'pg' : 'legacy',
-    orgId: session.orgId,
-  } : null;
-  const scopeKey = scope ? navPrefKey(scope) : '';
-  useLayoutEffect(() => { setOpenAction(null); setManagingHidden(false); }, [scopeKey, session?.token, location.key, sidebarOpen]);
-  useLayoutEffect(() => {
-    if (openAction && !navigation.some(screen => openAction.endsWith(`:${screen.id}`) && access.data && canOpenScreen(access.data, screen))) setOpenAction(null);
-  }, [access.data, openAction]);
-
+  // 경로 이동 시 열린 메뉴/사이드바 닫기
   useEffect(() => {
-    if (!scope || !access.data) return;
-    const key = navPrefKey(scope);
-    const sync = () => {
-      const read = readNavPref(scope);
-      if (read.status === 'unavailable') {
-        setNavState({ key, status: 'unavailable', value: read.value, error: storageMessage(read.error) });
-      } else {
-        setNavState({ key, status: 'ready', value: read.value, error: read.status === 'invalid' ? '저장된 메뉴 설정이 손상되어 기본값으로 열었습니다.' : null });
-      }
-    };
-    sync();
-    const onStorage = (event: StorageEvent) => { if (event.key === key || event.key === null) sync(); };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, [access.data, scope?.orgId, scope?.source, scope?.userId]);
+    setMenu(null);
+    setSidebarOpen(false);
+  }, [location.pathname, setSidebarOpen]);
 
   if (!session) return null;
   const activeSession = session;
-  const accessData = access.data;
-  const authorizedNavigation = accessData ? navigation.filter(screen => canOpenScreen(accessData, screen)) : [];
-  const prefReady = Boolean(scope && access.data && navState.key === scopeKey && navState.status === 'ready');
-  const pref = prefReady ? navState.value : emptyNavPref;
-  const visibleNavigation = authorizedNavigation.filter(screen => screen.path !== '/settings' && !pref.hiddenScreenIds.includes(screen.id));
-  const hiddenNavigation = authorizedNavigation.filter(screen => pref.hiddenScreenIds.includes(screen.id));
-  const currentScreen = screens.filter(screen => matchPath({ path: screen.path, end: true }, location.pathname))
-    .sort((a, b) => b.path.length - a.path.length)[0];
-  const allowed = Boolean(accessData && currentScreen && canOpenScreen(accessData, currentScreen));
-  const canOpen = (path: string) => Boolean(accessData && screens.some(screen => screen.path === path && canOpenScreen(accessData, screen)));
-  const availableSearchCategories = searchCategories.filter(category => canOpen(category.path));
-  const searchPath = availableSearchCategories.some(category => category.path === searchCategory) ? searchCategory : '';
-  const activePath = visibleNavigation.reduce((active, screen) =>
-    matchPath({ path: screen.path, end: screen.path === "/" }, location.pathname) && screen.path.length > active.length ? screen.path : active, "");
-  const activeSection = visibleNavigation.find(screen => screen.path === activePath)?.section;
-  const grouped = Object.entries(visibleNavigation.reduce<Record<string, typeof navigation>>((groups, screen) => {
-    const current = groups[screen.section] ?? [];
-    return { ...groups, [screen.section]: [...current, screen] };
-  }, {}));
-  const favorites = selectNavFavorites(pref, visibleNavigation);
-  const prefStatus = !scope || !access.data || navState.key !== scopeKey ? 'loading' : navState.status;
-  const prefError = identity.token === session.token && identity.error ? `메뉴 개인화 신원을 확인하지 못했습니다. ${identity.error}` : navState.key === scopeKey ? navState.error : null;
 
-  function savePreference(update: (current: NavPref) => NavPref): void {
-    if (!scope || !prefReady) return;
+  const org =
+    activeSession.organizations.find((o) => o.org_id === activeSession.orgId) ??
+    activeSession.organizations[0];
+  const orgName = org?.org_name ?? "조직";
+  const orgTypeLabel = org?.org_type ? ORG_TYPES[org.org_type] ?? "" : "";
+  const roleLabel = org?.roles?.[0] ?? "";
+  const best = bestNavPath(location.pathname);
+
+  function cycleTheme(): void {
+    const order: ThemePref[] = ["system", "light", "dark"];
+    const next = order[(order.indexOf(theme) + 1) % order.length] ?? "system";
     try {
-      const value = updateNavPref(scope, update);
-      setNavState({ key: scopeKey, status: 'ready', value, error: null });
-    } catch (error) {
-      setNavState(current => current.key === scopeKey ? { ...current, error: storageMessage(error) } : current);
+      localStorage.setItem("of-theme", next);
+    } catch {
+      /* 저장 불가 무시 */
+    }
+    setTheme(next);
+  }
+
+  const themeIc: Record<ThemePref, string> = {
+    system: "monitor",
+    light: "sun",
+    dark: "moon",
+  };
+
+  async function logout(): Promise<void> {
+    try {
+      await apiRequest("/auth/logout", {
+        method: "POST",
+        session: { token: activeSession.token, orgId: activeSession.orgId },
+      });
+    } finally {
+      sessionStore.clear();
+      navigate("/login");
     }
   }
 
-  function toggleFavorite(screenId: string): void {
-    savePreference(current => ({ ...current, favoriteScreenIds: current.favoriteScreenIds.includes(screenId)
-      ? current.favoriteScreenIds.filter(id => id !== screenId) : [...current.favoriteScreenIds, screenId] }));
-  }
-
-  function moveFavorite(screenId: string, offset: -1 | 1): void {
-    const visibleIndex = favorites.findIndex(screen => screen.id === screenId);
-    const targetId = favorites[visibleIndex + offset]?.id;
-    if (!targetId) return;
-    savePreference(current => ({ ...current, favoriteScreenIds: current.favoriteScreenIds.map(id =>
-      id === screenId ? targetId : id === targetId ? screenId : id),
-    }));
-  }
-
-  function renderEntry(screen: ScreenDefinition, list: 'favorite' | 'group') {
-    const key = `${list}:${screen.id}`;
-    const favorite = pref.favoriteScreenIds.includes(screen.id);
-    const index = favorites.findIndex(item => item.id === screen.id);
-    return <NavigationEntry key={screen.id} screen={screen} end={screen.path !== activePath} favorite={favorite} ready={prefReady}
-      open={openAction === key} onOpenChange={open => setOpenAction(open ? key : null)} onNavigate={() => { setOpenAction(null); setSidebarOpen(false); }}
-      actions={[
-        { id: 'favorite', label: favorite ? '즐겨찾기 해제' : '즐겨찾기 추가', run: () => {
-          if (list === 'favorite') {
-            const original = sidebarRef.current?.querySelector<HTMLElement>(`.nav-group [data-favorite-screen-id="${screen.id}"]`);
-            (original && canFocus(original) ? original : hiddenManager.current)?.focus();
-          }
-          toggleFavorite(screen.id);
-        } },
-        ...(favorite ? [
-          { id: 'up' as const, label: '위로 이동', disabled: index <= 0, run: () => moveFavorite(screen.id, -1) },
-          { id: 'down' as const, label: '아래로 이동', disabled: index < 0 || index === favorites.length - 1, run: () => moveFavorite(screen.id, 1) },
-        ] : []),
-        ...(screen.path !== '/' ? [{ id: 'hide' as const, label: '메뉴 비활성화', run: () => {
-          hiddenManager.current?.focus();
-          savePreference(current => ({ ...current, hiddenScreenIds: [...current.hiddenScreenIds, screen.id] }));
-        } }] : []),
-      ]} />;
-  }
-
-  function toggleSection(section: ScreenSection): void {
-    savePreference(current => ({ ...current, collapsedSectionIds: current.collapsedSectionIds.includes(section)
-      ? current.collapsedSectionIds.filter(id => id !== section) : [...current.collapsedSectionIds, section] }));
-  }
-
-  async function logout(): Promise<void> {
-    try { await revokeSession(activeSession.token, activeSession.orgId); }
-    finally { sessionStore.clear(); navigate("/login"); }
-  }
-
   return (
-    <AccessContext.Provider value={access.data}>
-    <div className="app-frame">
-      <button className={`sidebar-scrim ${modalSidebar ? "sidebar-scrim--open" : ""}`} tabIndex={-1} aria-hidden="true" aria-label="메뉴 닫기" onClick={() => setSidebarOpen(false)} />
-      <div ref={sidebarRef} id="app-sidebar" className={`sidebar ${modalSidebar ? "sidebar--open" : ""}`} role={modalSidebar ? 'dialog' : 'complementary'} aria-label="주 메뉴" aria-modal={modalSidebar ? true : undefined} inert={responsiveSidebar && !sidebarOpen} hidden={responsiveSidebar && !sidebarOpen} tabIndex={-1}
-        onFocusCapture={event => { sidebarFocused.current = event.target; }}
-        onBlurCapture={event => {
-          if (canFocus(event.target) && !event.currentTarget.contains(event.relatedTarget)) sidebarFocused.current = null;
-        }}
-        onKeyDown={event => {
-          if (!modalSidebar || event.defaultPrevented) return;
-          if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setSidebarOpen(false); }
-          if (event.key !== 'Tab') return;
-          const controls = sidebarControls(event.currentTarget);
-          const first = controls[0], last = controls.at(-1);
-          if (!first) { event.preventDefault(); event.currentTarget.focus(); }
-          else if (event.shiftKey && (document.activeElement === first || document.activeElement === event.currentTarget)) { event.preventDefault(); last?.focus(); }
-          else if (!event.shiftKey && (document.activeElement === last || document.activeElement === event.currentTarget)) { event.preventDefault(); first.focus(); }
-        }}>
-        <div className="sidebar__brand"><WorkspaceSwitcher session={activeSession} /></div>
-        <nav aria-label="주 메뉴">
-          {favorites.length > 0 && <section className="nav-favorites" data-testid="nav-favorites" data-order={favorites.map(screen => screen.id).join(',')} aria-labelledby="nav-favorites-label">
-            <div className="nav-favorites__heading"><p id="nav-favorites-label">즐겨찾기</p></div>
-            <div className="nav-items">{favorites.map(screen => renderEntry(screen, 'favorite'))}</div>
-          </section>}
-          <div className="nav-personalization" data-testid="nav-personalization" data-pref-status={prefStatus}>
-            {prefError && <p role="alert" data-testid="nav-pref-error">{prefError}</p>}
-            <button ref={hiddenManager} type="button" className="nav-pref-control nav-hidden-manager" disabled={!prefReady} aria-expanded={managingHidden} aria-controls="nav-hidden-items"
-              onClick={() => { setOpenAction(null); setManagingHidden(value => !value); }}>숨긴 메뉴 관리</button>
-            <div id="nav-hidden-items" hidden={!managingHidden} onKeyDown={event => {
-              if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setManagingHidden(false); hiddenManager.current?.focus(); }
-            }}>
-              {hiddenNavigation.length === 0 ? <p>숨긴 메뉴가 없습니다.</p> : hiddenNavigation.map(screen => <div className="nav-hidden-item" key={screen.id} data-hidden-screen-id={screen.id}>
-                <span>{screen.label}</span><button type="button" className="nav-pref-control nav-restore" aria-label={`${screen.label} 복원`} onClick={() => {
-                  hiddenManager.current?.focus();
-                  savePreference(current => ({ ...current, hiddenScreenIds: current.hiddenScreenIds.filter(id => id !== screen.id) }));
-                }}>복원</button>
-              </div>)}
+    <div
+      className={`shell${agentOpen ? " agent-open" : ""}${sidebarOpen ? " nav-open" : ""}`}
+    >
+      <aside className="sidebar" aria-label="주 메뉴">
+        <NavLink className="brand" to="/">
+          <LogoMark />
+          <span className="brand-t">
+            <b>PERP</b>
+            <small>소규모 조직 운영 OS</small>
+          </span>
+        </NavLink>
+        <nav className="nav">
+          {NAV.map((group, gi) => (
+            <div className="nav-g" key={group.group ?? `g${gi}`}>
+              {group.group && <div className="nav-gl">{group.group}</div>}
+              {group.items.map((item) => (
+                <NavLink
+                  key={item.path}
+                  to={item.path}
+                  title={item.label}
+                  className={item.path === best ? "nav-i on" : "nav-i"}
+                  aria-current={item.path === best ? "page" : undefined}
+                >
+                  <Icon name={item.icon} />
+                  <span className="nav-t">{item.label}</span>
+                </NavLink>
+              ))}
             </div>
-          </div>
-          {grouped.map(([, items]) => {
-            const section = items[0]?.section;
-            if (!section) return null;
-            const storedCollapsed = pref.collapsedSectionIds.includes(section);
-            const expanded = section === 'home' || section === activeSection || !storedCollapsed;
-            return <div className={`nav-group ${section === 'home' ? 'nav-group--home' : ''}`} data-section={section} data-stored-collapsed={String(storedCollapsed)} key={section}>
-              {section !== 'home' && <button type="button" className="nav-section-toggle nav-pref-control" aria-expanded={expanded} aria-controls={`nav-section-${section}`} disabled={!prefReady} onClick={() => toggleSection(section)} aria-label={`${sectionLabels[section]} 메뉴 ${expanded ? '접기' : '펼치기'}`}>
-                <span>{sectionLabels[section]}</span><span aria-hidden="true">{expanded ? '−' : '+'}</span>
-              </button>}
-              <div className="nav-items" id={`nav-section-${section}`} hidden={!expanded}>
-                {items.map(screen => renderEntry(screen, 'group'))}
-              </div>
-            </div>;
-          })}
+          ))}
         </nav>
-        <div className="sidebar__footer"><div className="user-block"><span className="avatar">{session.name.slice(0, 1)}</span><span className="user-block__identity"><strong>{session.name}</strong><small>{session.email}</small></span>
-          {canOpen('/settings') && <NavLink to="/settings" className="user-block__settings" aria-label="설정" title="설정" onClick={() => { setOpenAction(null); setSidebarOpen(false); }}>
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-              <path d="m9 3-.5 2-2 1.2-2-.5-3 5.2L3 12.3v2.4L1.5 16l3 5.2 2-.5 2 1.2.5 2h6l.5-2 2-1.2 2 .5 3-5.2-1.5-1.3v-2.4l1.5-1.4-3-5.2-2 .5-2-1.2L15 3Z" transform="translate(2 0) scale(.83)" />
-              <circle cx="12" cy="11.2" r="3" />
-            </svg>
-          </NavLink>}
-        </div><Button tone="neutral" size="small" onClick={logout}>로그아웃</Button><Button className="sidebar__close" tone="neutral" size="small" onClick={() => setSidebarOpen(false)}>메뉴 닫기</Button></div>
-      </div>
+        <div className="side-foot">
+          <span className="av" title={activeSession.name}>
+            {activeSession.name.slice(-2)}
+          </span>
+          <div className="sf-t">
+            <b>{activeSession.name}</b>
+            <small>{roleLabel}</small>
+          </div>
+          <button
+            type="button"
+            className="icon-btn sm"
+            onClick={logout}
+            title="로그아웃"
+            aria-label="로그아웃"
+          >
+            <Icon name="logout" />
+          </button>
+        </div>
+      </aside>
 
-      <div className="app-main">
-        <header className="topbar">
-          <Button className="menu-button" tone="neutral" size="small" onClick={event => { sidebarOpener.current = event.currentTarget; setSidebarOpen(true); }} aria-label="메뉴 열기" aria-expanded={modalSidebar} aria-controls="app-sidebar" aria-haspopup="dialog">메뉴</Button>
-          <form className="global-search" role="search" aria-label="메뉴별 검색" onSubmit={event => { event.preventDefault(); const term = search.trim(); if (!term || !searchPath) return; navigate(`${searchPath}?q=${encodeURIComponent(term)}`); }}>
-            <label className="global-search__category"><span className="sr-only">검색 범위</span><select required value={searchPath} onChange={event => setSearchCategory(event.target.value)}><option value="" disabled>검색 범위</option>{availableSearchCategories.map(category => <option key={category.path} value={category.path}>{category.label}</option>)}</select></label>
-            <label className="global-search__query"><span className="sr-only">전역 검색</span><input type="search" required placeholder="검색어" value={search} onChange={event => setSearch(event.target.value)} /></label>
-            <button type="submit" className="global-search__submit" disabled={!searchPath || !search.trim()}>검색</button>
-          </form>
-          <div className="topbar__actions">{canOpen('/notifications') && <NavLink className="icon-link" to="/notifications" aria-label="알림">알림</NavLink>}{canOpen('/agent') && <Button tone="ai" size="small" onClick={toggleAgent}>AI Agent</Button>}</div>
-        </header>
-        <main id="main-content" tabIndex={-1} key={`${session.orgId}:${location.pathname}`}>
-          {access.error ? <section className="state-card" role="alert"><h1>접근 권한을 확인하지 못했습니다</h1><p>{access.error}</p><Button onClick={access.retry}>다시 시도</Button></section>
-            : !access.data ? <p role="status">접근 권한을 확인하는 중입니다…</p>
-              : !allowed ? <section className="state-card" role="alert" data-testid="screen-access-denied"><h1>접근할 수 없습니다</h1><p>이 메뉴의 역할 권한이 없거나 조직에서 기능이 꺼져 있습니다.</p></section> : <Outlet />}
-        </main>
-      </div>
-      {canOpen('/agent') && <AgentPanel />}
-      <nav className="mobile-nav" aria-label="모바일 주 메뉴">{mobilePaths.map(path => visibleNavigation.find(item => item.path === path)).filter(screen => screen !== undefined).map(screen => <NavLink key={screen.path} to={screen.path} end={screen.path === "/"}>{screen.label}</NavLink>)}</nav>
+      <button
+        type="button"
+        className="nav-scrim"
+        aria-label="메뉴 닫기"
+        onClick={() => setSidebarOpen(false)}
+      />
+
+      <header className="topbar">
+        <button
+          type="button"
+          className="icon-btn only-narrow"
+          onClick={toggleSidebar}
+          aria-label="메뉴 열기"
+        >
+          <Icon name="menu" />
+        </button>
+
+        <div className="menu-root">
+          <button
+            type="button"
+            className="org-btn"
+            onClick={() => setMenu(menu === "org" ? null : "org")}
+            aria-haspopup="menu"
+            aria-expanded={menu === "org"}
+          >
+            <span className="org-mark">{orgName.slice(0, 1)}</span>
+            <span className="org-name">{orgName}</span>
+            {orgTypeLabel && <span className="pill info hide-sm">{orgTypeLabel}</span>}
+            <Icon name="down" />
+          </button>
+          {menu === "org" && (
+            <div className="pop" role="menu">
+              <div className="pop-l">조직 전환 · 데이터는 조직별로 격리됩니다</div>
+              {activeSession.organizations.map((o) => (
+                <button
+                  type="button"
+                  role="menuitem"
+                  key={o.org_id}
+                  className={o.org_id === org?.org_id ? "pop-i on" : "pop-i"}
+                  onClick={() => {
+                    sessionStore.patch({ orgId: o.org_id });
+                    setMenu(null);
+                  }}
+                >
+                  <span className="org-mark sm">{o.org_name.slice(0, 1)}</span>
+                  <span className="pop-t">
+                    <b>{o.org_name}</b>
+                    <small>
+                      {o.org_type ? ORG_TYPES[o.org_type] ?? "" : ""}
+                      {o.roles?.[0] ? ` · ${o.roles[0]}` : ""}
+                    </small>
+                  </span>
+                  {o.org_id === org?.org_id && <Icon name="check" />}
+                </button>
+              ))}
+              <div className="pop-sep" />
+              <NavLink role="menuitem" className="pop-i" to="/onboarding/organization">
+                <Icon name="plus" />
+                <span className="pop-t">
+                  <b>새 조직 만들기</b>
+                  <small>유형별 템플릿으로 시작</small>
+                </span>
+              </NavLink>
+            </div>
+          )}
+        </div>
+
+        <button
+          type="button"
+          className="search-btn"
+          onClick={() => navigate("/tasks")}
+          aria-label="검색 또는 이동"
+        >
+          <Icon name="search" />
+          <span>검색하거나 화면으로 이동</span>
+          <kbd>Ctrl K</kbd>
+        </button>
+
+        <div className="tb-right">
+          <NavLink className="icon-btn has-dot" to="/notifications" aria-label="알림">
+            <Icon name="bell" />
+          </NavLink>
+          <button
+            type="button"
+            className="icon-btn hide-sm"
+            onClick={cycleTheme}
+            aria-label={`테마 전환 (현재: ${theme})`}
+            title={`테마: ${{ system: "시스템", light: "라이트", dark: "다크" }[theme]}`}
+          >
+            <Icon name={themeIc[theme]} />
+          </button>
+          <button
+            type="button"
+            className={`btn btn-ai btn-sm${agentOpen ? " on" : ""}`}
+            onClick={toggleAgent}
+            aria-pressed={agentOpen}
+          >
+            <Icon name="sparkles" />
+            <span className="hide-sm">Agent</span>
+          </button>
+          <div className="menu-root">
+            <button
+              type="button"
+              className="av-btn"
+              onClick={() => setMenu(menu === "profile" ? null : "profile")}
+              aria-haspopup="menu"
+              aria-expanded={menu === "profile"}
+              aria-label="내 계정"
+            >
+              <span className="av" title={activeSession.name}>
+                {activeSession.name.slice(-2)}
+              </span>
+            </button>
+            {menu === "profile" && (
+              <div className="pop right wide" role="menu">
+                <div className="pop-head">
+                  <span className="av" title={activeSession.name}>
+                    {activeSession.name.slice(-2)}
+                  </span>
+                  <div>
+                    <b>{activeSession.name}</b>
+                    <small>
+                      {activeSession.email}
+                      {roleLabel ? ` · ${roleLabel}` : ""}
+                    </small>
+                  </div>
+                </div>
+                <div className="pop-sep" />
+                <button type="button" role="menuitem" className="pop-i" onClick={cycleTheme}>
+                  <Icon name="moon" />
+                  <span className="pop-t">
+                    <b>테마 전환</b>
+                  </span>
+                </button>
+                <button type="button" role="menuitem" className="pop-i" onClick={logout}>
+                  <Icon name="logout" />
+                  <span className="pop-t">
+                    <b>로그아웃</b>
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </header>
+
+      <main id="main" className="main" tabIndex={-1}>
+        <div className="page" key={location.pathname}>
+          <Outlet />
+        </div>
+      </main>
+
+      {agentOpen && <AgentPanel />}
+
+      <nav className="tabbar" aria-label="하단 탭">
+        {TABBAR.map(([path, label, icon]) => (
+          <NavLink
+            key={path}
+            to={path}
+            end={path === "/"}
+            className={({ isActive }) => (isActive ? "on" : "")}
+          >
+            <Icon name={icon} />
+            <span>{label}</span>
+          </NavLink>
+        ))}
+      </nav>
     </div>
-    </AccessContext.Provider>
   );
 }

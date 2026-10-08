@@ -1,213 +1,265 @@
-import { useEffect, useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
-import { z } from "zod";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
-import { Button } from "../components/ui/Button";
-import { ApiError, apiRequest, userMessageOf } from "../services/api";
-import { isPgToken, organizationsOf } from "../services/auth";
-import { consumeReturnPath, readAuthTransition } from "../services/authTransition";
+import { Icon } from "../components/ui/Icon";
+import { PageHead } from "../screens/mockup/lib";
+import { apiRequest, userMessageOf } from "../services/api";
+import { refreshSession } from "../services/auth";
 import { sessionStore, useSession } from "../store/session";
-import "./onboarding.css";
 
-const catalogItemSchema = z.object({ key: z.string(), label: z.string(), core: z.boolean(), description: z.string() });
-const featureItemSchema = catalogItemSchema.omit({ core: true });
-const catalogSchema = z.object({ items: z.array(catalogItemSchema), features: z.array(featureItemSchema) });
-const templatesSchema = z.object({ items: z.array(z.object({ type: z.string(), modules: z.array(z.string()) })) });
-const orgSchema = z.object({ org_id: z.string(), name: z.string(), type: z.string() });
-
-const primaryTypes = [
-  ["personal", "개인", "내 수입·지출, 할 일과 기록을 한곳에서"],
-  ["company", "소규모 팀", "함께하는 업무, 일정과 팀 비용 관리"],
-  ["club", "동아리·모임", "회비, 행사와 운영 인수인계"],
-  ["lab", "연구실", "연구 과제, 연구비와 장비·자료 관리"],
-] as const;
-const otherTypes = [
-  ["nonprofit", "비영리 단체", "후원, 사업과 증빙 중심"],
-  ["student_council", "학생회", "행사와 예산 중심"],
-  ["study", "스터디", "함께 공부하는 일정과 기록"],
-  ["custom", "직접 설정", "필요한 기능을 직접 선택"],
-] as const;
-const types = [...primaryTypes, ...otherTypes];
-const moduleCopy: Record<string, { label: string; description: string }> = {
-  finance: { label: "돈 관리", description: "수입·지출, 회비와 예산을 기록합니다. 공간을 만든 뒤 돈 관리를 시작하세요." },
-  agent: { label: "AI 비서·개인 노트", description: "개인 노트와 AI 도움을 함께 사용합니다." },
+// 목업 조직 유형 → 백엔드 조직 유형 키
+const TYPE_MAP: Record<string, string> = {
+  student: "student_council",
+  club: "club",
+  lab: "lab",
+  company: "company",
 };
-type Selection = { modules: string[]; features: string[] };
 
+const ORG_TYPES: Array<[string, string]> = [
+  ["student", "학생회"],
+  ["club", "동아리"],
+  ["lab", "연구실"],
+  ["company", "기업"],
+];
+const ORG_TYPE_INFO: Record<string, { desc: string; terms: string; accounts: string }> = {
+  student: { desc: "학생회비·행사·집행부 인수인계 중심", terms: "행사활동 · 예산·회계 · 학생회원", accounts: "학생회비, 학교 지원금, 행사운영비, 식비·다과, 인쇄·홍보, 비품·소모품" },
+  club: { desc: "회비·활동 참여·장비 대여 중심", terms: "활동 참여 · 회비·활동비 · 동아리원", accounts: "월 회비, 지원금, 활동비, 장비 구입, 대관료" },
+  lab: { desc: "연구비·장비·연구활동 기록 중심", terms: "연구활동 · 연구비 · 연구원", accounts: "연구비 입금, 연구재료비, 출장비, 회의비, 장비비" },
+  company: { desc: "근태·결재·회계·자산 전반", terms: "근태 · 회계 · 임직원", accounts: "매출, 인건비, 운영비, 사무용품" },
+};
+const MODULES: Array<[string, string]> = [
+  ["finance", "재무·회계"],
+  ["asset", "자산·예약"],
+  ["hr", "인사·근태"],
+  ["handover", "인수인계"],
+  ["automation", "자동화"],
+  ["agent", "AI Agent"],
+];
+const ONB_STEPS = ["조직 유형", "이름·규모", "통화·회계연도", "사용 모듈", "시작 템플릿", "확인"];
+
+// ONB-001 새 조직 만들기 — 목업 onboarding 이식
 export function OnboardingPage() {
-  const session = useSession();
   const navigate = useNavigate();
-  const nativePg = isPgToken(session?.token ?? "");
-  const [step, setStep] = useState(1);
-  const TOTAL_STEPS = 4;
-  const [type, setType] = useState<string>(nativePg ? "company" : "club");
+  const session = useSession();
+  const [creating, setCreating] = useState(false);
+  const [step, setStep] = useState(0);
+  const [type, setType] = useState("club");
   const [name, setName] = useState("");
-  const organizationName = type === "personal" ? session?.name.trim() ?? "" : name.trim();
-  const [drafts, setDrafts] = useState<Record<string, Selection>>({});
-  const [recommendations, setRecommendations] = useState<Record<string, string[]>>({});
-  const recommended = recommendations[type] ?? [];
-  // 유형별 초안이 있으면 추천을 다시 적용하지 않는다. 빈 선택도 명시적인 선택이다.
-  const { modules, features } = drafts[type] ?? { modules: recommended, features: [] };
-  const [catalog, setCatalog] = useState<z.infer<typeof catalogItemSchema>[]>([]);
-  const [featureCatalog, setFeatureCatalog] = useState<z.infer<typeof featureItemSchema>[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [loadAttempt, setLoadAttempt] = useState(0);
-  const [fiscalStart, setFiscalStart] = useState(1);
-  const [busy, setBusy] = useState(false);
-  const [createdOrgId, setCreatedOrgId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [size, setSize] = useState("11~30명");
+  const [currency, setCurrency] = useState("KRW");
+  const [fiscalStart, setFiscalStart] = useState("3");
+  const [modules, setModules] = useState(MODULES.map(([k]) => k));
+  const [template, setTemplate] = useState("sample");
+  const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    setError(null);
-    Promise.all([
-      apiRequest("/tenants/modules/catalog", { signal: controller.signal }),
-      apiRequest("/tenants/templates", { signal: controller.signal }),
-    ]).then(([data, templates]) => {
-      if (controller.signal.aborted) return;
-      const parsed = catalogSchema.parse(data);
-      const profiles = templatesSchema.parse(templates);
-      setCatalog(parsed.items.map(item => ({ ...item, ...moduleCopy[item.key] })));
-      setFeatureCatalog(parsed.features);
-      setRecommendations(Object.fromEntries(profiles.items.map(item => [item.type, item.modules.filter(key => key !== "approvals")])));
-      setLoaded(true);
-    }).catch((caught: unknown) => {
-      if (!controller.signal.aborted) setError(userMessageOf(caught));
-    });
-    return () => controller.abort();
-  }, [loadAttempt]);
+  const toggleModule = (k: string) =>
+    setModules((m) => (m.includes(k) ? m.filter((x) => x !== k) : [...m, k]));
 
-  if (!session) return <Navigate to="/login" replace />;
-  if (session.mustChangePassword) return <Navigate to="/change-password" replace />;
-
-  function toggle(key: string, field: keyof Selection): void {
-    setDrafts(current => {
-      const selection = current[type] ?? { modules: recommended, features: [] };
-      const values = selection[field];
-      return { ...current, [type]: { ...selection, [field]: values.includes(key) ? values.filter(item => item !== key) : [...values, key] } };
-    });
+  function go(delta: number): void {
+    if (delta > 0 && step === 1 && !name.trim()) {
+      setErr("조직 이름을 입력하세요.");
+      return;
+    }
+    setErr(null);
+    setStep((s) => Math.max(0, Math.min(5, s + delta)));
   }
 
-  function renderType([key, label, description]: readonly [string, string, string]) {
-    return <label key={key} className={`profile-option${type === key ? " selected" : ""}`}>
-      <input type="radio" name="workspace-profile" data-profile={key} checked={type === key} onChange={() => setType(key)} />
-      <span><strong>{label}</strong><span>{description}</span></span>
-    </label>;
-  }
-
-  function renderModule(item: z.infer<typeof catalogItemSchema>) {
-    return <label key={item.key} className="module-option" data-module={item.key}>
-      <input type="checkbox" checked={modules.includes(item.key)} onChange={() => toggle(item.key, "modules")} />
-      <span><strong>{item.label}</strong><small>{item.description}</small></span>
-    </label>;
-  }
-
-  async function createOrganization(): Promise<void> {
-    if (!session || !organizationName || !loaded) return;
-    setBusy(true);
-    setError(null);
+  async function create(): Promise<void> {
+    if (!name.trim()) {
+      setStep(1);
+      setErr("조직 이름을 입력하세요.");
+      return;
+    }
+    if (!session) {
+      navigate("/login", { replace: true });
+      return;
+    }
+    setCreating(true);
+    setErr(null);
     try {
-      const organization = createdOrgId ? { org_id: createdOrgId } : orgSchema.parse(
-        await apiRequest(nativePg ? "/pg/companies" : "/tenants", {
-          method: "POST",
-          session: { token: session.token, orgId: null },
-          body: {
-            name: organizationName,
-            type,
-            modules: catalog.filter(item => item.key !== "approvals" && (item.core || modules.includes(item.key))).map(item => item.key),
-            features,
-            ...(!nativePg ? { currency: "KRW", timezone: "Asia/Seoul", fiscal_year_start: fiscalStart } : {}),
-          },
-        }),
-      );
-      // 생성은 이미 완료됐다. 소속 조회만 실패하면 같은 공간을 다시 확인한다.
-      setCreatedOrgId(organization.org_id);
-      const organizations = await organizationsOf(session.token);
-      const created = organizations.find(org => org.org_id === organization.org_id);
-      if (!created) {
-        throw new ApiError("생성된 공간의 소속을 확인할 수 없습니다. 다시 로그인해 주세요.", {
-          code: "NO_ORGANIZATION", status: 403, requestId: "", details: {},
-        });
-      }
-      sessionStore.patch({ orgId: created.org_id, organizations: [...organizations], organizationStatus: "ready" });
-      navigate(readAuthTransition().invite ? "/invitations" : consumeReturnPath() ?? "/", { replace: true });
+      const res = (await apiRequest("/tenants", {
+        method: "POST",
+        session: { token: session.token, orgId: null },
+        body: {
+          name: name.trim(),
+          type: TYPE_MAP[type] ?? "club",
+          currency,
+          fiscal_year_start: Number(fiscalStart) || 1,
+        },
+      })) as { org_id: string };
+      const refreshed = await refreshSession(session.token, res.org_id);
+      sessionStore.set(refreshed);
+      navigate("/", { replace: true });
     } catch (caught) {
-      setError(userMessageOf(caught));
+      setErr(userMessageOf(caught));
     } finally {
-      setBusy(false);
+      setCreating(false);
     }
   }
 
   return (
-    <section className="onboarding-card" aria-labelledby="onboarding-title">
-      <div className="stepper" aria-label={`공간 설정 ${step}/${TOTAL_STEPS}단계`}>
-        {[1, 2, 3, 4].map(number => (
-          <span key={number} className={number <= step ? "active" : ""} aria-current={number === step ? "step" : undefined}>
-            <b>{number}</b>{number === 1 ? "유형" : number === 2 ? "기본 정보" : number === 3 ? "기능" : "확인"}
-          </span>
+    <div className="page" style={{ maxWidth: 900, margin: "24px auto", padding: "0 16px" }}>
+      <PageHead
+        title="새 조직 만들기"
+        id="ONB-001"
+        fr="SFR-001 · SFR-002"
+        desc="조직 유형에 따라 용어·기본 메뉴·계정과목·샘플 데이터가 달라집니다."
+      />
+      <ol className="stepper">
+        {ONB_STEPS.map((s, i) => (
+          <li key={s} className={i === step ? "on" : i < step ? "done" : ""}>
+            <b>{i < step ? "✓" : i + 1}</b>
+            {s}
+          </li>
         ))}
+      </ol>
+      <div className="panel">
+        <div className="panel-h">
+          <h2>{ONB_STEPS[step]}</h2>
+          <span className="muted xs">{step + 1} / 6</span>
+        </div>
+        <div className="panel-b stack">
+          {step === 0 && (
+            <div className="type-cards">
+              {ORG_TYPES.map(([k, l]) => (
+                <button
+                  type="button"
+                  key={k}
+                  className={`type-card${type === k ? " on" : ""}`}
+                  aria-pressed={type === k}
+                  onClick={() => setType(k)}
+                >
+                  <b>{l}</b>
+                  <small>{ORG_TYPE_INFO[k]!.desc}</small>
+                  <small className="mono">용어: {ORG_TYPE_INFO[k]!.terms}</small>
+                </button>
+              ))}
+            </div>
+          )}
+          {step === 1 && (
+            <div className="form-grid">
+              <div className="field span2">
+                <label>조직 이름</label>
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="예: 순천대 로봇 동아리 R2"
+                />
+              </div>
+              <div className="field">
+                <label>규모</label>
+                <select value={size} onChange={(e) => setSize(e.target.value)}>
+                  {["1~10명", "11~30명", "31~100명", "100명 이상"].map((v) => (
+                    <option key={v}>{v}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+          {step === 2 && (
+            <div className="form-grid">
+              <div className="field">
+                <label>기본 통화</label>
+                <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
+                  <option value="KRW">KRW (원)</option>
+                  <option value="USD">USD ($)</option>
+                </select>
+                <span className="hint">금액은 정수 최소화폐단위로 저장합니다.</span>
+              </div>
+              <div className="field">
+                <label>회계연도 시작 월</label>
+                <select value={fiscalStart} onChange={(e) => setFiscalStart(e.target.value)}>
+                  {Array.from({ length: 12 }, (_, i) => (
+                    <option key={i} value={i + 1}>
+                      {i + 1}월
+                    </option>
+                  ))}
+                </select>
+                <span className="hint">학생회·동아리는 보통 3월, 기업은 1월.</span>
+              </div>
+            </div>
+          )}
+          {step === 3 && (
+            <div className="stack">
+              {MODULES.map(([k, l]) => (
+                <label className="check" key={k}>
+                  <input type="checkbox" checked={modules.includes(k)} onChange={() => toggleModule(k)} />{" "}
+                  <span>
+                    <b>{l}</b> <span className="muted xs">— 끄면 메뉴가 숨고 API는 403 MODULE_DISABLED</span>
+                  </span>
+                </label>
+              ))}
+              <p className="hint">프로젝트·업무·캘린더·문서·결재는 공통 기능이라 항상 켜집니다.</p>
+            </div>
+          )}
+          {step === 4 && (
+            <div className="type-cards">
+              {[
+                ["sample", "샘플 데이터 포함", "첫 프로젝트·업무 3건·소개 문서·유형별 계정과목을 만들어 바로 둘러볼 수 있습니다."],
+                ["blank", "빈 조직", "계정과목과 기본 결재선만 만들고 나머지는 비워 둡니다."],
+              ].map(([k, l, d]) => (
+                <button
+                  type="button"
+                  key={k}
+                  className={`type-card${template === k ? " on" : ""}`}
+                  onClick={() => setTemplate(k!)}
+                >
+                  <b>{l}</b>
+                  <small>{d}</small>
+                </button>
+              ))}
+            </div>
+          )}
+          {step === 5 && (
+            <>
+              <dl className="kv">
+                <dt>유형</dt>
+                <dd>{ORG_TYPES.find(([k]) => k === type)?.[1]}</dd>
+                <dt>이름</dt>
+                <dd>{name || "(미입력)"}</dd>
+                <dt>규모</dt>
+                <dd>{size}</dd>
+                <dt>통화·회계연도</dt>
+                <dd>
+                  {currency} · {fiscalStart}월 시작
+                </dd>
+                <dt>모듈</dt>
+                <dd>{modules.map((k) => MODULES.find(([m]) => m === k)?.[1]).join(", ") || "없음"}</dd>
+                <dt>계정과목</dt>
+                <dd>{ORG_TYPE_INFO[type]!.accounts}</dd>
+                <dt>시작 템플릿</dt>
+                <dd>{template === "sample" ? "샘플 데이터 포함" : "빈 조직"}</dd>
+              </dl>
+              <div className="callout info">
+                <Icon name="shield" />
+                <div>
+                  만든 사람은 <b>조직 소유자</b>가 되며, 새 조직의 데이터는 기존 조직과 완전히 격리됩니다.
+                </div>
+              </div>
+            </>
+          )}
+          {err && (
+            <div className="callout bad" role="alert">
+              <Icon name="alert" />
+              <div>{err}</div>
+            </div>
+          )}
+        </div>
+        <div className="dlg-f">
+          <button type="button" className="btn" onClick={() => go(-1)} disabled={step === 0}>
+            이전
+          </button>
+          {step < 5 ? (
+            <button type="button" className="btn btn-primary" onClick={() => go(1)}>
+              다음
+            </button>
+          ) : (
+            <button type="button" className="btn btn-primary" onClick={create} disabled={creating}>
+              {creating ? "만드는 중…" : "조직 만들기"}
+            </button>
+          )}
+        </div>
       </div>
-      <span className="eyebrow">나에게 맞는 시작</span>
-      <h2 id="onboarding-title">{step === 1 ? "어떤 공간이 필요한가요?" : step === 2 ? "공간의 이름을 알려주세요" : step === 3 ? "추천 기능을 확인하세요" : "입력한 내용을 확인하세요"}</h2>
-      {error && <div className="form-error" role="alert">{error}{!loaded && <Button tone="neutral" onClick={() => setLoadAttempt(value => value + 1)}>다시 불러오기</Button>}</div>}
-      {!loaded && !error && <p role="status">시작 유형과 추천 기능을 불러오는 중…</p>}
-
-      {step === 1 && <>
-        <p className="onboarding-note">유형에 맞는 기능을 미리 골라드립니다. 다음 단계에서 자유롭게 바꿀 수 있어요.</p>
-        <div className="type-grid type-grid--primary" role="radiogroup" aria-label="공간 유형">{primaryTypes.map(renderType)}</div>
-        {!nativePg && <details className="onboarding-options">
-          <summary>다른 유형으로 시작</summary>
-          <div className="type-grid" role="radiogroup" aria-label="다른 공간 유형">{otherTypes.map(renderType)}</div>
-        </details>}
-      </>}
-      {step === 2 && <div className="form-stack">
-        <label>조직 이름<input value={type === "personal" ? organizationName : name} readOnly={type === "personal"} onChange={event => setName(event.target.value)} placeholder="예: 오비트 연구회" required maxLength={200} /></label>
-        {type === "personal" && <p className="onboarding-note">개인 공간은 가입한 이름을 사용합니다.</p>}
-        {!nativePg && <details className="onboarding-options">
-          <summary>통화·회계연도 설정</summary>
-          <div className="form-split">
-            <label>기본 통화<select defaultValue="KRW"><option value="KRW">KRW · 대한민국 원</option></select></label>
-            <label>회계연도 시작<select value={String(fiscalStart)} onChange={event => setFiscalStart(Number(event.target.value))}><option value="1">1월</option><option value="3">3월</option><option value="7">7월</option></select></label>
-          </div>
-        </details>}
-      </div>}
-      {step === 3 && <>
-        <p className="onboarding-note">{types.find(([key]) => key === type)?.[1]}에 추천하는 기능입니다. 필요 없는 기능은 꺼도 됩니다.</p>
-        <div className="module-list" aria-label="추천 기능">{catalog.filter(item => !item.core && recommended.includes(item.key)).map(renderModule)}</div>
-        <details className="onboarding-options">
-          <summary>다른 기능 선택{features.length ? ` · 추가 기능 ${features.length}개 선택` : ""}</summary>
-          <p className="onboarding-note">결재·근태·휴가는 필요한 경우에만 켜세요.</p>
-          <div className="module-list">
-            {featureCatalog.map(item => <label key={item.key} className="module-option" data-feature={item.key}>
-              <input type="checkbox" checked={features.includes(item.key)} onChange={() => toggle(item.key, "features")} />
-              <span><strong>{item.label}</strong><small>{item.description}</small></span>
-            </label>)}
-            {catalog.filter(item => !item.core && item.key !== "approvals" && !recommended.includes(item.key)).map(renderModule)}
-          </div>
-        </details>
-        <details className="onboarding-core">
-          <summary>기본 기능은 항상 제공됩니다</summary>
-          <p className="onboarding-note">공간 운영에 필요한 {catalog.filter(item => item.core).map(item => item.label).join(", ")}은 별도 선택 없이 사용할 수 있습니다.</p>
-        </details>
-      </>}
-      {step === 4 && <>
-        <dl className="summary-review">
-          <div><dt>유형</dt><dd>{types.find(([key]) => key === type)?.[1] ?? type}</dd></div>
-          <div><dt>이름</dt><dd>{organizationName || "—"}</dd></div>
-          {!nativePg && <div><dt>통화·회계연도</dt><dd>KRW · {fiscalStart}월 시작</dd></div>}
-          <div><dt>켠 기능</dt><dd>{[
-            ...featureCatalog.filter(item => features.includes(item.key)).map(item => item.label),
-            ...catalog.filter(item => !item.core && item.key !== "approvals" && modules.includes(item.key)).map(item => item.label),
-          ].join(", ") || "기본 기능만 사용"}</dd></div>
-        </dl>
-        <p className="onboarding-note">공간만 만듭니다. 부서와 프로젝트는 필요할 때 직접 추가하세요.{modules.includes("finance") && " 수입·지출 기록은 공간을 만든 뒤 돈 관리에서 시작할 수 있습니다."}</p>
-      </>}
-      <div className="onboarding-actions">
-        <Button tone="neutral" disabled={busy || createdOrgId !== null} onClick={() => step > 1 ? setStep(value => value - 1) : navigate("/welcome")}>이전</Button>
-        {step < TOTAL_STEPS
-          ? <Button disabled={!loaded || (step === 2 && !organizationName)} onClick={() => setStep(value => value + 1)}>다음</Button>
-          : <Button disabled={busy || !organizationName || !loaded} onClick={createOrganization}>{busy ? "공간 확인 중…" : createdOrgId ? "소속 다시 확인" : "조직 만들기"}</Button>}
-      </div>
-    </section>
+    </div>
   );
 }

@@ -1,270 +1,164 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import type { z } from "zod";
+import { Icon } from "../components/ui/Icon";
+import {
+  attCorrections,
+  myAttendance,
+  teamAttendance,
+} from "./mockup/demo";
+import { Av, Empty, PageHead, Pill, fmtDate } from "./mockup/lib";
 
-import { Badge } from "../components/ui/Badge";
-import { Button } from "../components/ui/Button";
-import { SectionCard } from "../components/ui/SectionCard";
-import { StatCard, type Stat } from "../components/ui/StatCard";
-import { useMembers } from "../hooks/useMembers";
-import type { ScreenDefinition } from "../routes/catalog";
-import { apiRequest, userMessageOf } from "../services/api";
-import { useSession } from "../store/session";
-import { AttendanceCorrectionPanel } from "./attendance/AttendanceCorrectionPanel";
-import { KIND_LABELS, attendanceSchema, monthRange, type AttendanceRow } from "./attendance/model";
+const hoursMin = (m: number) => `${Math.floor(m / 60)}시간 ${Math.round(m % 60)}분`;
 
-import "./attendance.css";
-import "./leave/leave.css";
-
-type Attendance = z.infer<typeof attendanceSchema>;
-
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function formatTime(iso: string): string {
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
-}
-
-export function AttendanceScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) {
-  const session = useSession();
-  const now = new Date();
-  const [tab, setTab] = useState<"mine" | "manage">("mine");
-  const [monthOffset, setMonthOffset] = useState(0);
-  const [attendance, setAttendance] = useState<Attendance | null>(null);
-  const [today, setToday] = useState<AttendanceRow | null>(null);
-  const [canManage, setCanManage] = useState(false);
-  const [checkBusy, setCheckBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [correctionsReloadKey, setCorrectionsReloadKey] = useState(0);
-
-  const apiSession = useMemo(
-    () => (session?.orgId ? { token: session.token, orgId: session.orgId } : null),
-    [session?.token, session?.orgId],
-  );
-  const members = useMembers(apiSession);
-
-  const shown = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
-  const shownYear = shown.getFullYear();
-  const shownMonth = shown.getMonth();
-  const range = monthRange(shownYear, shownMonth);
-
-  const reload = useCallback(async (): Promise<void> => {
-    if (!apiSession) return;
-    try {
-      const data = await apiRequest(`/pg/hr/attendance?from=${range.from}&to=${range.to}`, {
-        session: apiSession,
-      });
-      setAttendance(attendanceSchema.parse(data));
-      setError(null);
-    } catch (caught) {
-      setAttendance(null);
-      setError(userMessageOf(caught));
-    }
-  }, [apiSession, range.from, range.to]);
-
-  const reloadToday = useCallback(async (): Promise<void> => {
-    if (!apiSession) return;
-    try {
-      const day = todayIso();
-      const data = await apiRequest(`/pg/hr/attendance?from=${day}&to=${day}`, { session: apiSession });
-      setToday(attendanceSchema.parse(data).items[0] ?? null);
-    } catch {
-      setToday(null);
-    }
-  }, [apiSession]);
-
-  const reloadManagePermission = useCallback(async (): Promise<void> => {
-    if (!apiSession) return;
-    try {
-      await apiRequest("/pg/hr/attendance/corrections/pending", { session: apiSession });
-      setCanManage(true);
-    } catch {
-      setCanManage(false);
-    }
-  }, [apiSession]);
-
-  useEffect(() => {
-    void reload();
-  }, [reload]);
-
-  useEffect(() => {
-    void reloadToday();
-    void reloadManagePermission();
-  }, [reloadToday, reloadManagePermission]);
-
-  async function checkIn(): Promise<void> {
-    if (!apiSession) return;
-    setCheckBusy(true);
-    setError(null);
-    try {
-      await apiRequest("/pg/hr/attendance/check-in", { method: "POST", session: apiSession });
-      await Promise.all([reload(), reloadToday()]);
-    } catch (caught) {
-      setError(userMessageOf(caught));
-    } finally {
-      setCheckBusy(false);
-    }
-  }
-
-  async function checkOut(): Promise<void> {
-    if (!apiSession) return;
-    setCheckBusy(true);
-    setError(null);
-    try {
-      await apiRequest("/pg/hr/attendance/check-out", { method: "POST", session: apiSession });
-      await Promise.all([reload(), reloadToday()]);
-    } catch (caught) {
-      setError(userMessageOf(caught));
-    } finally {
-      setCheckBusy(false);
-    }
-  }
-
-  const byKind = attendance?.summary.by_kind ?? {};
-  const lastRecord = attendance?.items[0] ?? null;
-
-  const myStats: readonly Stat[] = [
-    {
-      label: "이번 달 출근",
-      value: String(byKind.present ?? 0),
-      unit: "일",
-      delta: `기록 ${attendance?.summary.total_days ?? 0}건`,
-      trend: "flat",
-      foot: `${shownYear}년 ${shownMonth + 1}월`,
-    },
-    {
-      label: "지각·결근",
-      value: String((byKind.late ?? 0) + (byKind.absent ?? 0)),
-      unit: "회",
-      delta: `원격 ${byKind.remote ?? 0}일`,
-      trend: (byKind.late ?? 0) + (byKind.absent ?? 0) > 0 ? "down" : "flat",
-      foot: "내 기록 기준",
-    },
-    {
-      label: "총 활동시간",
-      value: String(attendance?.summary.total_hours ?? 0),
-      unit: "시간",
-      delta: lastRecord ? `최근 근무 ${lastRecord.on_date}` : "기록 없음",
-      trend: "flat",
-      foot: lastRecord ? `${KIND_LABELS[lastRecord.kind] ?? lastRecord.kind} ${lastRecord.hours}시간` : "—",
-    },
-  ];
-
-  const rows = attendance?.items ?? [];
+// HR-002 근태 기록 — 목업 attendance 이식
+export function AttendanceScreen() {
+  const totalMin = myAttendance.reduce((a, r) => a + r.minutes, 0);
+  const today = myAttendance[0];
 
   return (
-    <div className="screen" data-screen-id={screen.id}>
-      <header className="screen-header">
-        <div>
-          <div className="screen-header__meta">
-            <span className="eyebrow">사람</span>
-            <Badge>{screen.id}</Badge>
-            <Badge>HR</Badge>
-          </div>
-          <h1>{screen.label}</h1>
-          <p>{screen.description}</p>
-        </div>
-        <div className="screen-header__actions">
-          <Button
-            tone="neutral"
-            size="small"
-            disabled={checkBusy || Boolean(today?.check_in_at)}
-            onClick={() => void checkIn()}
-          >
-            {today?.check_in_at ? `출근 ${formatTime(today.check_in_at)}` : "출근"}
-          </Button>
-          <Button
-            tone="neutral"
-            size="small"
-            disabled={checkBusy || !today?.check_in_at || Boolean(today?.check_out_at)}
-            onClick={() => void checkOut()}
-          >
-            {today?.check_out_at ? `퇴근 ${formatTime(today.check_out_at)}` : "퇴근"}
-          </Button>
-          <Button tone="neutral" size="small" onClick={() => void reload()}>
-            새로 고침
-          </Button>
-        </div>
-      </header>
-
-      {error && <div className="form-error" role="alert">{error}</div>}
-
-      {canManage && (
-        <div className="leave-tabs" role="tablist" aria-label="근태 화면 전환">
-          <button type="button" role="tab" aria-pressed={tab === "mine"} onClick={() => setTab("mine")}>
-            내 근태
-          </button>
-          <button type="button" role="tab" aria-pressed={tab === "manage"} onClick={() => setTab("manage")}>
-            관리
-          </button>
-        </div>
-      )}
-
-      {tab === "manage" && canManage ? (
-        apiSession && (
-          <AttendanceCorrectionPanel
-            apiSession={apiSession}
-            mode="manage"
-            members={members}
-            reloadKey={correctionsReloadKey}
-            onChanged={() => setCorrectionsReloadKey((value) => value + 1)}
-          />
-        )
-      ) : (
-        <>
-          <section className="stat-grid" aria-label="내 근태 요약">
-            {myStats.map((stat) => (
-              <StatCard key={stat.label} stat={stat} />
-            ))}
+    <>
+      <PageHead
+        title="근태 기록"
+        id="HR-002"
+        fr="SFR-016"
+        desc="조직 유형(학생회)에 맞춰 '근태'으로 표시합니다. 같은 날 중복 체크인은 막힙니다."
+      />
+      <div className="grid g-main">
+        <div className="stack">
+          <section className="panel">
+            <div className="panel-h">
+              <h2>
+                <Icon name="clock" />
+                오늘 · {fmtDate("2026-09-14")}
+              </h2>
+              <Pill tone="ok">종료</Pill>
+            </div>
+            <div className="panel-b row gap">
+              <div className="grow">
+                <b>{today?.kind}</b>
+                <p className="muted sm">
+                  시작 {today?.in} · 종료 {today?.out} · {today?.minutes}분
+                </p>
+              </div>
+              <button type="button" className="btn btn-primary">
+                시작 (체크인)
+              </button>
+              <button type="button" className="btn" disabled>
+                종료 (체크아웃)
+              </button>
+            </div>
           </section>
-
-          <SectionCard
-            title="내 근태 기록"
-            subtitle={`${shownYear}년 ${shownMonth + 1}월`}
-            action={
-              <div className="calendar-nav">
-                <Button tone="neutral" size="small" aria-label="이전 달" onClick={() => setMonthOffset((value) => value - 1)}>‹</Button>
-                <span className="calendar-nav__label">
-                  {shownYear}. {String(shownMonth + 1).padStart(2, "0")}
-                </span>
-                <Button tone="neutral" size="small" aria-label="다음 달" onClick={() => setMonthOffset((value) => value + 1)}>›</Button>
+          <section className="panel">
+            <div className="panel-h">
+              <h2>
+                <Icon name="calendar" />
+                2026년 9월 내 기록
+              </h2>
+              <div className="row">
+                <button type="button" className="icon-btn sm" aria-label="이전 달">
+                  <Icon name="left" />
+                </button>
+                <button type="button" className="icon-btn sm" aria-label="다음 달">
+                  <Icon name="right" />
+                </button>
               </div>
-            }
-          >
-            {rows.length === 0 ? (
-              <p className="attendance-empty">이 달의 근태 기록이 없습니다.</p>
-            ) : (
-              <div className="table-wrap" role="region" aria-label="내 근태 기록" tabIndex={0}>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>일자</th>
-                      <th>구분</th>
-                      <th className="num">시간</th>
-                      <th>출처</th>
-                      <th>비고</th>
+            </div>
+            <div className="tbl-wrap">
+              <table className="tbl">
+                <thead>
+                  <tr>
+                    <th>날짜</th>
+                    <th>종류</th>
+                    <th>시작</th>
+                    <th>종료</th>
+                    <th className="num">시간</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {myAttendance.map((r) => (
+                    <tr key={r.id}>
+                      <td>{fmtDate(r.date)}</td>
+                      <td>{r.kind}</td>
+                      <td className="tnum">{r.in}</td>
+                      <td className="tnum">{r.out ?? "-"}</td>
+                      <td className="num">{r.out ? hoursMin(r.minutes) : "-"}</td>
+                      <td>
+                        <button type="button" className="btn btn-xs btn-ghost">
+                          수정 요청
+                        </button>
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((row) => (
-                      <tr key={row.id}>
-                        <td>{row.on_date}</td>
-                        <td>{KIND_LABELS[row.kind] ?? row.kind}</td>
-                        <td className="num">{row.hours}</td>
-                        <td>{row.source}</td>
-                        <td>{row.note || "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </SectionCard>
-
-          {apiSession && <AttendanceCorrectionPanel apiSession={apiSession} mode="mine" onChanged={() => void reload()} />}
-        </>
-      )}
-    </div>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colSpan={4}>합계 {myAttendance.length}회</td>
+                    <td className="num">{Math.round(totalMin / 60)}시간</td>
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </section>
+        </div>
+        <div className="stack">
+          <section className="panel">
+            <div className="panel-h">
+              <h2>
+                <Icon name="users" />
+                오늘 팀 현황
+              </h2>
+              <span className="muted xs">인사 보기 권한</span>
+            </div>
+            <div className="list">
+              {teamAttendance.map((t) => (
+                <div className="li" key={t.name}>
+                  <Av name={t.name} size="sm" />
+                  <span className="li-t">
+                    <b>{t.name}</b>
+                    <small>
+                      {t.kind ? `${t.kind} · ${t.in}~${t.out ?? ""}` : "기록 없음"}
+                    </small>
+                  </span>
+                  {t.status && (
+                    <Pill tone={t.status === "종료" ? "ok" : "info"}>{t.status}</Pill>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+          <section className="panel">
+            <div className="panel-h">
+              <h2>
+                <Icon name="edit" />
+                수정 요청
+              </h2>
+            </div>
+            <div className="list">
+              {attCorrections.length ? (
+                attCorrections.map((c, i) => (
+                  <div className="li" key={i}>
+                    <span className="li-t">
+                      <b>
+                        {c.name} · {fmtDate(c.date)}
+                      </b>
+                      <small>{c.text}</small>
+                    </span>
+                    {c.status === "대기" ? (
+                      <button type="button" className="btn btn-xs btn-primary">
+                        승인
+                      </button>
+                    ) : (
+                      <Pill tone="ok">{c.status}</Pill>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <Empty title="수정 요청이 없습니다" />
+              )}
+            </div>
+          </section>
+        </div>
+      </div>
+    </>
   );
 }

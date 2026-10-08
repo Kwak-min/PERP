@@ -1,6 +1,5 @@
 import { useSyncExternalStore } from "react";
 import { z } from "zod";
-import { clearMoneyAttempts } from '../services/money-attempts';
 
 const membershipSchema = z.object({
   org_id: z.string(),
@@ -16,9 +15,6 @@ const sessionSchema = z.object({
   email: z.string(),
   mustChangePassword: z.boolean(),
   organizations: z.array(membershipSchema),
-  // 이전 저장 세션에는 없을 수 있다. 신규 인증은 소속 확인 전까지 loading이다.
-  organizationStatus: z.enum(["loading", "ready"]).optional(),
-  preferredOrgId: z.string().nullable().optional(),
 });
 
 export type Organization = z.infer<typeof membershipSchema>;
@@ -29,7 +25,7 @@ const listeners = new Set<() => void>();
 
 function restore(): SessionState | null {
   try {
-    const raw = sessionStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const result = sessionSchema.safeParse(JSON.parse(raw));
     return result.success ? result.data : null;
@@ -38,10 +34,8 @@ function restore(): SessionState | null {
   }
 }
 
-let current: SessionState | null = typeof window === "undefined" ? null : restore();
-if (typeof window !== 'undefined' && !current) clearMoneyAttempts();
-let currentPersistent =
-  typeof window !== "undefined" && localStorage.getItem(STORAGE_KEY) !== null;
+let current: SessionState | null =
+  typeof window === "undefined" ? null : restore();
 
 function emit(): void {
   for (const listener of listeners) listener();
@@ -53,29 +47,18 @@ export const sessionStore = {
     listeners.add(listener);
     return () => listeners.delete(listener);
   },
-  set(next: SessionState, persistent = true): void {
+  set(next: SessionState): void {
     current = sessionSchema.parse(next);
-    currentPersistent = persistent;
-    const value = JSON.stringify(current);
-    if (persistent) {
-      localStorage.setItem(STORAGE_KEY, value);
-      sessionStorage.removeItem(STORAGE_KEY);
-    } else {
-      sessionStorage.setItem(STORAGE_KEY, value);
-      localStorage.removeItem(STORAGE_KEY);
-    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
     emit();
   },
   patch(next: Partial<SessionState>): void {
     if (!current) return;
-    this.set({ ...current, ...next }, currentPersistent);
+    this.set({ ...current, ...next });
   },
   clear(): void {
     current = null;
-    currentPersistent = false;
     localStorage.removeItem(STORAGE_KEY);
-    sessionStorage.removeItem(STORAGE_KEY);
-    clearMoneyAttempts();
     emit();
   },
 };
@@ -84,8 +67,6 @@ if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     if (event.key !== STORAGE_KEY) return;
     current = restore();
-    if (!current) clearMoneyAttempts();
-    currentPersistent = localStorage.getItem(STORAGE_KEY) !== null;
     emit();
   });
 }
