@@ -6,6 +6,15 @@ import { asyncRoute } from "../middleware/error.js";
 export const membersRouter = Router();
 
 membersRouter.get("", asyncRoute(controller.listMembers));
+membersRouter.get("/:memberId/profile", asyncRoute(controller.getMemberProfile));
+membersRouter.get("/:memberId/competencies", asyncRoute(controller.listCompetencies));
+membersRouter.post("/:memberId/competencies", asyncRoute(controller.addCompetency));
+membersRouter.delete("/competencies/:competencyId", asyncRoute(controller.deleteCompetency));
+membersRouter.get("/:memberId/field-requests", asyncRoute(controller.listFieldRequests));
+membersRouter.post("/:memberId/field-requests", asyncRoute(controller.createFieldRequest));
+membersRouter.post("/field-requests/:requestId/decide", asyncRoute(controller.decideFieldRequest));
+membersRouter.get('/invites/options', asyncRoute(controller.inviteOptions));
+membersRouter.get('/invites', asyncRoute(controller.listInvites));
 membersRouter.post("/invites", asyncRoute(controller.createInvite));
 membersRouter.post("/invites/:invitationId/revoke", asyncRoute(controller.revokeInvite));
 membersRouter.post("/provision", asyncRoute(controller.provision));
@@ -17,6 +26,8 @@ membersRouter.patch("/departments/:departmentId", asyncRoute(controller.updateDe
 membersRouter.get("/growth", asyncRoute(controller.growth));
 membersRouter.get("/activity", asyncRoute(controller.activity));
 membersRouter.get("/org-chart", asyncRoute(controller.orgChart));
+membersRouter.get("/home-layout", asyncRoute(controller.getHomeLayout));
+membersRouter.put("/home-layout", asyncRoute(controller.putHomeLayout));
 membersRouter.post("/permissions/simulate", asyncRoute(controller.simulatePermissions));
 membersRouter.post("/:membershipId/reset-password", asyncRoute(controller.resetPassword));
 membersRouter.patch("/:membershipId/roles", asyncRoute(controller.setRoles));

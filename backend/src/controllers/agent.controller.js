@@ -2,12 +2,18 @@ import { z } from "zod";
 
 import { db } from "../config/db.js";
 import { PRESETS, TOOLS, presetFor } from "../config/agent-tools.js";
+import { assertFeatureEnabled, enabledFeatureSet } from "../config/features.js";
 import { resolvePrincipal } from "../middleware/auth.js";
+import { assertEnabled, enabledSet } from "../middleware/modules.js";
 import { getScoped, insert, listScoped, newId, nowIso, softDelete, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
-import { createApproval } from "../services/approval.service.js";
+import { approvalView, canReadApproval, createApproval } from "../services/approval.service.js";
+import { localDate } from "../services/analytics-contract.service.js";
 import { buildPreview, execute, rollback } from "../services/agent-executor.service.js";
+import { requireTurnKey } from "../services/agent-run.service.js";
+import { agentChat, requestKnowledgeMode } from "../services/agent-chat.service.js";
 import * as providers from "../services/ai-provider.service.js";
+import { completeForUser, keyMetadata } from "../services/ai-key.service.js";
 import * as rag from "../services/rag.service.js";
 import { verifyPassword } from "../utils/crypto.js";
 import { ApiError, notFound } from "../utils/errors.js";
@@ -35,13 +41,18 @@ const chatSchema = z.object({
   message: z.string().min(1),
   conversation_id: z.string().nullable().optional(),
   project_id: z.string().nullable().optional(),
-  data_class: z.string().default("internal"),
+  data_class: z.enum(["public", "internal", "personal", "sensitive", "confidential"]).default("internal"),
+  vault_mode: z.enum(["off", "on"]).optional(),
+  agent_mode: z.boolean().optional(),
+  knowledge_mode: z.enum(["personal", "company"]).optional(),
+  attachment_ids: z.array(z.string().uuid()).max(5).optional(),
+  cloud_consent: z.object({ token: z.string().min(1).max(10000), confirmed: z.literal(true) }).strict().optional(),
 });
 
 const memorySchema = z.object({
   content: z.string().min(1).max(2000),
   source: z.string().default("user"),
-  sensitivity: z.string().default("internal"),
+  sensitivity: z.enum(["public", "internal", "personal", "sensitive", "confidential"]).default("internal"),
   usage_scope: z.string().default("personal"),
   expires_at: z.string().nullable().optional(),
 });
@@ -63,15 +74,34 @@ const profileSchema = z.object({
   preferences: z.record(z.any()).default({}),
 });
 
+export function operationContext(req) {
+  const principal = resolvePrincipal(req);
+  principal.require("agent.chat");
+  principal.require("menu.agent");
+  assertEnabled("agent", req.organization.modules);
+  return { source: "legacy", request: req, principal, credentialPrincipal: principal,
+    actorId: principal.userId, workspaceId: principal.orgId, requestId: req.requestId,
+    knowledgeMode: requestKnowledgeMode(req) };
+}
+
 export async function chat(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("agent.chat");
   const payload = chatSchema.parse(req.body);
+  if (payload.agent_mode) {
+    requireTurnKey(req);
+    return agentChat(operationContext(req), payload, res);
+  }
+  if (payload.knowledge_mode || payload.attachment_ids || payload.cloud_consent) throw new ApiError("VALIDATION_ERROR", "지식 범위와 첨부는 Agent 모드에서 사용하세요.");
 
   let conversation = null;
   if (payload.conversation_id) {
     conversation = getScoped("ai_conversation", principal, payload.conversation_id, "conversation");
     if (conversation.user_id !== principal.userId) throw notFound("conversation");
+  }
+  const vaultMode = payload.vault_mode ?? conversation?.vault_mode ?? "off";
+  if (conversation && payload.vault_mode && payload.vault_mode !== conversation.vault_mode) {
+    throw new ApiError("CONFLICT", "대화의 개인 Vault 범위는 시작 후 변경할 수 없습니다. 새 대화를 시작하세요.");
   }
   if (!conversation) {
     conversation = insert("ai_conversation", {
@@ -80,21 +110,23 @@ export async function chat(req, res) {
       user_id: principal.userId,
       project_id: payload.project_id ?? null,
       title: payload.message.slice(0, 60),
+      vault_mode: vaultMode,
       created_by: principal.userId,
     });
   }
 
   const citations = [
     ...rag.searchChunks(principal, payload.message),
-    ...rag.searchVaultNotes(principal, payload.message),
+    ...(vaultMode === "on" ? rag.searchVaultNotes(principal, payload.message) : []),
   ];
   const memories = rag.recallMemories(principal);
   const context = rag.buildContext(citations, memories);
-  const result = await providers.complete(
-    payload.data_class,
-    `${rag.SYSTEM_POLICY}\n\n${context}`,
-    payload.message,
-  );
+  const dataClass = rag.effectiveDataClass(payload.data_class, citations, memories);
+  const result = await completeForUser(principal, {
+    dataClass,
+    system: `${rag.SYSTEM_POLICY}\n\n${context}`,
+    user: payload.message,
+  });
 
   const answer = {
     conclusion: result.text ? result.text.slice(0, 2000) : "근거가 되는 데이터를 찾지 못했습니다.",
@@ -153,7 +185,7 @@ export async function chat(req, res) {
       JSON.stringify(citations.map((c) => c.id)),
       result.error ? "error" : "ok",
       result.error ?? null,
-      payload.data_class,
+      dataClass,
       nowIso(),
     );
 
@@ -165,6 +197,10 @@ export async function chat(req, res) {
     latency_ms: result.latency_ms,
     ai_generated: true,
     generated_at: nowIso(),
+    scope: {
+      vault_mode: vaultMode,
+      personal_vault_used: vaultMode === "on" && citations.some((citation) => citation.type === "vault_note"),
+    },
   });
 }
 
@@ -180,21 +216,79 @@ export function listConversations(req, res) {
   res.json({ items: rows.map((c) => ({ id: c.id, title: c.title, cost_micro: c.cost_micro })) });
 }
 
+export function pendingApprovals(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("agent.chat");
+  principal.require("approval.decide");
+  principal.require("menu.approvals");
+  assertEnabled("approvals", req.organization.modules);
+  assertFeatureEnabled("approvals", req.organization.enabled_features, req.organization.modules);
+  const rows = db().prepare(`SELECT DISTINCT a.* FROM approval a
+    JOIN approval_step s ON s.approval_id=a.id AND s.tenant_id=a.tenant_id
+    WHERE a.tenant_id=? AND a.org_id=? AND a.status='pending' AND a.deleted_at IS NULL
+      AND s.approver_id=? AND s.status IN ('pending','held') AND s.deleted_at IS NULL
+    ORDER BY a.created_at DESC,a.id DESC LIMIT 50`)
+    .all(principal.tenantId, principal.orgId, principal.userId)
+    .filter((approval) => canReadApproval(principal, approval));
+  res.json({
+    items: rows.map((approval) => {
+      const view = approvalView(principal, approval);
+      const mine = view.steps.filter((step) => step.approver_id === principal.userId && ["pending", "held"].includes(step.status))
+        .sort((left, right) => left.ordinal - right.ordinal)[0];
+      const blocked = Boolean(mine?.mode === "sequential" && view.steps.some((step) => step.ordinal < mine.ordinal && ["pending", "held"].includes(step.status)));
+      return {
+        id: view.id,
+        title: view.title,
+        requester_display: view.requester_display,
+        status: view.status,
+        version: view.version,
+        requires_reauth: view.requires_reauth,
+        blocked,
+      };
+    }),
+  });
+}
+
+export function legacyBriefTaskItems(tasks, now = new Date()) {
+  const today = localDate(now, "Asia/Seoul");
+  const kind = (dueAt) => {
+    if (!dueAt) return null;
+    if (dueAt.length === 10) return dueAt < today ? "overdue_task" : dueAt === today ? "today_task" : null;
+    const due = new Date(dueAt);
+    if (!Number.isFinite(due.getTime())) return null;
+    if (due < now) return "overdue_task";
+    return localDate(due, "Asia/Seoul") === today ? "today_task" : null;
+  };
+  const item = (task, taskKind) => ({
+    kind: taskKind, title: task.title,
+    evidence: { type: "task", id: task.id, link: `/tasks/${task.id}`, date: task.due_at },
+    priority: taskKind === "overdue_task" ? "high" : "normal",
+  });
+  return [
+    ...tasks.filter(task => kind(task.due_at) === "overdue_task").slice(0, 5).map(task => item(task, "overdue_task")),
+    ...tasks.filter(task => kind(task.due_at) === "today_task").slice(0, 5).map(task => item(task, "today_task")),
+  ];
+}
+
 export function brief(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("agent.chat");
-  const today = nowIso().slice(0, 10);
+  const modules = enabledSet(req.organization.modules);
+  const features = enabledFeatureSet(req.organization.enabled_features, req.organization.modules);
+  const canReadTasks = principal.has("task.read") && principal.has("menu.projects") && modules.has("tasks");
+  const canReadApprovals = principal.has("approval.decide") && principal.has("menu.approvals")
+    && modules.has("approvals") && features.has("approvals");
 
-  const tasks = listScoped(
+  const tasks = canReadTasks ? listScoped(
     "task",
     principal,
     [
       { sql: "assignee_id = ?", params: [principal.userId] },
-      { sql: "status != ?", params: ["done"] },
+      { sql: "status NOT IN ('done','completed','cancelled')", params: [] },
     ],
     { limit: 200 },
-  );
-  const pendingSteps = listScoped(
+  ) : [];
+  const pendingSteps = canReadApprovals ? listScoped(
     "approval_step",
     principal,
     [
@@ -202,26 +296,10 @@ export function brief(req, res) {
       { sql: "status = ?", params: ["pending"] },
     ],
     { limit: 200 },
-  );
+  ) : [];
 
   const preset = presetFor(principal.roles);
-  const items = [];
-  for (const task of tasks.filter((t) => t.due_at && t.due_at.slice(0, 10) < today).slice(0, 5)) {
-    items.push({
-      kind: "overdue_task",
-      title: task.title,
-      evidence: { type: "task", id: task.id, link: `/tasks/${task.id}`, date: task.due_at },
-      priority: "high",
-    });
-  }
-  for (const task of tasks.filter((t) => t.due_at && t.due_at.slice(0, 10) === today).slice(0, 5)) {
-    items.push({
-      kind: "today_task",
-      title: task.title,
-      evidence: { type: "task", id: task.id, link: `/tasks/${task.id}`, date: task.due_at },
-      priority: "normal",
-    });
-  }
+  const items = legacyBriefTaskItems(tasks);
   if (pendingSteps.length > 0) {
     items.push({
       kind: "approval",
@@ -448,7 +526,7 @@ export function executeAction(req, res) {
     throw new ApiError("IDEMPOTENCY_CONFLICT", "this action was already executed with the same key");
   }
 
-  const [result, rollbackRef] = execute(principal, action);
+  const [result, rollbackRef] = execute(principal, action, req.requestId);
   update(
     "agent_action",
     action.id,
@@ -493,7 +571,7 @@ export function rollbackAction(req, res) {
   if (action.status !== "executed") {
     throw new ApiError("CONFLICT", "only executed actions can be rolled back");
   }
-  res.json(rollback(principal, action));
+  res.json(rollback(principal, action, req.requestId));
 }
 
 export function listActions(req, res) {
@@ -577,11 +655,11 @@ export function listProviders(req, res) {
     items: Object.entries(providers.REGISTRY).map(([name, provider]) => ({
       name,
       local: provider.local,
-      available: provider.available(),
+      available: name === "openrouter" ? keyMetadata(principal).configured : provider.available(),
     })),
     routing_rules: [
       "데이터 등급 sensitive/confidential 은 외부 LLM 전송 차단(로컬 전용)",
-      "장애 시 정책상 허용된 대체 모델로 폴백",
+      "OpenRouter 요청 실패는 오류로 반환하며 로컬 성공으로 대체하지 않음",
       "모든 요청은 model/provider/token/cost/latency/citations/approval 기록",
     ],
   });

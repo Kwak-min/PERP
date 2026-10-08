@@ -97,7 +97,9 @@ export function createAsset(req, res) {
 export function listAssets(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("asset.read");
-  const filters = req.query.status ? [{ sql: "status = ?", params: [req.query.status] }] : [];
+  const filters = [];
+  if (req.query.status) filters.push({ sql: "status = ?", params: [req.query.status] });
+  if (req.query.custodian_id) filters.push({ sql: "custodian_id = ?", params: [req.query.custodian_id] });
   const rows = listScoped("asset", principal, filters, { limit: Number(req.query.limit ?? 100) });
   res.json({ items: rows.map(view), next_cursor: null });
 }
@@ -131,6 +133,7 @@ export function assetAction(req, res) {
   );
 
   const asset = getScoped("asset", principal, req.params.assetId, "asset");
+  if (asset.status === 'disposed') throw new ApiError('CONFLICT', '폐기된 자산은 변경할 수 없습니다');
   if (payload.action === "loan" && asset.status !== "available") {
     throw new ApiError("CONFLICT", `asset is not available: ${asset.status}`);
   }

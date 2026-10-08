@@ -1,12 +1,16 @@
 import { z } from "zod";
 
-import { db } from "../config/db.js";
+import { db, transaction } from "../config/db.js";
 import { env } from "../config/env.js";
-import { currentUser } from "../middleware/auth.js";
+import { pgQuery } from "../config/pg.js";
+import { currentUser, resolvePrincipal } from "../middleware/auth.js";
+import { enabledSet } from "../middleware/modules.js";
 import { insert, newId, nowIso, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
+import { assertInvitationDelegation } from '../services/company-roles.service.js';
 import { hashPassword, newToken, tokenFingerprint, verifyPassword } from "../utils/crypto.js";
 import { ApiError } from "../utils/errors.js";
+import { invitationToken as extractInvitationToken } from '../utils/invitation-token.js';
 
 const signupSchema = z.object({
   email: z.string().email(),
@@ -43,14 +47,14 @@ function revokeAllSessions(userId) {
     .run(nowIso(), userId);
 }
 
-export function signup(req, res) {
-  const payload = signupSchema.parse(req.body);
-  const email = payload.email.trim().toLowerCase();
-
-  if (db().prepare("SELECT id FROM app_user WHERE email = ?").get(email)) {
-    throw new ApiError("CONFLICT", "email already registered");
+const createSignup = transaction((payload, email, req) => {
+  let invite = null;
+  if (payload.invitation_token) {
+    const token = extractInvitationToken(payload.invitation_token);
+    const check = inspectInvitation(token, email);
+    if (!check.valid) throw new ApiError('VALIDATION_ERROR', check.message, { reason: check.reason });
+    invite = db().prepare("SELECT * FROM invitation WHERE token = ?").get(token);
   }
-
   const user = insert("app_user", {
     id: newId(),
     email,
@@ -59,20 +63,8 @@ export function signup(req, res) {
     created_at: nowIso(),
   });
 
-  let joinedOrg = null;
-  if (payload.invitation_token) {
-    const invite = db()
-      .prepare("SELECT * FROM invitation WHERE token = ?")
-      .get(payload.invitation_token);
-    if (!invite || invite.status !== "pending") {
-      throw new ApiError("VALIDATION_ERROR", "invitation is invalid or already used");
-    }
-    if (invite.expires_at < nowIso()) {
-      throw new ApiError("VALIDATION_ERROR", "invitation expired");
-    }
-    if (invite.email.toLowerCase() !== email) {
-      throw new ApiError("VALIDATION_ERROR", "invitation email mismatch");
-    }
+  if (invite) {
+    assertInvitationDelegation(invite);
     insert("membership", {
       tenant_id: invite.tenant_id,
       user_id: user.id,
@@ -82,8 +74,7 @@ export function signup(req, res) {
       joined_at: nowIso(),
       created_by: user.id,
     });
-    update("invitation", invite.id, { status: "accepted" });
-    joinedOrg = invite.org_id;
+    update("invitation", invite.id, { status: "accepted" }, user.id);
     audit.record({
       tenantId: invite.tenant_id,
       action: "member.invitation.accepted",
@@ -94,9 +85,22 @@ export function signup(req, res) {
     });
   }
 
+  return { user, joinedOrg: invite?.org_id ?? null, token: issueSession(user, req) };
+});
+
+export function signup(req, res) {
+  const payload = signupSchema.parse(req.body);
+  const email = payload.email.trim().toLowerCase();
+
+  if (db().prepare("SELECT id FROM app_user WHERE email = ?").get(email)) {
+    throw new ApiError("CONFLICT", "email already registered");
+  }
+
+  const { user, joinedOrg, token } = createSignup(payload, email, req);
+
   res.status(201).json({
     user: { id: user.id, email: user.email, name: user.name },
-    access_token: issueSession(user, req),
+    access_token: token,
     org_id: joinedOrg,
   });
 }
@@ -133,15 +137,29 @@ export function login(req, res) {
   });
 }
 
-export function logout(req, res) {
+export async function logout(req, res) {
   currentUser(req);
-  db().prepare("UPDATE session_token SET revoked_at = ? WHERE id = ?").run(nowIso(), req.sessionId);
+  if (req.authSource === "perp_db") {
+    await pgQuery(
+      "UPDATE auth.sessions SET is_active = false, logout_at = now() WHERE id = $1 AND is_active = true",
+      [req.sessionId],
+    );
+  } else {
+    db().prepare("UPDATE session_token SET revoked_at = ? WHERE id = ?").run(nowIso(), req.sessionId);
+  }
   res.json({ revoked: true });
 }
 
-export function revokeAll(req, res) {
+export async function revokeAll(req, res) {
   const user = currentUser(req);
-  revokeAllSessions(user.id);
+  if (req.authSource === "perp_db") {
+    await pgQuery(
+      "UPDATE auth.sessions SET is_active = false, logout_at = now() WHERE user_id = $1 AND is_active = true",
+      [req.externalIdentity.subject],
+    );
+  } else {
+    revokeAllSessions(user.id);
+  }
   res.json({ revoked_all: true });
 }
 
@@ -174,15 +192,6 @@ const acceptInvitationSchema = z
     message: "token 또는 invitation_id가 필요합니다",
   });
 
-// 초대 링크 전체를 붙여넣어도 되도록 URL에서 토큰만 뽑아낸다.
-function extractInvitationToken(raw) {
-  const value = raw.trim();
-  const match = /[?&](?:invite|token|invitation_token)=([^&#\s]+)/.exec(value);
-  if (match?.[1]) return decodeURIComponent(match[1]);
-  const tail = /([^/?&#\s]+)\s*$/.exec(value);
-  return tail?.[1] ? decodeURIComponent(tail[1]) : value;
-}
-
 function invitationView(invite) {
   const org = db().prepare("SELECT * FROM organization WHERE id = ?").get(invite.org_id);
   return {
@@ -197,57 +206,53 @@ function invitationView(invite) {
   };
 }
 
-// 확인 전용: 토큰이 살아있는지, 어떤 조직인지, 내 이메일과 맞는지만 알려준다.
+// 확인 전용: 비밀 토큰이 살아있는지와 대상 조직을 알려준다.
 function inspectInvitation(token, email) {
   const invite = db().prepare("SELECT * FROM invitation WHERE token = ?").get(token);
-  if (!invite) return { valid: false, reason: "not_found", message: "초대를 찾을 수 없습니다. 링크를 다시 확인하세요." };
+  if (!invite || invite.deleted_at) return { valid: false, reason: "not_found", message: "초대를 찾을 수 없습니다. 링크를 다시 확인하세요." };
+  if (email && invite.email.toLowerCase() !== email.toLowerCase()) {
+    return { valid: false, reason: 'email_mismatch', message: '초대받은 이메일의 계정으로 로그인하세요.' };
+  }
   if (invite.status !== "pending") {
     return { valid: false, reason: invite.status, message: `이미 처리된 초대입니다: ${invite.status}`, invitation: invitationView(invite) };
   }
-  if (invite.expires_at < nowIso()) {
+  if (invite.expires_at <= nowIso()) {
     return { valid: false, reason: "expired", message: "초대 유효기간이 지났습니다.", invitation: invitationView(invite) };
   }
-  if (email && invite.email.toLowerCase() !== email.toLowerCase()) {
-    return {
-      valid: false,
-      reason: "email_mismatch",
-      message: `이 초대는 ${invite.email} 주소로 발송되었습니다.`,
-      invitation: invitationView(invite),
-    };
-  }
+  const organization = db().prepare("SELECT o.id FROM organization o JOIN tenant t ON t.id = o.tenant_id WHERE o.id = ? AND o.tenant_id = ? AND o.deleted_at IS NULL AND t.status = 'active'").get(invite.org_id, invite.tenant_id);
+  if (!organization) return { valid: false, reason: 'company_inactive', message: '활성 조직이 아닙니다.' };
   return { valid: true, reason: "ok", message: "사용할 수 있는 초대입니다.", invitation: invitationView(invite) };
 }
 
 export function listMyInvitations(req, res) {
   const user = currentUser(req);
-  const rows = db()
-    .prepare(
-      `SELECT * FROM invitation
-       WHERE lower(email) = ? AND status = 'pending' AND expires_at >= ?
-       ORDER BY created_at DESC`,
-    )
-    .all(user.email.toLowerCase(), nowIso());
-  res.json({ email: user.email, items: rows.map(invitationView) });
+  // 계정 이메일은 아직 검증되지 않았으므로 이메일 주소만으로 초대를 공개하지 않는다.
+  res.json({ email: user.email, items: [] });
+}
+
+function invitationRecipient(req) {
+  const user = currentUser(req);
+  // PG 브리지의 운영 사용자는 SQLite 초대의 수신 계정이 아니다.
+  if (req.authSource === 'perp_db') {
+    throw new ApiError('PERMISSION_DENIED', '이 초대의 저장소 계정으로 로그인하세요.', { reason: 'store_mismatch' });
+  }
+  return user;
 }
 
 export function verifyInvitation(req, res) {
   const payload = invitationTokenSchema.parse(req.body);
-  const user = currentUser(req);
-  res.json(inspectInvitation(extractInvitationToken(payload.token), user.email));
+  const user = invitationRecipient(req);
+  res.set('Cache-Control', 'no-store').json(inspectInvitation(extractInvitationToken(payload.token), user.email));
 }
 
-export function acceptInvitation(req, res) {
-  const payload = acceptInvitationSchema.parse(req.body);
-  const user = currentUser(req);
-
-  // 내 메일함에 뜬 초대는 id로, 직접 붙여넣은 링크는 토큰으로 받는다.
-  const invite = payload.invitation_id
-    ? db().prepare("SELECT * FROM invitation WHERE id = ?").get(payload.invitation_id)
-    : db()
-        .prepare("SELECT * FROM invitation WHERE token = ?")
-        .get(extractInvitationToken(payload.token ?? ""));
-  if (!invite) throw new ApiError("NOT_FOUND", "초대를 찾을 수 없습니다");
-
+const joinByInvitation = transaction((invite, user, requestId) => {
+  // Only the original recipient can replay; never restore a removed membership or roles.
+  if (invite.status === 'accepted' && invite.updated_by === user.id && !invite.deleted_at && invite.email.toLowerCase() === user.email.toLowerCase()) {
+    const active = db().prepare(`SELECT m.id FROM membership m JOIN organization o ON o.id = m.org_id AND o.tenant_id = m.tenant_id
+      JOIN tenant t ON t.id = o.tenant_id WHERE m.user_id = ? AND m.org_id = ? AND m.status = 'active'
+      AND m.deleted_at IS NULL AND o.deleted_at IS NULL AND t.status = 'active'`).get(user.id, invite.org_id);
+    if (active) return;
+  }
   const check = inspectInvitation(invite.token, user.email);
   if (!check.valid) throw new ApiError("VALIDATION_ERROR", check.message, { reason: check.reason });
 
@@ -255,6 +260,7 @@ export function acceptInvitation(req, res) {
     .prepare("SELECT id FROM membership WHERE user_id = ? AND org_id = ? AND deleted_at IS NULL")
     .get(user.id, invite.org_id);
   if (already) throw new ApiError("CONFLICT", "이미 이 조직의 구성원입니다");
+  assertInvitationDelegation(invite);
 
   insert("membership", {
     tenant_id: invite.tenant_id,
@@ -265,24 +271,42 @@ export function acceptInvitation(req, res) {
     joined_at: nowIso(),
     created_by: user.id,
   });
-  update("invitation", invite.id, { status: "accepted" });
-
+  update("invitation", invite.id, { status: "accepted" }, user.id);
   audit.record({
     tenantId: invite.tenant_id,
     action: "member.invitation.accepted",
     resourceType: "membership",
     resourceId: user.id,
     actorId: user.id,
-    requestId: req.requestId,
+    requestId,
   });
+});
 
-  res.status(201).json({ joined: true, ...invitationView({ ...invite, status: "accepted" }) });
+export function acceptInvitation(req, res) {
+  const payload = acceptInvitationSchema.parse(req.body);
+  const user = invitationRecipient(req);
+
+  if (payload.invitation_id) throw new ApiError("VALIDATION_ERROR", "초대 토큰이 필요합니다");
+  const invite = db()
+    .prepare("SELECT * FROM invitation WHERE token = ?")
+    .get(extractInvitationToken(payload.token ?? ""));
+  if (!invite) throw new ApiError("NOT_FOUND", "초대를 찾을 수 없습니다");
+
+  joinByInvitation(invite, user, req.requestId);
+
+  res.status(201).set('Cache-Control', 'no-store').json({ joined: true, ...invitationView({ ...invite, status: "accepted" }) });
 }
 
 export function me(req, res) {
   const user = currentUser(req);
   const memberships = db()
-    .prepare("SELECT * FROM membership WHERE user_id = ? AND status = 'active' AND deleted_at IS NULL")
+    .prepare(
+      `SELECT m.* FROM membership m
+       JOIN organization o ON o.id = m.org_id AND o.tenant_id = m.tenant_id
+       JOIN tenant t ON t.id = o.tenant_id
+       WHERE m.user_id = ? AND m.status = 'active' AND m.deleted_at IS NULL
+         AND o.deleted_at IS NULL AND t.status = 'active'`,
+    )
     .all(user.id);
 
   res.json({
@@ -302,5 +326,21 @@ export function me(req, res) {
         department_id: m.department_id,
       };
     }),
+  });
+}
+
+export function principal(req, res) {
+  if (!req.get("x-org-id")) {
+    throw new ApiError("VALIDATION_ERROR", "X-Org-Id 헤더가 필요합니다");
+  }
+  const resolved = resolvePrincipal(req);
+  res.json({
+    userId: resolved.userId,
+    tenantId: resolved.tenantId,
+    orgId: resolved.orgId,
+    membershipId: resolved.membershipId,
+    roles: resolved.roles,
+    permissions: [...resolved.permissions].sort(),
+    modules: [...enabledSet(req.organization.modules)].sort(),
   });
 }

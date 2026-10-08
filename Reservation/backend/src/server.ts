@@ -3,7 +3,8 @@ import app from './app';
 import { prisma } from './lib/prisma';
 import { startReminderScheduler } from './notification/reminder.scheduler';
 
-const PORT = process.env.PORT || 8080;
+const PORT = Number(process.env.PORT || 8080);
+const HOST = process.env.HOST || '127.0.0.1';
 
 async function main() {
   // DB 연결 확인
@@ -14,9 +15,10 @@ async function main() {
   startReminderScheduler();
   console.log('✅ Reminder scheduler started');
 
-  app.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
-    console.log(`📄 Swagger UI: http://localhost:${PORT}/api-docs`);
+  app.listen(PORT, HOST, () => {
+    const baseUrl = `http://${HOST.includes(':') ? `[${HOST}]` : HOST}:${PORT}`;
+    console.log(`🚀 Server running on ${baseUrl}`);
+    console.log(`📄 Swagger UI: ${baseUrl}/api-docs`);
   });
 }
 

@@ -1,0 +1,25 @@
+.project-finance { border: 1px solid var(--of-border); border-radius: var(--r-md); padding: 16px; margin: 12px 0; min-width: 0; }
+.project-finance > header { display: flex; justify-content: space-between; align-items: start; gap: 12px; flex-wrap: wrap; }
+.project-finance h3 { font-size: 18px; margin: 0; }
+.project-finance h4 { margin: 12px 0 4px; font-size: 13px; }
+.project-finance p { margin: 8px 0; color: var(--of-text-muted); overflow-wrap: anywhere; }
+.project-finance__basis { font-size: 11px; }
+.project-finance__totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; margin: 8px 0; }
+.project-finance__totals > div { padding: 12px; background: var(--of-surface-muted); border: 1px solid var(--of-border); border-radius: var(--r-sm); min-width: 0; }
+.project-finance__totals dt { font-size: 13px; }
+.project-finance__totals dd { font-size: 24px; font-weight: 800; margin: 8px 0 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.project-finance__actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }
+.project-finance__form { border: 1px solid var(--of-border); border-radius: var(--r-md); padding: 12px; }
+.project-finance__form fieldset { border: 0; padding: 0; min-width: 0; display: grid; gap: 12px; }
+.project-finance__form label { display: grid; gap: 4px; min-width: 0; }
+.project-finance__form input:not([type=checkbox]), .project-finance__form select { width: 100%; min-width: 0; box-sizing: border-box; }
+.project-finance__form label.expense-confirm { display: flex; align-items: start; }
+.project-finance__form label.expense-confirm input { flex-shrink: 0; }
+.project-finance details { margin-top: 12px; }
+.project-finance summary { cursor: pointer; padding: 8px 0; }
+.project-finance__budgets { display: grid; gap: 8px; list-style: none; margin: 8px 0; padding: 0; }
+.project-finance__budgets li { display: grid; gap: 4px; border-top: 1px solid var(--of-border); padding: 8px 0; overflow-wrap: anywhere; }
+.project-finance__ledger { overflow-x: auto; }
+.project-finance__ledger table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.project-finance__ledger th, .project-finance__ledger td { text-align: left; padding: 8px; border-bottom: 1px solid var(--of-border); vertical-align: top; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .project-finance { padding: 12px; } .project-finance button, .project-finance input, .project-finance select, .project-finance summary, .project-finance__actions a { min-height: 44px; } .project-finance input[type=checkbox] { min-height: 16px; } }

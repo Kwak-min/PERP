@@ -37,6 +37,8 @@ enum AttendeeStatus {
 
 model Space {
   id           Int           @id @default(autoincrement())
+  tenantId     String?
+  orgId        String?
   name         String
   location     String
   floor        String?
@@ -49,10 +51,13 @@ model Space {
   waitlists    Waitlist[]
 
   @@map("spaces")
+  @@index([tenantId, orgId])
 }
 
 model RecurrenceRule {
   id             Int                 @id @default(autoincrement())
+  tenantId       String?
+  orgId          String?
   frequency      RecurrenceFrequency
   interval       Int                 @default(1)
   daysOfWeek     Json?               // ["MON", "WED"]
@@ -65,8 +70,11 @@ model RecurrenceRule {
 
 model Reservation {
   id               Int               @id @default(autoincrement())
+  tenantId         String?
+  orgId            String?
+  ownerId          String?
   spaceId          Int
-  userId           Int               // 타팀 User 테이블 FK (JPA 관계 없이 ID만 참조)
+  userId           Int?              // 격리된 레거시 식별자. 신규 권한 판정에 사용하지 않음.
   title            String
   description      String?
   startTime        DateTime
@@ -82,6 +90,7 @@ model Reservation {
 
   @@index([spaceId, startTime, endTime])
   @@index([userId])
+  @@index([tenantId, orgId, ownerId])
   @@map("reservations")
 }
 
@@ -103,8 +112,11 @@ model Attendee {
 
 model Waitlist {
   id          Int      @id @default(autoincrement())
+  tenantId    String?
+  orgId       String?
+  ownerId     String?
   spaceId     Int
-  userId      Int
+  userId      Int?     // 격리된 레거시 식별자
   title       String
   description String?
   startTime   DateTime
@@ -114,5 +126,6 @@ model Waitlist {
   space Space @relation(fields: [spaceId], references: [id])
 
   @@index([spaceId, startTime])
+  @@index([tenantId, orgId, ownerId])
   @@map("waitlists")
 }

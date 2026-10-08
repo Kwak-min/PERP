@@ -1,236 +1,193 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { z } from "zod";
 
+import { MemberListModal } from "../components/data/MemberListModal";
+import { CreateFormModal } from "../components/common/CreateFormModal";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { SectionCard } from "../components/ui/SectionCard";
-import type { ScreenDefinition } from "../routes/catalog";
-import { apiRequest, userMessageOf } from "../services/api";
+import { screens, type ScreenDefinition } from "../routes/catalog";
+import { apiRequest, userMessageOf, type ApiSession } from "../services/api";
+import { isPgWorkspace } from "../services/workspace";
 import { useSession } from "../store/session";
 import { MemberDetailPanel } from "./orgchart/MemberDetailPanel";
+import { MemberDirectory } from "./orgchart/MemberDirectory";
 import { OrgChartTree } from "./orgchart/OrgChartTree";
+import { OrgLogModal } from "./orgchart/OrgLogModal";
 import { SeatSetupPanel } from "./orgchart/SeatSetupPanel";
-import {
-  flattenSeats,
-  membersSchema,
-  orgChartSchema,
-  type OrgChart,
-  type OrgMember,
-  type OrgSeat,
-} from "./orgchart/model";
-
+import { flattenSeats, membersSchema, orgChartSchema, type OrgChart, type OrgMember, type OrgSeat } from "./orgchart/model";
 import "./orgchart.css";
+import { InvitationSharingPanel } from './members/InvitationSharingPanel';
+
+const permissionsSchema = z.object({ permissions: z.array(z.string()) });
+type DataState = Readonly<{ status: "loading" | "ready" | "error"; chart: OrgChart | null; members: readonly OrgMember[]; error: string | null }>;
 
 export function OrgChartScreen({ screen }: Readonly<{ screen: ScreenDefinition }>) {
-  const session = useSession();
-  const [chart, setChart] = useState<OrgChart | null>(null);
-  const [members, setMembers] = useState<readonly OrgMember[]>([]);
-  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
+  const stored = useSession();
+  const session = useMemo(() => stored?.orgId ? { token: stored.token, orgId: stored.orgId } : null, [stored?.token, stored?.orgId]);
+  // 조직/로그인 변경 시 이전 조직의 행·선택·열린 팝업을 함께 폐기한다.
+  return session ? <OrganizationWorkspace key={`${session.orgId}:${session.token}`} screen={screen} session={session} /> : null;
+}
+
+function OrganizationWorkspace({ screen, session }: Readonly<{ screen: ScreenDefinition; session: ApiSession }>) {
+  const pg = isPgWorkspace(session.orgId);
+  const [search, setSearch] = useSearchParams();
+  const [state, setState] = useState<DataState>({ status: "loading", chart: null, members: [], error: null });
+  const [permissions, setPermissions] = useState<readonly string[]>([]);
+  const [permissionState, setPermissionState] = useState("loading");
+  const [permissionError, setPermissionError] = useState<string | null>(null);
+  const selectedMemberId = search.get('member');
+  const detailRef = useRef<HTMLElement>(null);
   const [setupSeat, setSetupSeat] = useState<OrgSeat | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-
-  const apiSession = useMemo(
-    () => (session?.orgId ? { token: session.token, orgId: session.orgId } : null),
-    [session?.token, session?.orgId],
-  );
-
-  const reload = useCallback(async (): Promise<void> => {
-    if (!apiSession) return;
-    try {
-      const [chartData, memberData] = await Promise.all([
-        apiRequest("/members/org-chart", { session: apiSession }),
-        apiRequest("/members?limit=200", { session: apiSession }),
-      ]);
-      setChart(orgChartSchema.parse(chartData));
-      setMembers(membersSchema.parse(memberData).items);
-      setError(null);
-    } catch (caught) {
-      setError(userMessageOf(caught));
-    }
-  }, [apiSession]);
+  const [revision, setRevision] = useState(0);
+  const [showCreate, setShowCreate] = useState(false);
+  const [showInvitations, setShowInvitations] = useState(search.has('inviteEmail'));
+  const [showLog, setShowLog] = useState(false);
+  const [showMembers, setShowMembers] = useState(false);
+  const can = (permission: string) => permissions.includes(permission) || (!pg && permissions.includes("*"));
+  const canAssign = can(pg ? "department.write" : "member.write");
+  const canSetup = can("department.write") && canAssign;
+  const canReadLog = can(pg ? "audit.read" : "member.read");
+  const createConfig = screens.find(item => item.id === "ORG-002")?.create;
 
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    const controller = new AbortController();
+    // 같은 회사의 재조회는 필터·페이지를 유지하고 새 전체 결과에서 clamp한다.
+    setState(previous => ({ ...previous, status: "loading", error: null }));
+    Promise.all([
+      apiRequest("/pg/members/org-chart", { session, signal: controller.signal }),
+      pg ? Promise.resolve(null) : apiRequest("/members?limit=-1", { session, signal: controller.signal }),
+    ]).then(([chartData, memberData]) => {
+      const chart = orgChartSchema.parse(chartData);
+      if (pg) z.string().regex(/^[1-9]\d*$/).parse(chart.revision);
+      const members = pg ? [...flattenSeats(chart.roots).flatMap(seat => seat.members), ...chart.unassigned] : membersSchema.parse(memberData).items;
+      if (!controller.signal.aborted) setState({ status: "ready", chart, members, error: null });
+    }).catch((caught: unknown) => {
+      if (!controller.signal.aborted) setState({ status: "error", chart: null, members: [], error: userMessageOf(caught) });
+    });
+    return () => controller.abort();
+  }, [session, revision, pg]);
 
-  const seats = useMemo(() => (chart ? flattenSeats(chart.roots) : []), [chart]);
-  const selectedMember = members.find((member) => member.membership_id === selectedMemberId) ?? null;
-  const departmentNameOf = (member: OrgMember): string =>
-    seats.find((seat) => seat.id === member.department_id)?.name ?? "미배정";
+  useEffect(() => {
+    const controller = new AbortController();
+    setPermissions([]); setPermissionState("loading"); setPermissionError(null);
+    apiRequest("/settings/access", { session, signal: controller.signal }).then(payload => {
+      const grants = permissionsSchema.parse(payload).permissions;
+      if (!controller.signal.aborted) { setPermissions(grants); setPermissionState("ready"); }
+    }).catch((caught: unknown) => {
+      if (!controller.signal.aborted) { setPermissionError(`작업 권한을 확인하지 못했습니다: ${userMessageOf(caught)}`); setPermissionState("error"); }
+    });
+    return () => controller.abort();
+  }, [session, revision]);
+
+  useEffect(() => {
+    const refresh = () => { setSetupSeat(null); setRevision(value => value + 1); };
+    const focus = () => { if (!setupSeat && !busy) refresh(); };
+    window.addEventListener("orbitflow:access-changed", refresh);
+    window.addEventListener("focus", focus);
+    return () => { window.removeEventListener("orbitflow:access-changed", refresh); window.removeEventListener("focus", focus); };
+  }, [setupSeat, busy]);
+
+  const requestedLog = search.get("org-log") === "1";
+  useEffect(() => {
+    if (requestedLog && canReadLog) {
+      document.getElementById("org-log-trigger")?.focus();
+      setShowLog(true);
+    }
+  }, [requestedLog, canReadLog]);
+  function closeLog(): void {
+    setShowLog(false);
+    if (requestedLog) { const next = new URLSearchParams(search); next.delete("org-log"); setSearch(next, { replace: true }); }
+  }
+  const seats = useMemo(() => state.chart ? flattenSeats(state.chart.roots) : [], [state.chart]);
+  const selectedMember = state.members.find(member => member.membership_id === selectedMemberId) ?? null;
+  useLayoutEffect(() => {
+    // 선택한 사람의 상세로 이동한다. 같은 사람의 권한/자료 재조회는 포커스를 빼앗지 않는다.
+    if (selectedMember) detailRef.current?.focus();
+  }, [selectedMember?.membership_id]);
+  function selectMember(id: string | null): void {
+    const next = new URLSearchParams(search);
+    if (id) next.set('member', id); else next.delete('member');
+    setSearch(next); setSetupSeat(null);
+  }
+  function changeFilter(name: 'q' | 'department' | 'status', value: string): void {
+    const next = new URLSearchParams(search);
+    if (value) next.set(name, value); else next.delete(name);
+    next.delete('member'); setSearch(next, { replace: true }); setSetupSeat(null);
+  }
+  function reload(): void { setSetupSeat(null); setRevision(value => value + 1); }
 
   async function saveSeat(input: Readonly<{ leaderUserId: string | null; assigned: readonly string[] }>): Promise<void> {
-    if (!apiSession || !setupSeat) return;
-    setBusy(true);
-    setError(null);
+    if (!setupSeat) return;
+    setBusy(true); setMutationError(null);
     try {
-      await apiRequest(`/members/departments/${setupSeat.id}`, {
-        method: "PATCH",
-        session: apiSession,
-        body: { leader_id: input.leaderUserId },
-      });
-      const before = new Set(setupSeat.members.map((member) => member.membership_id));
-      const after = new Set(input.assigned);
-      const changes = members.filter(
-        (member) =>
-          (after.has(member.membership_id) && !before.has(member.membership_id)) ||
-          (!after.has(member.membership_id) && before.has(member.membership_id)),
-      );
-      for (const member of changes) {
-        await apiRequest(`/members/${member.membership_id}/assignment`, {
-          method: "PATCH",
-          session: apiSession,
-          body: { department_id: after.has(member.membership_id) ? setupSeat.id : null },
-        });
+      if (pg) {
+        await apiRequest(`/pg/members/departments/${setupSeat.id}/seat`, { method: "PATCH", session,
+          body: { expected_revision: state.chart?.revision, leader_id: input.leaderUserId,
+            assigned: input.assigned.filter(id => state.members.some(member => member.membership_id === id && member.status === "active")) } });
+      } else {
+        await apiRequest(`/pg/members/departments/${setupSeat.id}`, { method: "PATCH", session, body: { leader_id: input.leaderUserId } });
+        const before = new Set(setupSeat.members.map(member => member.membership_id)), after = new Set(input.assigned);
+        for (const member of state.members.filter(member => after.has(member.membership_id) !== before.has(member.membership_id))) {
+          await apiRequest(`/pg/members/${member.membership_id}/assignment`, { method: "PATCH", session, body: { department_id: after.has(member.membership_id) ? setupSeat.id : null } });
+        }
       }
-      setSetupSeat(null);
-      setNotice(`${setupSeat.name} 자리를 설정했습니다.`);
-      await reload();
+      setNotice(`${setupSeat.name} 자리를 설정했습니다.`); reload();
     } catch (caught) {
-      setError(userMessageOf(caught));
-    } finally {
-      setBusy(false);
-    }
+      setMutationError(pg ? userMessageOf(caught) : `일부 변경이 적용되었을 수 있습니다. 새 상태를 확인하세요. ${userMessageOf(caught)}`);
+      if (!pg) reload();
+    } finally { setBusy(false); }
   }
-
   async function changeTitle(member: OrgMember, title: string): Promise<void> {
-    if (!apiSession) return;
-    setBusy(true);
-    setError(null);
+    setBusy(true); setMutationError(null);
     try {
-      await apiRequest(`/members/${member.membership_id}/assignment`, {
-        method: "PATCH",
-        session: apiSession,
-        body: { title },
-      });
-      setNotice(`${member.name} 직책을 ${title}(으)로 변경했습니다.`);
-      await reload();
-    } catch (caught) {
-      setError(userMessageOf(caught));
-    } finally {
-      setBusy(false);
-    }
+      await apiRequest(`/pg/members/${member.membership_id}/assignment`, { method: "PATCH", session, body: { title } });
+      setNotice(`${member.name} 직책을 ${title}(으)로 변경했습니다.`); reload();
+    } catch (caught) { setMutationError(userMessageOf(caught)); }
+    finally { setBusy(false); }
   }
-
   async function addChild(seat: OrgSeat, name: string): Promise<void> {
-    if (!apiSession || name.trim() === "") return;
-    setBusy(true);
-    setError(null);
+    setBusy(true); setMutationError(null);
     try {
-      await apiRequest("/members/departments", {
-        method: "POST",
-        session: apiSession,
-        body: { name: name.trim(), parent_id: seat.id },
-      });
-      setNotice(`${name.trim()} 자리를 만들었습니다. 아직 설정하지 않아 잠겨 있습니다.`);
-      await reload();
-    } catch (caught) {
-      setError(userMessageOf(caught));
-    } finally {
-      setBusy(false);
-    }
+      await apiRequest("/pg/members/departments", { method: "POST", session, body: { name: name.trim(), parent_id: seat.id } });
+      setNotice(`${name.trim()} 부서를 만들었습니다.`); reload();
+    } catch (caught) { setMutationError(userMessageOf(caught)); }
+    finally { setBusy(false); }
   }
-
-  const lockedCount = seats.filter((seat) => !seat.configured).length;
-
-  return (
-    <div className="screen" data-screen-id={screen.id}>
-      <header className="screen-header">
-        <div>
-          <div className="screen-header__meta">
-            <span className="eyebrow">사람</span>
-            <Badge>{screen.id}</Badge>
-            {lockedCount > 0 && <Badge tone="warning">미설정 {lockedCount}자리</Badge>}
-          </div>
-          <h1>{screen.label}</h1>
-          <p>{screen.description}</p>
-        </div>
-        <div className="screen-header__actions">
-          <Link className="button button--neutral button--small" to="/org-log">
-            변경 로그
-          </Link>
-          <Button tone="neutral" size="small" disabled={busy} onClick={() => void reload()}>
-            새로 고침
-          </Button>
-        </div>
-      </header>
-
-      {error && <div className="form-error" role="alert">{error}</div>}
-      {notice && (
-        <div className="screen-notice" role="status">
-          <span>{notice}</span>
-          <Button tone="ghost" size="small" onClick={() => setNotice(null)}>닫기</Button>
-        </div>
-      )}
-
-      <div className="orgchart-layout">
-        <SectionCard title="조직도" subtitle="부서 구조와 책임자" foot="괄호 표기는 공석입니다">
-          {chart === null ? (
-            <p className="orgchart__empty">조직도를 불러오는 중입니다…</p>
-          ) : (
-            <OrgChartTree
-              roots={chart.roots}
-              selectedMemberId={selectedMemberId}
-              selectedSeatId={setupSeat?.id ?? null}
-              onSelectMember={(membershipId) => {
-                setSelectedMemberId(membershipId);
-                setSetupSeat(null);
-              }}
-              onSetupSeat={(seat) => {
-                setSetupSeat(seat);
-                setSelectedMemberId(null);
-              }}
-              busy={busy}
-              onAddChild={(seat, name) => void addChild(seat, name)}
-            />
-          )}
-          {chart !== null && chart.unassigned.length > 0 && (
-            <div className="orgchart__unassigned">
-              <h3>미배정 인원 {chart.unassigned.length}명</h3>
-              <div className="orgchart__members">
-                {chart.unassigned.map((member) => (
-                  <button
-                    key={member.membership_id}
-                    type="button"
-                    className={
-                      member.membership_id === selectedMemberId
-                        ? "orgchart__chip orgchart__chip--on"
-                        : "orgchart__chip"
-                    }
-                    onClick={() => setSelectedMemberId(member.membership_id)}
-                  >
-                    {member.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </SectionCard>
-
-        <aside className="orgchart-aside">
-          {setupSeat ? (
-            <SeatSetupPanel
-              seat={setupSeat}
-              members={members}
-              busy={busy}
-              onCancel={() => setSetupSeat(null)}
-              onSave={(input) => void saveSeat(input)}
-            />
-          ) : selectedMember ? (
-            <MemberDetailPanel
-              member={selectedMember}
-              departmentName={departmentNameOf(selectedMember)}
-              busy={busy}
-              onChangeTitle={(member, title) => void changeTitle(member, title)}
-            />
-          ) : (
-            <p className="orgchart__hint">
-              이름을 누르면 이메일·부서·전화번호와 직책 조정이 여기에 표시됩니다.
-            </p>
-          )}
-        </aside>
+  return <div className="screen org-unified" data-screen-id={screen.id} data-org-state={state.status} data-org-permissions={permissionState}>
+    <header className="screen-header"><div><div className="screen-header__meta"><span className="eyebrow">사람</span><Badge>{screen.id}</Badge></div><h1>구성원·조직도</h1><p>구성원과 부서 구조를 함께 확인하고 관리합니다.</p></div>
+      <div className="screen-header__actions">
+        {can("member.write") && can("role.assign") && <Button size="small" aria-expanded={showInvitations} aria-controls="member-invitation-sharing" onClick={() => setShowInvitations(true)}>구성원 추가</Button>}
+        {pg && createConfig && can("member.write") && can("role.assign") && <Button tone="neutral" size="small" onClick={() => setShowCreate(true)}>계정 직접 등록</Button>}
+        <Button tone="neutral" size="small" aria-haspopup="dialog" disabled={state.status !== "ready"} onClick={() => setShowMembers(true)}>구성원 목록 팝업</Button>
+        <Button tone="neutral" size="small" id="org-log-trigger" aria-haspopup="dialog" aria-controls="org-log-dialog" aria-expanded={showLog} disabled={!canReadLog} onClick={() => setShowLog(true)}>변경 로그</Button>
+        <Button tone="neutral" size="small" disabled={busy || state.status === "loading"} onClick={reload}>새로 고침</Button>
       </div>
-    </div>
-  );
+    </header>
+    <InvitationSharingPanel session={session} open={showInvitations} onToggle={() => setShowInvitations(value => !value)} />
+    {permissionError && <div className="form-error" role="alert">{permissionError}</div>}
+    {requestedLog && permissionState === "ready" && !canReadLog && <div className="form-error" role="alert">조직 변경 로그를 볼 권한이 없습니다.</div>}
+    {mutationError && <div className="form-error" role="alert">{mutationError}</div>}
+    {notice && <div className="screen-notice" role="status"><span>{notice}</span><Button tone="ghost" size="small" onClick={() => setNotice(null)}>닫기</Button></div>}
+    {state.status === "loading" && !state.chart ? <p className="orgchart__empty" role="status">구성원과 조직도를 불러오는 중입니다…</p>
+      : state.error ? <div className="form-error" role="alert">{state.error}</div>
+      : <div className="orgchart-layout" aria-busy={state.status === "loading"} inert={state.status === "loading"}><div className="orgchart-main">
+        <MemberDirectory members={state.members} seats={seats} selectedMemberId={selectedMemberId} query={search.get('q') ?? ''} department={search.get('department') ?? ''} status={search.get('status') ?? ''} onFilterChange={changeFilter} onSelect={selectMember} />
+        <SectionCard title="조직도" subtitle="부서 구조와 책임자" foot="직접 등록한 부서만 표시합니다">
+          <OrgChartTree roots={state.chart?.roots ?? []} selectedMemberId={selectedMemberId} selectedSeatId={setupSeat?.id ?? null} onSelectMember={selectMember} onSetupSeat={seat => { selectMember(null); setSetupSeat(seat); }} busy={busy} canSetup={canSetup} canAdd={can("department.write")} onAddChild={(seat, name) => void addChild(seat, name)} />
+          {Boolean(state.chart?.unassigned.length) && <div className="orgchart__unassigned"><h3>미배정 인원 {state.chart?.unassigned.length}명</h3><div className="orgchart__members">{state.chart?.unassigned.map(member => <button key={member.membership_id} type="button" className={member.membership_id === selectedMemberId ? "orgchart__chip orgchart__chip--on" : "orgchart__chip"} onClick={() => selectMember(member.membership_id)}>{member.name}</button>)}</div></div>}
+        </SectionCard>
+      </div><aside ref={detailRef} className="orgchart-aside" aria-label="구성원 상세" aria-live="polite" tabIndex={-1}>
+        {setupSeat && canSetup ? <SeatSetupPanel key={setupSeat.id} seat={setupSeat} members={state.members.filter(member => member.status === "active")} busy={busy} onCancel={() => setSetupSeat(null)} onSave={input => void saveSeat(input)} />
+          : selectedMember ? <MemberDetailPanel member={selectedMember} departmentName={seats.find(seat => seat.id === selectedMember.department_id)?.name ?? selectedMember.department_id ?? "미배정"} busy={busy} canAssign={canAssign && selectedMember.status === "active"} session={session} onChangeTitle={(member, title) => void changeTitle(member, title)} />
+          : <p className="orgchart__hint">목록이나 조직도에서 이름을 선택하면 이메일·부서·전화번호와 인사 프로필을 확인할 수 있습니다.</p>}
+      </aside></div>}
+    {showMembers && <MemberListModal session={session} onClose={() => setShowMembers(false)} />}
+    {showLog && canReadLog && <OrgLogModal session={session} onClose={closeLog} />}
+    {showCreate && pg && createConfig && can("member.write") && can("role.assign") && <CreateFormModal entityLabel="구성원" config={createConfig} session={session} onClose={() => setShowCreate(false)} onCreated={() => { setNotice("구성원을 추가했습니다."); reload(); }} />}
+  </div>;
 }

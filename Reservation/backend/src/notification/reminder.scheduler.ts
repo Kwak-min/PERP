@@ -12,6 +12,9 @@ export function startReminderScheduler() {
     try {
       const reservations = await prisma.reservation.findMany({
         where: {
+          tenantId: { not: null },
+          orgId: { not: null },
+          ownerId: { not: null },
           status: 'CONFIRMED',
           startTime: { gte: from, lt: to },
         },

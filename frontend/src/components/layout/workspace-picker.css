@@ -5,6 +5,7 @@
 .workspace-picker__icon--text { padding: 0 7px; font-size: 10.5px; }
 .workspace-picker__icon:hover { border-color: var(--of-primary); }
 .workspace-picker__item:disabled { opacity: .45; cursor: not-allowed; }
+.workspace-picker__add { min-height: 44px; }
 
 .branch-create { display: grid; gap: 10px; margin: 6px; border: 1px solid var(--of-primary); border-radius: var(--r-md); padding: 10px; }
 .branch-create > label { display: flex; flex-direction: column; gap: 5px; font-size: 11px; font-weight: 800; }

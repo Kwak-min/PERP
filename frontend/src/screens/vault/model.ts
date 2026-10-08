@@ -1,5 +1,19 @@
 import { z } from "zod";
 
+import { versionTokenSchema } from "./graph3d.ts";
+
+export const analysisSchema = z.object({
+  state: z.enum(["pending", "ready", "unavailable", "error", "not_analyzed"]),
+  reason: z.string().optional(),
+  version: versionTokenSchema,
+  model: z.string().nullable(),
+  local_only: z.boolean(),
+  candidates: z.number().int().optional(),
+  candidate_limit: z.number().int().optional(),
+  truncated: z.boolean().optional(),
+});
+export type NoteAnalysis = z.infer<typeof analysisSchema>;
+
 export const noteSchema = z.object({
   id: z.string(),
   folder: z.string().catch("/"),
@@ -8,9 +22,16 @@ export const noteSchema = z.object({
   sensitivity: z.string().catch("personal"),
   agent_enabled: z.boolean().catch(true),
   pinned: z.boolean().catch(false),
-  version: z.number().catch(1),
+  version: versionTokenSchema,
   updated_at: z.string().catch(""),
+  analysis: analysisSchema.optional(),
 });
+
+export function parseNoteResult(targetId: string, input: unknown): Note {
+  const note = noteSchema.parse(input);
+  if (note.id !== targetId) throw new Error("DETAIL_ID_MISMATCH");
+  return note;
+}
 
 export const noteListSchema = z.object({
   items: z.array(noteSchema),
@@ -19,9 +40,15 @@ export const noteListSchema = z.object({
 });
 
 export const noteDetailSchema = noteSchema.extend({
-  content: z.string().catch(""),
+  content: z.string(),
   backlinks: z.array(z.unknown()).catch([]),
 });
+
+export function parseNoteDetail(targetId: string, input: unknown): NoteDetail {
+  const detail = noteDetailSchema.parse(input);
+  if (detail.id !== targetId) throw new Error("DETAIL_ID_MISMATCH");
+  return detail;
+}
 
 export type Note = z.infer<typeof noteSchema>;
 export type NoteDetail = z.infer<typeof noteDetailSchema>;

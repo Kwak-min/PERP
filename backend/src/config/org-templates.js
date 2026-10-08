@@ -86,6 +86,7 @@ export const ORG_TEMPLATES = {
       "tasks",
       "calendar",
       "documents",
+      "finance",
       "assets",
       "handover",
       "agent"
@@ -182,6 +183,7 @@ export const ORG_TEMPLATES = {
       "tasks",
       "calendar",
       "documents",
+      "finance",
       "agent"
     ],
     "departments": [
@@ -224,12 +226,6 @@ export const ORG_TEMPLATES = {
       "calendar",
       "documents",
       "finance",
-      "assets",
-      "hr",
-      "approvals",
-      "handover",
-      "automations",
-      "analytics",
       "agent"
     ],
     "departments": [

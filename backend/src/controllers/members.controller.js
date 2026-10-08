@@ -1,15 +1,12 @@
 import { z } from "zod";
 
-import { db } from "../config/db.js";
-import {
-  MASKED_FIELDS,
-  ROLE_TEMPLATES,
-  permissionsFor,
-  widestScope,
-} from "../config/rbac.js";
+import { db, transaction } from "../config/db.js";
+import { MASKED_FIELDS } from "../config/rbac.js";
 import { resolvePrincipal } from "../middleware/auth.js";
-import { bumpVersion, hardDelete, insert, listScoped, newId, nowIso, update } from "../models/base.js";
+import { assignLegacyRoles, assertDelegation, legacyRoleDefinitions, legacyRoleGrants, resolveRoleKeys, freshLegacyAuthority, setLegacyMemberStatus } from '../services/company-roles.service.js';
+import { bumpVersion, getScoped, hardDelete, insert, listScoped, newId, nowIso, softDelete, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
+import { notify } from "../services/notification.service.js";
 import { hashPassword, newToken, temporaryPassword } from "../utils/crypto.js";
 import { ApiError, notFound } from "../utils/errors.js";
 
@@ -25,10 +22,19 @@ const provisionSchema = z.object({
   roles: z.array(z.string()).default(["member"]),
   department_id: z.string().nullable().optional(),
   title: z.string().nullable().optional(),
+  phone: z.string().max(40).nullable().optional(),
+  employee_number: z.string().max(80).nullable().optional(),
+  employment_type: z.enum(["full_time", "part_time", "contractor", "intern", "other"]).nullable().optional(),
+  hire_date: z.string().date().nullable().optional(),
+  workplace: z.string().max(160).nullable().optional(),
+  birth_date: z.string().date().nullable().optional(),
+  address: z.string().max(500).nullable().optional(),
+  emergency_contact: z.string().max(240).nullable().optional(),
 });
 
-const rolesSchema = z.object({ roles: z.array(z.string()) });
-const statusSchema = z.object({ status: z.enum(["active", "inactive", "left"]) });
+const roleVersion = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+const rolesSchema = z.object({ roles: z.array(z.string().min(1).max(100)).max(50), expected_roles_version: roleVersion }).strict();
+const statusSchema = z.object({ status: z.enum(["active", "inactive", "left"]), expected_roles_version: roleVersion }).strict();
 const simulationSchema = z.object({
   roles: z.array(z.string()).min(1),
   permissions: z.array(z.string()).default([]),
@@ -49,13 +55,36 @@ const assignmentSchema = z.object({
   department_id: z.string().nullable().optional(),
   title: z.string().max(120).nullable().optional(),
 });
+const homeLayoutSchema = z.object({
+  department_id: z.string().nullable().optional(),
+  project_id: z.string().nullable().optional(),
+  blocks: z.array(z.enum(["welcome", "tasks", "projects", "calendar", "members", "documents"])).min(1),
+});
 
-function assertKnownRoles(roles) {
-  for (const role of roles) {
-    if (!(role in ROLE_TEMPLATES)) {
-      throw new ApiError("VALIDATION_ERROR", `unknown role: ${role}`);
-    }
-  }
+const competencySchema = z.object({
+  label: z.string().min(1).max(120),
+  level: z.enum(["beginner", "intermediate", "advanced"]).default("intermediate"),
+  note: z.string().default(""),
+});
+
+const FIELD_REQUEST_FIELDS = ["phone", "address", "birth_date", "emergency_contact"];
+const APP_USER_FIELDS = new Set(["phone", "address", "birth_date"]);
+const fieldRequestSchema = z.object({
+  field: z.enum(FIELD_REQUEST_FIELDS),
+  new_value: z.string().min(1).max(300),
+});
+const fieldDecisionSchema = z.object({
+  decision: z.enum(["approve", "reject"]),
+  comment: z.string().default(""),
+});
+
+function assertKnownRoles(roles, principal) {
+  resolveRoleKeys(legacyRoleDefinitions(principal), roles);
+}
+
+function assertCanDelegateRoles(principal, roles, existing = false) {
+  principal.require('role.assign');
+  assertDelegation(principal, resolveRoleKeys(legacyRoleDefinitions(principal), roles, existing));
 }
 
 function maskRecord(principal, data, ownerId) {
@@ -76,6 +105,7 @@ function memberView(principal, membership, user) {
       email: user.email,
       name: user.name,
       roles: (membership.roles ?? "").split(",").filter(Boolean),
+      roles_version: membership.roles_version,
       status: membership.status,
       department_id: membership.department_id,
       title: membership.title,
@@ -101,12 +131,195 @@ export function listMembers(req, res) {
   res.json({ items, next_cursor: null });
 }
 
+function findMembershipByUserId(principal, userId) {
+  return db()
+    .prepare(
+      `SELECT * FROM membership
+       WHERE tenant_id = ? AND org_id = ? AND user_id = ? AND deleted_at IS NULL`,
+    )
+    .get(principal.tenantId, principal.orgId, userId);
+}
+
+/** memberId(=user_id) 본인이거나 member.write가 있어야 통과한다. HR-001의 역량·수정신청류 엔드포인트가 공통으로 쓰는 관용구. */
+function requireSelfOrMemberWrite(principal, memberId) {
+  if (memberId !== principal.userId) principal.require("member.write");
+}
+
+/** 단건 구성원 프로필. HR-001 상세 화면의 헤더 정보로 쓰인다. memberId는 membership.id가 아니라 user_id다. */
+export function getMemberProfile(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("member.read");
+  const membership = findMembershipByUserId(principal, req.params.memberId);
+  if (!membership) throw notFound("member");
+  const user = db().prepare("SELECT * FROM app_user WHERE id = ?").get(membership.user_id);
+  if (!user) throw notFound("member");
+
+  res.json({ ...memberView(principal, membership, user), joined_at: membership.joined_at });
+}
+
+const competencyView = (c) => ({
+  id: c.id,
+  member_id: c.member_id,
+  label: c.label,
+  level: c.level,
+  note: c.note,
+});
+
+export function listCompetencies(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("member.read");
+  const rows = listScoped(
+    "member_competency",
+    principal,
+    [{ sql: "member_id = ?", params: [req.params.memberId] }],
+    { limit: 200, orderBy: "created_at ASC" },
+  );
+  res.json({ items: rows.map(competencyView) });
+}
+
+export function addCompetency(req, res) {
+  const principal = resolvePrincipal(req);
+  requireSelfOrMemberWrite(principal, req.params.memberId);
+  const payload = competencySchema.parse(req.body);
+  const row = insert("member_competency", {
+    tenant_id: principal.tenantId,
+    org_id: principal.orgId,
+    member_id: req.params.memberId,
+    label: payload.label,
+    level: payload.level,
+    note: payload.note,
+    created_by: principal.userId,
+  });
+  res.status(201).json(competencyView(row));
+}
+
+export function deleteCompetency(req, res) {
+  const principal = resolvePrincipal(req);
+  const competency = getScoped("member_competency", principal, req.params.competencyId, "competency");
+  requireSelfOrMemberWrite(principal, competency.member_id);
+  softDelete("member_competency", competency.id, principal.userId);
+  res.status(204).send();
+}
+
+const fieldRequestView = (r) => ({
+  id: r.id,
+  member_id: r.member_id,
+  field: r.field,
+  old_value: r.old_value,
+  new_value: r.new_value,
+  status: r.status,
+  comment: r.comment,
+  created_at: r.created_at,
+  decided_at: r.decided_at,
+});
+
+export function listFieldRequests(req, res) {
+  const principal = resolvePrincipal(req);
+  requireSelfOrMemberWrite(principal, req.params.memberId);
+  const rows = listScoped(
+    "member_field_request",
+    principal,
+    [{ sql: "member_id = ?", params: [req.params.memberId] }],
+    { limit: 100 },
+  );
+  res.json({ items: rows.map(fieldRequestView) });
+}
+
+/** 본인 수정 승인 워크플로우 1단계: 신청. HR-001 스펙상 본인만 신청할 수 있다(HR 대리 신청 없음). */
+export function createFieldRequest(req, res) {
+  const principal = resolvePrincipal(req);
+  if (req.params.memberId !== principal.userId) {
+    throw new ApiError("PERMISSION_DENIED", "본인만 수정 신청을 할 수 있습니다");
+  }
+  const payload = fieldRequestSchema.parse(req.body);
+  const membership = findMembershipByUserId(principal, principal.userId);
+  if (!membership) throw notFound("member");
+  const user = db().prepare("SELECT * FROM app_user WHERE id = ?").get(principal.userId);
+
+  const oldValue = APP_USER_FIELDS.has(payload.field) ? user[payload.field] : membership[payload.field];
+
+  const row = insert("member_field_request", {
+    tenant_id: principal.tenantId,
+    org_id: principal.orgId,
+    member_id: principal.userId,
+    field: payload.field,
+    old_value: oldValue ?? null,
+    new_value: payload.new_value,
+    created_by: principal.userId,
+  });
+
+  audit.record({
+    tenantId: principal.tenantId,
+    action: "member.field_request.created",
+    resourceType: "member_field_request",
+    resourceId: row.id,
+    actorId: principal.userId,
+    after: { field: row.field, new_value: row.new_value },
+    requestId: req.requestId,
+  });
+
+  res.status(201).json(fieldRequestView(row));
+}
+
+/** 본인 수정 승인 워크플로우 2단계: 승인/반려. 승인 시 실제로 app_user/membership에 반영한다. */
+export function decideFieldRequest(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("member.write");
+  const payload = fieldDecisionSchema.parse(req.body);
+  const fieldRequest = getScoped("member_field_request", principal, req.params.requestId, "member_field_request");
+  if (fieldRequest.status !== "pending") {
+    throw new ApiError("CONFLICT", `이미 처리된 요청입니다: ${fieldRequest.status}`);
+  }
+
+  const status = payload.decision === "approve" ? "approved" : "rejected";
+  const updated = update(
+    "member_field_request",
+    fieldRequest.id,
+    { status, comment: payload.comment, decided_by: principal.userId, decided_at: nowIso() },
+    principal.userId,
+  );
+
+  if (status === "approved") {
+    const membership = findMembershipByUserId(principal, fieldRequest.member_id);
+    if (!membership) throw notFound("member");
+    if (APP_USER_FIELDS.has(fieldRequest.field)) {
+      update("app_user", membership.user_id, { [fieldRequest.field]: fieldRequest.new_value }, principal.userId);
+    } else {
+      update("membership", membership.id, { [fieldRequest.field]: fieldRequest.new_value }, principal.userId);
+    }
+  }
+
+  audit.record({
+    tenantId: principal.tenantId,
+    action: `member.field_request.${status}`,
+    resourceType: "member_field_request",
+    resourceId: fieldRequest.id,
+    actorId: principal.userId,
+    before: { status: fieldRequest.status },
+    after: { status },
+    requestId: req.requestId,
+  });
+
+  notify({
+    tenantId: principal.tenantId,
+    recipientId: fieldRequest.member_id,
+    type: `member.field_request.${status}`,
+    title: status === "approved" ? "수정 신청이 승인되었습니다" : "수정 신청이 반려되었습니다",
+    body: payload.comment,
+    relatedType: "member_field_request",
+    relatedId: fieldRequest.id,
+    dedupeKey: `field-request-decision:${fieldRequest.id}`,
+  });
+
+  res.json(fieldRequestView(updated));
+}
+
 export function simulatePermissions(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("role.assign");
   const payload = simulationSchema.parse(req.body);
-  assertKnownRoles(payload.roles);
-  const effective = permissionsFor(payload.roles);
+  assertKnownRoles(payload.roles, principal);
+  const { permissions: effective, scope } = legacyRoleGrants(principal, payload.roles);
   const requested =
     payload.permissions.length > 0
       ? [...new Set(payload.permissions)]
@@ -117,7 +330,7 @@ export function simulatePermissions(req, res) {
   const denied = requested.filter((permission) => !granted.includes(permission));
   res.json({
     roles: payload.roles,
-    scope: widestScope(payload.roles),
+    scope,
     granted,
     denied,
     matrix: requested.map((permission) => ({
@@ -127,24 +340,56 @@ export function simulatePermissions(req, res) {
   });
 }
 
-export function createInvite(req, res) {
-  const principal = resolvePrincipal(req);
+export function inviteOptions(req, res) {
+  const principal = freshLegacyAuthority(resolvePrincipal(req), 'menu.members');
+  principal.require('member.write');
+  const items = legacyRoleDefinitions(principal).filter(role => {
+    try { assertDelegation(principal, resolveRoleKeys([role], [role.key])); return true; }
+    catch (error) { if (error instanceof ApiError && error.code === 'PERMISSION_DENIED') return false; throw error; }
+  }).map(role => ({ key: role.key, label: role.label, scope: role.scope }));
+  res.json({ items });
+}
+
+export function listInvites(req, res) {
+  const principal = freshLegacyAuthority(resolvePrincipal(req), 'menu.members');
+  principal.require('member.write');
+  const items = db().prepare(`SELECT id AS invitation_id, email, roles, status, expires_at FROM invitation
+    WHERE tenant_id = ? AND org_id = ? AND deleted_at IS NULL ORDER BY created_at DESC`).all(principal.tenantId, principal.orgId);
+  res.json({ items: items.map(row => ({ ...row, roles: row.roles.split(',').filter(Boolean) })) });
+}
+
+export const createInvite = transaction((req, res) => {
+  const principal = freshLegacyAuthority(resolvePrincipal(req), 'menu.members');
   principal.require("member.write");
   const payload = inviteSchema.parse(req.body);
-  assertKnownRoles(payload.roles);
+  assertCanDelegateRoles(principal, payload.roles);
+
+  const email = payload.email.trim().toLowerCase();
+  const now = nowIso();
+  const expired = db()
+    .prepare(
+      `SELECT id FROM invitation
+       WHERE tenant_id = ? AND org_id = ? AND lower(email) = ? AND status = 'pending'
+         AND expires_at <= ? AND deleted_at IS NULL`,
+    )
+    .all(principal.tenantId, principal.orgId, email, now);
+  for (const invitation of expired) {
+    update("invitation", invitation.id, { status: "expired" }, principal.userId);
+  }
 
   const existing = db()
     .prepare(
       `SELECT id FROM invitation
-       WHERE tenant_id = ? AND org_id = ? AND email = ? AND status = 'pending' AND deleted_at IS NULL`,
+       WHERE tenant_id = ? AND org_id = ? AND lower(email) = ? AND status = 'pending'
+         AND expires_at > ? AND deleted_at IS NULL`,
     )
-    .get(principal.tenantId, principal.orgId, payload.email);
+    .get(principal.tenantId, principal.orgId, email, now);
   if (existing) throw new ApiError("CONFLICT", "a pending invitation already exists for this email");
 
   const invitation = insert("invitation", {
     tenant_id: principal.tenantId,
     org_id: principal.orgId,
-    email: payload.email,
+    email,
     roles: payload.roles.join(","),
     token: newToken(),
     expires_at: new Date(Date.now() + payload.expires_in_days * 86400000).toISOString(),
@@ -157,7 +402,7 @@ export function createInvite(req, res) {
     resourceType: "invitation",
     resourceId: invitation.id,
     actorId: principal.userId,
-    after: { email: payload.email, roles: payload.roles },
+    after: { email, roles: payload.roles },
     requestId: req.requestId,
   });
 
@@ -165,86 +410,62 @@ export function createInvite(req, res) {
     id: invitation.id,
     email: invitation.email,
     token: invitation.token,
+    delivery: 'manual',
     expires_at: invitation.expires_at,
   });
-}
+});
 
-export function revokeInvite(req, res) {
-  const principal = resolvePrincipal(req);
+export const revokeInvite = transaction((req, res) => {
+  const principal = freshLegacyAuthority(resolvePrincipal(req), 'menu.members');
   principal.require("member.write");
   const invitation = db()
     .prepare("SELECT * FROM invitation WHERE id = ? AND tenant_id = ? AND org_id = ?")
     .get(req.params.invitationId, principal.tenantId, principal.orgId);
   if (!invitation) throw notFound("invitation");
-  update("invitation", invitation.id, { status: "revoked" }, principal.userId);
+  assertCanDelegateRoles(principal, invitation.roles.split(',').filter(Boolean), true);
+  if (invitation.status !== 'revoked') {
+    update("invitation", invitation.id, { status: "revoked" }, principal.userId);
+    audit.record({ tenantId: principal.tenantId, actorId: principal.userId, action: 'member.invitation.revoked', resourceType: 'invitation', resourceId: invitation.id,
+      before: { status: invitation.status }, after: { status: 'revoked' }, requestId: req.requestId });
+  }
   res.json({ id: invitation.id, status: "revoked" });
-}
+});
 
-export function provision(req, res) {
-  const principal = resolvePrincipal(req);
+export const provision = transaction((req, res) => {
+  const principal = freshLegacyAuthority(resolvePrincipal(req), 'menu.members');
   principal.require("member.write");
   const payload = provisionSchema.parse(req.body);
-  assertKnownRoles(payload.roles);
+  assertCanDelegateRoles(principal, payload.roles);
 
   const email = payload.email.trim().toLowerCase();
-  const temporary = temporaryPassword();
-  let user = db().prepare("SELECT * FROM app_user WHERE email = ?").get(email);
-
-  if (!user) {
-    user = insert("app_user", {
-      id: newId(),
-      email,
-      name: payload.name,
-      password_hash: hashPassword(temporary),
-      must_change_password: 1,
-      created_at: nowIso(),
-    });
-  } else {
-    const active = db()
-      .prepare(
-        `SELECT * FROM membership
-         WHERE tenant_id = ? AND org_id = ? AND user_id = ? AND deleted_at IS NULL`,
-      )
-      .get(principal.tenantId, principal.orgId, user.id);
-    if (active && active.status === "active") {
-      throw new ApiError("CONFLICT", "이미 이 조직에 등록된 이메일입니다");
-    }
-    user = update("app_user", user.id, {
-      password_hash: hashPassword(temporary),
-      must_change_password: 1,
-      failed_logins: 0,
-      locked_until: null,
-    });
-  }
-
-  let membership = db()
-    .prepare("SELECT * FROM membership WHERE tenant_id = ? AND org_id = ? AND user_id = ?")
-    .get(principal.tenantId, principal.orgId, user.id);
-  if (!membership) {
-    membership = insert("membership", {
-      tenant_id: principal.tenantId,
-      user_id: user.id,
-      org_id: principal.orgId,
-      roles: payload.roles.join(","),
-      status: "active",
-      department_id: payload.department_id ?? null,
-      title: payload.title ?? null,
-      joined_at: nowIso(),
-      created_by: principal.userId,
-    });
-  } else {
-    membership = update(
-      "membership",
-      membership.id,
-      {
-        roles: payload.roles.join(","),
-        status: "active",
-        department_id: payload.department_id ?? null,
-        title: payload.title ?? null,
-      },
-      principal.userId,
+  const existingUser = db().prepare("SELECT * FROM app_user WHERE lower(email) = ?").get(email);
+  if (existingUser) {
+    throw new ApiError(
+      "CONFLICT",
+      "이미 등록된 계정입니다. 사용자가 로그인한 뒤 이메일 초대를 수락해야 합니다",
     );
   }
+
+  const temporary = temporaryPassword();
+  const user = insert("app_user", {
+    id: newId(),
+    email,
+    name: payload.name,
+    password_hash: hashPassword(temporary),
+    must_change_password: 1,
+    created_at: nowIso(),
+  });
+  const membership = insert("membership", {
+    tenant_id: principal.tenantId,
+    user_id: user.id,
+    org_id: principal.orgId,
+    roles: payload.roles.join(","),
+    status: "active",
+    department_id: payload.department_id ?? null,
+    title: payload.title ?? null,
+    joined_at: nowIso(),
+    created_by: principal.userId,
+  });
 
   audit.record({
     tenantId: principal.tenantId,
@@ -266,17 +487,29 @@ export function provision(req, res) {
     must_change_password: true,
     note: "이 임시 비밀번호는 지금 한 번만 표시됩니다. 사용자에게 직접 전달하세요.",
   });
-}
+});
 
 export function resetPassword(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("member.write");
+  principal.require("role.assign");
   const membership = db()
-    .prepare("SELECT * FROM membership WHERE id = ? AND tenant_id = ? AND org_id = ?")
+    .prepare(
+      `SELECT * FROM membership
+       WHERE id = ? AND tenant_id = ? AND org_id = ? AND status = 'active' AND deleted_at IS NULL`,
+    )
     .get(req.params.membershipId, principal.tenantId, principal.orgId);
   if (!membership) throw notFound("membership");
+  assertCanDelegateRoles(principal, (membership.roles ?? "").split(",").filter(Boolean), true);
   const user = db().prepare("SELECT * FROM app_user WHERE id = ?").get(membership.user_id);
   if (!user) throw notFound("user");
+
+  const memberships = db()
+    .prepare("SELECT org_id FROM membership WHERE user_id = ? AND deleted_at IS NULL")
+    .all(user.id);
+  if (!user.must_change_password || memberships.length !== 1 || memberships[0].org_id !== principal.orgId) {
+    throw new ApiError("CONFLICT", "등록이 완료된 계정의 비밀번호는 관리자가 변경할 수 없습니다");
+  }
 
   const temporary = temporaryPassword();
   update("app_user", user.id, {
@@ -310,67 +543,21 @@ export function resetPassword(req, res) {
 
 export function setRoles(req, res) {
   const principal = resolvePrincipal(req);
-  principal.require("role.assign");
+  principal.require('role.assign');
   const payload = rolesSchema.parse(req.body);
-  assertKnownRoles(payload.roles);
-
-  const membership = db()
-    .prepare("SELECT * FROM membership WHERE id = ? AND tenant_id = ? AND org_id = ?")
-    .get(req.params.membershipId, principal.tenantId, principal.orgId);
-  if (!membership) throw notFound("membership");
-
-  const before = (membership.roles ?? "").split(",").filter(Boolean);
-  const updated = bumpVersion("membership", membership, { roles: payload.roles.join(",") }, principal.userId);
-
-  audit.record({
-    tenantId: principal.tenantId,
-    action: "member.roles.changed",
-    resourceType: "membership",
-    resourceId: membership.id,
-    actorId: principal.userId,
-    before: { roles: before },
-    after: { roles: payload.roles },
-    requestId: req.requestId,
-  });
-
-  res.json({
-    membership_id: updated.id,
-    roles: (updated.roles ?? "").split(",").filter(Boolean),
-  });
+  res.json(assignLegacyRoles(principal, req.params.membershipId, payload.roles, req.requestId, payload.expected_roles_version, 'menu.members'));
 }
 
 export function setStatus(req, res) {
   const principal = resolvePrincipal(req);
-  principal.require("member.write");
   const payload = statusSchema.parse(req.body);
-
-  const membership = db()
-    .prepare("SELECT * FROM membership WHERE id = ? AND tenant_id = ? AND org_id = ?")
-    .get(req.params.membershipId, principal.tenantId, principal.orgId);
-  if (!membership) throw notFound("membership");
-
-  const before = membership.status;
-  const patch = { status: payload.status };
-  if (payload.status === "left") {
-    patch.left_at = nowIso();
-    db()
-      .prepare("UPDATE session_token SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")
-      .run(nowIso(), membership.user_id);
-  }
-  const updated = bumpVersion("membership", membership, patch, principal.userId);
-
-  audit.record({
-    tenantId: principal.tenantId,
-    action: "member.status.changed",
-    resourceType: "membership",
-    resourceId: membership.id,
-    actorId: principal.userId,
-    before: { status: before },
-    after: { status: updated.status },
-    requestId: req.requestId,
-  });
-
-  res.json({ membership_id: updated.id, status: updated.status });
+  res.json(setLegacyMemberStatus(
+    principal,
+    req.params.membershipId,
+    payload.status,
+    req.requestId,
+    payload.expected_roles_version,
+  ));
 }
 
 /** 브랜치에 들어갈 수 있게 지정된 그룹(역할). 비어 있으면 조직 전체 공개다. */
@@ -411,9 +598,7 @@ export function listRoles(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("member.read");
   res.json({
-    items: Object.entries(ROLE_TEMPLATES)
-      .filter(([key]) => key !== "platform_admin")
-      .map(([key, value]) => ({ key, label: value.label, scope: value.scope })),
+    items: legacyRoleDefinitions(principal).map(({ key, label, scope }) => ({ key, label, scope })),
   });
 }
 
@@ -421,7 +606,7 @@ export function createDepartment(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("department.write");
   const payload = departmentSchema.parse(req.body);
-  assertKnownRoles(payload.access_roles ?? []);
+  assertKnownRoles(payload.access_roles ?? [], principal);
   const department = insert("department", {
     tenant_id: principal.tenantId,
     org_id: principal.orgId,
@@ -457,7 +642,7 @@ export function setDepartmentAccess(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("department.write");
   const payload = accessSchema.parse(req.body);
-  assertKnownRoles(payload.access_roles);
+  assertKnownRoles(payload.access_roles, principal);
   const department = db()
     .prepare("SELECT * FROM department WHERE id = ? AND tenant_id = ? AND org_id = ?")
     .get(req.params.departmentId, principal.tenantId, principal.orgId);
@@ -525,13 +710,26 @@ export function activity(req, res) {
   principal.require("member.read");
   const limit = Math.min(Number(req.query.limit ?? 100), 500);
 
+  let memberFilter = "";
+  const memberParams = [];
+  if (req.query.member_id) {
+    const membership = db()
+      .prepare(
+        `SELECT id FROM membership
+         WHERE tenant_id = ? AND org_id = ? AND user_id = ? AND deleted_at IS NULL`,
+      )
+      .get(principal.tenantId, principal.orgId, req.query.member_id);
+    memberFilter = " AND (resource_id = ? OR actor_id = ?)";
+    memberParams.push(membership?.id ?? null, req.query.member_id);
+  }
+
   const rows = db()
     .prepare(
       `SELECT * FROM audit_event
-       WHERE tenant_id = ? AND resource_type IN ('membership','department','invitation')
+       WHERE tenant_id = ? AND resource_type IN ('membership','department','invitation')${memberFilter}
        ORDER BY seq DESC LIMIT ?`,
     )
-    .all(principal.tenantId, limit);
+    .all(principal.tenantId, ...memberParams, limit);
 
   const nameOf = (userId) => {
     if (!userId) return "시스템";
@@ -760,4 +958,50 @@ export function setAssignment(req, res) {
     department_id: updated.department_id,
     title: updated.title,
   });
+}
+
+export function getHomeLayout(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("member.read");
+  const departmentId = req.query.department_id ?? null;
+  const projectId = req.query.project_id ?? null;
+  const row = db()
+    .prepare(
+      `SELECT * FROM home_layout WHERE tenant_id = ? AND org_id = ?
+       AND ifnull(department_id, '') = ifnull(?, '')
+       AND ifnull(project_id, '') = ifnull(?, '') AND deleted_at IS NULL`,
+    )
+    .get(principal.tenantId, principal.orgId, departmentId, projectId);
+  res.json({
+    department_id: departmentId,
+    project_id: projectId,
+    blocks: row ? JSON.parse(row.blocks_json) : ["welcome", "tasks", "calendar"],
+  });
+}
+
+export function putHomeLayout(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("organization.settings");
+  const payload = homeLayoutSchema.parse(req.body);
+  const existing = db()
+    .prepare(
+      `SELECT * FROM home_layout WHERE tenant_id = ? AND org_id = ?
+       AND ifnull(department_id, '') = ifnull(?, '')
+       AND ifnull(project_id, '') = ifnull(?, '') AND deleted_at IS NULL`,
+    )
+    .get(principal.tenantId, principal.orgId, payload.department_id ?? null, payload.project_id ?? null);
+  const values = {
+    department_id: payload.department_id ?? null,
+    project_id: payload.project_id ?? null,
+    blocks_json: JSON.stringify(payload.blocks),
+  };
+  const row = existing
+    ? update("home_layout", existing.id, values, principal.userId)
+    : insert("home_layout", {
+        tenant_id: principal.tenantId,
+        org_id: principal.orgId,
+        ...values,
+        created_by: principal.userId,
+      });
+  res.json({ id: row.id, ...values, blocks: payload.blocks });
 }

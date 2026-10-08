@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-import { db } from "../config/db.js";
+import { db, transaction } from "../config/db.js";
+import {
+  enabledFeatures,
+  FEATURE_CATALOG,
+  modulesForFeatures,
+  validateFeatureSelection,
+} from "../config/features.js";
 import { CORE_MODULES, MODULE_CATALOG, OPTIONAL_MODULES } from "../config/modules.js";
 import { ORG_TEMPLATES } from "../config/org-templates.js";
 import { currentUser, resolvePrincipal } from "../middleware/auth.js";
@@ -16,6 +22,7 @@ const createSchema = z.object({
   timezone: z.string().default("Asia/Seoul"),
   fiscal_year_start: z.number().int().min(1).max(12).default(1),
   modules: z.array(z.string()).nullable().optional(),
+  features: z.array(z.string()).default([]),
   terminology: z.record(z.string()).nullable().optional(),
   departments: z.array(z.string()).nullable().optional(),
 });
@@ -24,8 +31,9 @@ const updateSchema = z.object({
   name: z.string().optional(),
   fiscal_year_start: z.number().int().min(1).max(12).optional(),
   modules: z.array(z.string()).optional(),
+  features: z.array(z.string()).optional(),
   terminology: z.record(z.string()).optional(),
-});
+}).strict();
 
 export function effectiveTerminology(org) {
   const base = { ...(ORG_TEMPLATES[org.type]?.terminology ?? {}) };
@@ -55,6 +63,7 @@ export function publicModuleCatalog(_req, res) {
     })),
     core: [...CORE_MODULES].sort(),
     optional: OPTIONAL_MODULES,
+    features: FEATURE_CATALOG,
   });
 }
 
@@ -72,12 +81,17 @@ export function moduleCatalog(req, res) {
     })),
     core: [...CORE_MODULES].sort(),
     optional: OPTIONAL_MODULES,
+    features: FEATURE_CATALOG.map((feature) => ({
+      ...feature,
+      enabled: enabledFeatures(org?.enabled_features, org?.modules).includes(feature.key),
+    })),
   });
 }
 
 export function createOrg(req, res) {
   const payload = createSchema.parse(req.body);
   const user = currentUser(req);
+  if (payload.type === "personal") payload.name = user.name;
   const template = ORG_TEMPLATES[payload.type];
   if (!template) {
     throw new ApiError("VALIDATION_ERROR", `unknown organization type: ${payload.type}`);
@@ -90,35 +104,36 @@ export function createOrg(req, res) {
       if (value) terminology[key] = value;
     }
   }
-  const departments =
-    isCustom && payload.departments !== null && payload.departments !== undefined
-      ? payload.departments
-      : template.departments;
+  // 조직 유형은 부서 생성 동의가 아니다. 명시적으로 제출한 부서만 만든다.
+  const departments = payload.departments ?? [];
 
-  const tenantId = newId();
-  db()
+  const features = validateFeatureSelection(payload.features);
+  const selected = modulesForFeatures(validateSelection(
+    payload.modules === null || payload.modules === undefined ? template.modules : payload.modules,
+  ), features);
+
+  const created = transaction(() => {
+    const tenantId = newId();
+    db()
     .prepare(
       `INSERT INTO tenant (id, name, type, status, plan_id, timezone, currency, created_at)
        VALUES (?, ?, ?, 'active', 'free', ?, ?, ?)`,
     )
     .run(tenantId, payload.name, payload.type, payload.timezone, payload.currency, nowIso());
 
-  const selected = validateSelection(
-    payload.modules === null || payload.modules === undefined ? template.modules : payload.modules,
-  );
-
-  const org = insert("organization", {
-    tenant_id: tenantId,
-    name: payload.name,
-    type: payload.type,
-    terminology_profile: payload.type,
-    terminology_json: isCustom ? JSON.stringify(terminology) : "",
-    currency: payload.currency,
-    timezone: payload.timezone,
-    fiscal_year_start: payload.fiscal_year_start,
-    modules: selected.join(","),
-    created_by: user.id,
-  });
+    const org = insert("organization", {
+      tenant_id: tenantId,
+      name: payload.name,
+      type: payload.type,
+      terminology_profile: payload.type,
+      terminology_json: isCustom ? JSON.stringify(terminology) : "",
+      currency: payload.currency,
+      timezone: payload.timezone,
+      fiscal_year_start: payload.fiscal_year_start,
+      modules: selected.join(","),
+      enabled_features: features.join(","),
+      created_by: user.id,
+    });
 
   insert("membership", {
     tenant_id: tenantId,
@@ -150,16 +165,20 @@ export function createOrg(req, res) {
     resourceType: "organization",
     resourceId: org.id,
     actorId: user.id,
-    after: { name: org.name, type: org.type },
+    after: { name: org.name, type: org.type, enabled_features: features },
     requestId: req.requestId,
   });
 
+    return { tenantId, org };
+  })();
+
   res.status(201).json({
-    tenant_id: tenantId,
-    org_id: org.id,
-    name: org.name,
-    type: org.type,
+    tenant_id: created.tenantId,
+    org_id: created.org.id,
+    name: created.org.name,
+    type: created.org.type,
     modules: selected,
+    enabled_features: features,
     terminology,
   });
 }
@@ -174,6 +193,7 @@ export function current(req, res) {
     name: org.name,
     type: org.type,
     modules: (org.modules ?? "").split(",").filter(Boolean),
+    enabled_features: enabledFeatures(org.enabled_features, org.modules),
     terminology: effectiveTerminology(org),
     roles: principal.roles,
     permissions: [...principal.permissions].sort(),
@@ -192,6 +212,7 @@ export function updateOrg(req, res) {
     name: org.name,
     fiscal_year_start: org.fiscal_year_start,
     modules: org.modules,
+    enabled_features: enabledFeatures(org.enabled_features, org.modules),
     terminology: effectiveTerminology(org),
   };
 
@@ -199,6 +220,11 @@ export function updateOrg(req, res) {
   if (payload.name !== undefined) patch.name = payload.name;
   if (payload.fiscal_year_start !== undefined) patch.fiscal_year_start = payload.fiscal_year_start;
   if (payload.modules !== undefined) patch.modules = validateSelection(payload.modules).join(",");
+  if (payload.features !== undefined) {
+    const features = validateFeatureSelection(payload.features);
+    patch.enabled_features = features.join(",");
+    patch.modules = modulesForFeatures((patch.modules ?? org.modules ?? "").split(",").filter(Boolean), features).join(",");
+  }
   if (payload.terminology !== undefined) {
     const merged = effectiveTerminology(org);
     for (const [key, value] of Object.entries(payload.terminology)) {
@@ -207,29 +233,34 @@ export function updateOrg(req, res) {
     patch.terminology_json = JSON.stringify(merged);
   }
 
-  const updated = bumpVersion("organization", org, patch, principal.userId);
+  const updated = transaction(() => {
+    const updated = bumpVersion("organization", org, patch, principal.userId);
 
-  audit.record({
-    tenantId: principal.tenantId,
-    action: "organization.updated",
-    resourceType: "organization",
-    resourceId: org.id,
-    actorId: principal.userId,
-    before,
-    after: {
-      name: updated.name,
-      fiscal_year_start: updated.fiscal_year_start,
-      modules: updated.modules,
-      terminology: effectiveTerminology(updated),
-    },
-    requestId: req.requestId,
-  });
+    audit.record({
+      tenantId: principal.tenantId,
+      action: "organization.updated",
+      resourceType: "organization",
+      resourceId: org.id,
+      actorId: principal.userId,
+      before,
+      after: {
+        name: updated.name,
+        fiscal_year_start: updated.fiscal_year_start,
+        modules: updated.modules,
+        enabled_features: enabledFeatures(updated.enabled_features, updated.modules),
+        terminology: effectiveTerminology(updated),
+      },
+      requestId: req.requestId,
+    });
+    return updated;
+  })();
 
   res.json({
     org_id: updated.id,
     name: updated.name,
     version: updated.version,
     modules: [...enabledSet(updated.modules)].sort(),
+    enabled_features: enabledFeatures(updated.enabled_features, updated.modules),
     terminology: effectiveTerminology(updated),
   });
 }

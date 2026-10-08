@@ -1,7 +1,10 @@
 import { z } from "zod";
 
-import { pgQuery } from "../config/pg.js";
-import { verifyPassword } from "../utils/crypto.js";
+import { pgQuery, pgTransaction } from "../config/pg.js";
+import { currentUser } from "../middleware/auth.js";
+import { pgWorkspaces } from "../middleware/pgAccess.js";
+import { pgEnabledFeatures } from "../middleware/features.js";
+import { hashPassword, verifyPassword } from "../utils/crypto.js";
 import { ApiError } from "../utils/errors.js";
 
 // perp_db (PostgreSQL) 인증 슬라이스.
@@ -20,12 +23,6 @@ function clientIp(req) {
   if (!ip) return null;
   // Express 는 IPv4-mapped IPv6(::ffff:127.0.0.1)로 줄 수 있음 → 정리
   return ip.startsWith("::ffff:") ? ip.slice(7) : ip;
-}
-
-function bearerToken(req) {
-  const header = req.get("authorization") ?? "";
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : null;
 }
 
 // 조직명 조인 포함한 사용자 요약 조회.
@@ -62,6 +59,85 @@ function serializeUser(row) {
       ? { id: String(row.position_id), name: row.position_name }
       : null,
   };
+}
+
+const signupSchema = z.object({
+  email: z.string().trim().min(1).email(),
+  name: z.string().trim().min(1),
+  password: z.string().min(8, "비밀번호는 8자 이상이어야 합니다"),
+  phone: z.string().trim().optional(),
+  invitation_token: z.string().min(1).optional(),
+});
+
+// POST /api/v1/pg/auth/signup
+// 신규 계정을 auth.users 에 저장한다. (즉시 승인 정책: approval_status='approved')
+// 회사·소속·역할은 만들지 않는다. 회사 생성은 별도 온보딩에서 명시적으로 요청한다.
+// 로그인과 동일하게 세션을 생성해 토큰을 반환 → 가입 직후 자동 로그인.
+export async function signup(req, res) {
+  const parsed = signupSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    throw new ApiError("VALIDATION_ERROR", "입력값을 확인하세요", {
+      issues: parsed.error.issues,
+    });
+  }
+  const { email, name, password, phone } = parsed.data;
+  const ip = clientIp(req);
+  const userAgent = req.get("user-agent") ?? null;
+
+  // 이메일 중복 확인 (lower(email) unique index 와 일치)
+  const { rows: existing } = await pgQuery(
+    `SELECT 1 FROM auth.users WHERE lower(email) = lower($1)`,
+    [email],
+  );
+  if (existing.length > 0) {
+    throw new ApiError("CONFLICT", "이미 가입된 이메일입니다");
+  }
+
+  const passwordHash = hashPassword(password);
+
+  // 일반 사용자·세션·가입 기록만 같은 PG 트랜잭션으로 생성한다.
+  const { userId, session } = await pgTransaction(async (client) => {
+    // 즉시 승인하되 회사 배정과 관리자 권한은 부여하지 않는다.
+    const { rows: u } = await client.query(
+      `INSERT INTO auth.users
+         (company_id, department_id, position_id, email, name, phone,
+          password_hash, approval_status, is_admin, approved_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'approved', false, now())
+       RETURNING id`,
+      [null, null, null, email, name, phone ?? null, passwordHash],
+    );
+    const createdUserId = u[0].id;
+    const { rows: sessionRows } = await client.query(
+      `INSERT INTO auth.sessions (user_id, ip_address, user_agent)
+       VALUES ($1, $2, $3)
+       RETURNING session_token, login_at`,
+      [createdUserId, ip, userAgent],
+    );
+    await client.query(
+      `INSERT INTO auth.login_logs (user_id, email_tried, success, reason, ip_address)
+       VALUES ($1, $2, true, 'signup', $3)`,
+      [createdUserId, email, ip],
+    );
+    return { userId: createdUserId, session: sessionRows[0] };
+  });
+
+  const summary = await loadUserSummary(userId);
+
+  res.status(201).json({
+    token: session.session_token,
+    token_type: "Bearer",
+    login_at: session.login_at,
+    user: serializeUser(summary),
+  });
+}
+
+// PG 회사만 반환한다. SQLite 소속과 숫자 ID/이메일로 합치지 않는다.
+export async function workspace(req, res) {
+  const organizations = await pgWorkspaces(req);
+  res.json({ organizations: await Promise.all(organizations.map(async organization => ({
+    ...organization,
+    enabled_features: await pgEnabledFeatures(organization.org_id.slice(3), organization.modules),
+  }))) });
 }
 
 // POST /api/v1/pg/auth/login
@@ -141,29 +217,11 @@ export async function login(req, res) {
 
 // GET /api/v1/pg/auth/me
 export async function me(req, res) {
-  const token = bearerToken(req);
-  if (!token) {
-    throw new ApiError("UNAUTHENTICATED", "인증 토큰이 필요합니다");
+  currentUser(req);
+  if (req.authSource !== "perp_db" || !req.externalIdentity) {
+    throw new ApiError("UNAUTHENTICATED", "유효한 perp_db 세션이 필요합니다");
   }
-
-  // UUID 형식이 아니면 조회 자체가 22P02 오류를 낼 수 있으니 방어.
-  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!uuidRe.test(token)) {
-    throw new ApiError("UNAUTHENTICATED", "유효하지 않은 토큰입니다");
-  }
-
-  const { rows } = await pgQuery(
-    `SELECT user_id
-       FROM auth.sessions
-      WHERE session_token = $1 AND is_active = true`,
-    [token],
-  );
-  const session = rows[0];
-  if (!session) {
-    throw new ApiError("UNAUTHENTICATED", "세션이 만료되었거나 유효하지 않습니다");
-  }
-
-  const summary = await loadUserSummary(session.user_id);
+  const summary = await loadUserSummary(req.externalIdentity.subject);
   if (!summary) {
     throw new ApiError("UNAUTHENTICATED", "사용자를 찾을 수 없습니다");
   }
@@ -173,19 +231,13 @@ export async function me(req, res) {
 
 // POST /api/v1/pg/auth/logout
 export async function logout(req, res) {
-  const token = bearerToken(req);
-  if (!token) {
-    throw new ApiError("UNAUTHENTICATED", "인증 토큰이 필요합니다");
-  }
-  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!uuidRe.test(token)) {
-    throw new ApiError("UNAUTHENTICATED", "유효하지 않은 토큰입니다");
-  }
+  currentUser(req);
+  if (req.authSource !== "perp_db") throw new ApiError("UNAUTHENTICATED", "유효한 perp_db 세션이 필요합니다");
   await pgQuery(
     `UPDATE auth.sessions
         SET is_active = false, logout_at = now()
-      WHERE session_token = $1 AND is_active = true`,
-    [token],
+      WHERE id = $1 AND is_active = true`,
+    [req.sessionId],
   );
   res.json({ ok: true });
 }

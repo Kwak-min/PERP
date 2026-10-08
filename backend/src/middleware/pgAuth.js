@@ -1,16 +1,38 @@
 import { pgQuery } from "../config/pg.js";
-import { ApiError } from "../utils/errors.js";
+import { db, transaction } from "../config/db.js";
+import { env } from "../config/env.js";
+import { insert, newId, nowIso } from "../models/base.js";
+import { hashPassword, newToken } from "../utils/crypto.js";
 
 // perp_db(PostgreSQL) 세션 브리지.
 // 라우트 앞단에서 Bearer 토큰이 perp_db 세션(UUID)이면 미리 해석해
-// req.appUser / req.principal 을 심어둔다. 레거시 미들웨어(currentUser/
-// resolvePrincipal)는 이 값이 있으면 그대로 통과하므로, 기존 SQLite 라우트도
-// pg 로그인 세션을 인정하게 된다. (strangler-fig: 인증부터 perp_db 로 일원화)
+// req.appUser 를 심어둔다. resolvePrincipal 은 이 운영 사용자에게 연결된 실제
+// SQLite 소속을 다시 조회하므로 외부 회사/관리자 값이 권한으로 승격되지 않는다.
 //
 // 토큰이 UUID 가 아니거나(레거시 base64url 토큰) perp_db 세션이 아니면
 // 아무것도 하지 않고 통과시켜 기존 SQLite 인증 경로가 처리하게 둔다.
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const operationalUserFor = transaction((row) => {
+  const existing = db()
+    .prepare("SELECT user_id FROM auth_identity WHERE provider = ? AND subject = ?")
+    .get("perp_db", String(row.id));
+  if (existing) return db().prepare("SELECT * FROM app_user WHERE id = ?").get(existing.user_id);
+
+  // 외부 이메일은 소유 확인 수단이 아니므로 기존 계정과 합치지 않는다.
+  const user = insert("app_user", {
+    id: newId(),
+    email: `perp-db-${row.id}@identity.invalid`,
+    name: row.name,
+    password_hash: hashPassword(newToken()),
+    created_at: nowIso(),
+  });
+  db()
+    .prepare("INSERT INTO auth_identity (id, provider, subject, user_id, created_at) VALUES (?, ?, ?, ?, ?)")
+    .run(newId(), "perp_db", String(row.id), user.id, nowIso());
+  return user;
+});
 
 export async function pgAuthBridge(req, _res, next) {
   try {
@@ -24,7 +46,7 @@ export async function pgAuthBridge(req, _res, next) {
       `SELECT s.id AS session_id,
               u.id, u.email, u.name, u.is_admin,
               u.company_id, u.department_id, u.position_id,
-              u.account_status, u.approval_status
+              u.account_status, u.approval_status, s.login_at
          FROM auth.sessions s
          JOIN auth.users u ON u.id = s.user_id
         WHERE s.session_token = $1 AND s.is_active = true`,
@@ -36,41 +58,21 @@ export async function pgAuthBridge(req, _res, next) {
     if (row.approval_status !== "approved" || row.account_status !== "active") {
       return next();
     }
+    const loginAt = new Date(row.login_at).getTime();
+    if (!Number.isFinite(loginAt) || loginAt + env.sessionTtlSeconds * 1000 <= Date.now()) {
+      return next();
+    }
 
-    // 레거시 currentUser 가 읽는 최소 필드 형태로 사용자 부착.
+    const operationalUser = operationalUserFor(row);
+    if (!operationalUser || operationalUser.auth_status !== "active") return next();
     req.appUser = {
-      id: String(row.id),
+      ...operationalUser,
       email: row.email,
       name: row.name,
-      auth_status: "active",
-      must_change_password: 0,
-      is_admin: Boolean(row.is_admin),
     };
     req.sessionId = String(row.session_id);
-
-    // 브리지 단계: pg 인증 사용자에게 전권(*) 부여.
-    // (모듈별 데이터가 perp_db 로 이관되면 실제 RBAC 로 대체 예정)
-    const permissions = new Set(["*"]);
-    req.principal = {
-      userId: String(row.id),
-      tenantId: `pg:${row.company_id ?? "none"}`,
-      orgId: row.company_id ? String(row.company_id) : null,
-      membershipId: null,
-      sessionId: String(row.session_id),
-      roles: row.is_admin ? ["admin"] : ["member"],
-      permissions,
-      departmentIds: row.department_id ? [String(row.department_id)] : [],
-      scope: "company",
-      source: "perp_db",
-      has(permission) {
-        return permissions.has("*") || permissions.has(permission);
-      },
-      require(permission) {
-        if (!this.has(permission)) {
-          throw new ApiError("PERMISSION_DENIED", `permission denied: ${permission}`);
-        }
-      },
-    };
+    req.authSource = "perp_db";
+    req.externalIdentity = { provider: "perp_db", subject: String(row.id), companyId: row.company_id == null ? null : String(row.company_id) };
     return next();
   } catch (error) {
     return next(error);

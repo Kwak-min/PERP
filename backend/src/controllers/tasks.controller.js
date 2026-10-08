@@ -1,6 +1,9 @@
 import { z } from "zod";
+import { correctionVersion } from '../services/daily-corrections.service.js';
+import { assertProjectAssignee, notifyTaskAssignment } from '../services/project-assignment.service.js';
+import { replayLegacyMutation } from '../services/legacy-expenses.service.js';
 
-import { db } from "../config/db.js";
+import { db, transaction } from "../config/db.js";
 import { resolvePrincipal } from "../middleware/auth.js";
 import { bumpVersion, getScoped, insert, listScoped, update } from "../models/base.js";
 import * as audit from "../services/audit.service.js";
@@ -22,11 +25,11 @@ const createSchema = z.object({
 const patchSchema = z.object({
   title: z.string().optional(),
   description: z.string().optional(),
-  assignee_id: z.string().optional(),
+  assignee_id: z.string().nullable().optional(),
   status: z.string().optional(),
   priority: z.string().optional(),
   due_at: z.string().optional(),
-  version: z.number().int().optional(),
+  version: correctionVersion,
 });
 
 const checklistSchema = z.object({
@@ -61,31 +64,33 @@ export function create(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("task.write");
   const payload = createSchema.parse(req.body);
+  const assigneeId = payload.assignee_id === undefined ? principal.userId : payload.assignee_id;
+  const task = transaction(() => {
+    // 후보 조회/구성원 추가 이후에도 저장 트랜잭션에서 현재 소속을 재검증한다.
+    if (payload.project_id) getScoped("project", principal, payload.project_id, "project");
+    assertProjectAssignee(principal, payload.project_id ?? null, assigneeId);
+    return replayLegacyMutation(req, principal, { operation: 'task.create', payload: { ...payload, assignee_id: assigneeId }, keyRequired: false }, () => {
+      const created = insert("task", {
+        tenant_id: principal.tenantId,
+        org_id: principal.orgId,
+        project_id: payload.project_id ?? null,
+        parent_id: payload.parent_id ?? null,
+        title: payload.title,
+        description: payload.description,
+        assignee_id: assigneeId,
+        priority: payload.priority,
+        due_at: payload.due_at ?? null,
+        recurrence: payload.recurrence ?? null,
+        estimate_hours: payload.estimate_hours,
+        created_by: principal.userId,
+      });
 
-  const task = insert("task", {
-    tenant_id: principal.tenantId,
-    org_id: principal.orgId,
-    project_id: payload.project_id ?? null,
-    parent_id: payload.parent_id ?? null,
-    title: payload.title,
-    description: payload.description,
-    assignee_id: payload.assignee_id ?? principal.userId,
-    priority: payload.priority,
-    due_at: payload.due_at ?? null,
-    recurrence: payload.recurrence ?? null,
-    estimate_hours: payload.estimate_hours,
-    created_by: principal.userId,
-  });
-
-  audit.record({
-    tenantId: principal.tenantId,
-    action: "task.created",
-    resourceType: "task",
-    resourceId: task.id,
-    actorId: principal.userId,
-    after: { title: task.title },
-    requestId: req.requestId,
-  });
+      audit.record({ tenantId: principal.tenantId, action: 'task.created', resourceType: 'task',
+        resourceId: created.id, actorId: principal.userId, after: { title: created.title }, requestId: req.requestId });
+      notifyTaskAssignment(principal, created);
+      return created;
+    });
+  })();
 
   res.status(201).json(view(task));
 }
@@ -97,7 +102,7 @@ export function list(req, res) {
   if (req.query.project_id) filters.push({ sql: "project_id = ?", params: [req.query.project_id] });
   if (req.query.assignee_id) filters.push({ sql: "assignee_id = ?", params: [req.query.assignee_id] });
   if (req.query.status) filters.push({ sql: "status = ?", params: [req.query.status] });
-  const rows = listScoped("task", principal, filters, { limit: Number(req.query.limit ?? 50) });
+  const rows = listScoped("task", principal, filters, { limit: Number(req.query.limit ?? (req.query.project_id ? -1 : 50)) });
   res.json({ items: rows.map(view), next_cursor: null });
 }
 
@@ -140,8 +145,13 @@ export function detail(req, res) {
     [{ sql: "task_id = ?", params: [task.id] }],
     { limit: 200, orderBy: "created_at ASC" },
   );
+  // Display only this task's assignee, never the write-only candidate directory.
+  const assignee = db().prepare(`SELECT u.name FROM membership m JOIN app_user u ON u.id = m.user_id
+    WHERE m.user_id = ? AND m.tenant_id = ? AND m.org_id = ? AND m.status = 'active'
+      AND m.deleted_at IS NULL AND u.auth_status = 'active'`).get(task.assignee_id, principal.tenantId, principal.orgId);
   res.json({
     ...view(task),
+    assignee_name: assignee?.name ?? null,
     checklist: checklist.map((c) => ({
       id: c.id,
       label: c.label,
@@ -191,6 +201,7 @@ export function patch(req, res) {
   if (payload.version !== undefined && payload.version !== task.version) {
     throw new ApiError("VERSION_CONFLICT", "task was modified by someone else");
   }
+  if (payload.assignee_id !== undefined) assertProjectAssignee(principal, task.project_id, payload.assignee_id);
   if (payload.status === "done") guardCompletion(principal, task);
 
   const before = view(task);
@@ -198,18 +209,16 @@ export function patch(req, res) {
   for (const field of ["title", "description", "assignee_id", "status", "priority", "due_at"]) {
     if (payload[field] !== undefined) changes[field] = payload[field];
   }
-  const updated = bumpVersion("task", task, changes, principal.userId);
-
-  audit.record({
-    tenantId: principal.tenantId,
-    action: "task.updated",
-    resourceType: "task",
-    resourceId: task.id,
-    actorId: principal.userId,
-    before,
-    after: view(updated),
-    requestId: req.requestId,
-  });
+  if (Object.keys(changes).length === 1 && Object.hasOwn(changes, 'assignee_id') && changes.assignee_id === task.assignee_id) {
+    res.json(view(task)); return;
+  }
+  const updated = transaction(() => {
+    const row = bumpVersion('task', task, changes, principal.userId);
+    audit.record({ tenantId: principal.tenantId, action: 'task.updated', resourceType: 'task', resourceId: task.id,
+      actorId: principal.userId, before, after: view(row), requestId: req.requestId });
+    if (row.assignee_id !== task.assignee_id) notifyTaskAssignment(principal, row);
+    return row;
+  })();
 
   res.json(view(updated));
 }

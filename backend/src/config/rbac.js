@@ -1,3 +1,5 @@
+import { compatibleMenus, MENU_CATALOG } from './menu-permissions.js';
+
 export const ROLE_TEMPLATES = {
   "owner": {
     "label": "조직 소유자",
@@ -149,6 +151,7 @@ export const ROLE_TEMPLATES = {
       "analytics.read",
       "approval.decide",
       "approval.request",
+      "asset.read",
       "attendance.read",
       "attendance.write",
       "document.read",
@@ -252,6 +255,13 @@ export const ROLE_TEMPLATES = {
   }
 };
 
+// 회사 관리자는 명시적인 유한 집합만 갖는다. 플랫폼 권한과 owner의 *는 포함하지 않는다.
+export const COMPANY_PERMISSIONS = [...new Set([
+  ...Object.values(ROLE_TEMPLATES).flatMap(role => role.permissions),
+  'reservation.manage', ...MENU_CATALOG.map(menu => menu.code),
+])].filter(code => code !== '*' && !code.startsWith('platform.')).sort();
+ROLE_TEMPLATES.company_admin = { label: '관리자', scope: 'all', permissions: COMPANY_PERMISSIONS };
+
 export const MASKED_FIELDS = {
   "phone": "member.write",
   "address": "member.write",
@@ -264,7 +274,8 @@ export const SCOPE_ORDER = ["self", "project", "department", "all"];
 export function permissionsFor(roles) {
   const out = new Set();
   for (const role of roles) {
-    for (const permission of ROLE_TEMPLATES[role]?.permissions ?? []) out.add(permission);
+    const codes = ROLE_TEMPLATES[role]?.permissions ?? [];
+    for (const permission of [...codes, ...compatibleMenus(codes)]) out.add(permission);
   }
   return out;
 }

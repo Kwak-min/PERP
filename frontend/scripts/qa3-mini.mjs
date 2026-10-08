@@ -1,0 +1,18 @@
+import { chromium } from "@playwright/test";
+const BASE = "http://127.0.0.1:5173";
+const browser = await chromium.launch({ channel: "chrome" });
+const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+const page = await ctx.newPage();
+await page.goto(`${BASE}/login`);
+await page.getByLabel("이메일").fill("a@naver.com");
+await page.getByLabel("비밀번호").fill("aaaaaaaa");
+await page.getByRole("button", { name: "로그인" }).click();
+await page.waitForURL((u) => !u.pathname.includes("/login"), { timeout: 15000 });
+console.log("url:", page.url());
+await page.evaluate(() => localStorage.setItem("orbitflow.demoMode", "1"));
+await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+await page.waitForTimeout(1500);
+console.log("statcards:", await page.locator(".stat-card").count());
+const snap = await page.evaluate(() => ({ bars: document.querySelectorAll(".bar-chart").length, hasBars: !!document.querySelector(".bar-chart") }));
+console.log("snap:", JSON.stringify(snap));
+await browser.close();

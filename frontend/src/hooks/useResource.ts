@@ -24,12 +24,21 @@ function isEmpty(data: unknown): boolean {
 export function useResource(
   path: string | null,
   session: ApiSession | null,
+  reloadKey = 0,
 ): ResourceState {
   const [state, setState] = useState<ResourceState>({
     status: "idle",
     data: null,
     error: null,
   });
+
+  const [freshness, setFreshness] = useState(0);
+  useEffect(() => {
+    const refresh = () => setFreshness(value => value + 1);
+    window.addEventListener('focus', refresh);
+    window.addEventListener('orbitflow:access-changed', refresh);
+    return () => { window.removeEventListener('focus', refresh); window.removeEventListener('orbitflow:access-changed', refresh); };
+  }, []);
 
   useEffect(() => {
     if (!path || !session) {
@@ -65,7 +74,7 @@ export function useResource(
         });
       });
     return () => controller.abort();
-  }, [path, session]);
+  }, [path, session, reloadKey, freshness]);
 
   return state;
 }

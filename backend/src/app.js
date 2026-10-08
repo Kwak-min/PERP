@@ -5,16 +5,18 @@ import { env } from "./config/env.js";
 import { errorHandler, notFoundHandler, requestContext } from "./middleware/error.js";
 import { pgAuthBridge } from "./middleware/pgAuth.js";
 import { registerRoutes } from "./routes/index.js";
+import { knowledgeTransportError } from "./controllers/agent-knowledge.controller.js";
 
 export function createApp() {
   const app = express();
 
-  app.use(express.json({ limit: "5mb" }));
+  // Keep only transport presence, never a second raw JSON copy. Empty JSON is otherwise parsed as {}.
+  app.use(express.json({ limit: "5mb", verify: (req, _res, bytes) => { req.hasJsonBody = bytes.length > 0; } }));
   app.use(
     cors({
       origin: env.corsOrigins,
       credentials: true,
-      exposedHeaders: ["X-Request-Id"],
+      exposedHeaders: ["X-Request-Id", "Content-Disposition"],
     }),
   );
   app.use(requestContext);
@@ -28,6 +30,7 @@ export function createApp() {
   registerRoutes(app);
 
   app.use(notFoundHandler);
+  app.use(knowledgeTransportError);
   app.use(errorHandler);
   return app;
 }

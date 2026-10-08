@@ -1,7 +1,8 @@
 ﻿import { NextFunction, Request, Response } from 'express';
 import { waitlistService } from './waitlist.service';
-import { addWaitlistSchema, waitlistQuerySchema } from './waitlist.schema';
+import { addWaitlistSchema } from './waitlist.schema';
 import { sendSuccess } from '../../common/response';
+import { principalOf, requireReservationWrite } from '../../auth/principal';
 
 export const waitlistController = {
   /**
@@ -15,7 +16,9 @@ export const waitlistController = {
   addWaitlist: async (req: Request, res: Response, next: NextFunction) => {
     try {
       const dto = addWaitlistSchema.parse(req.body);
-      const data = await waitlistService.add(dto);
+      const principal = principalOf(req);
+      requireReservationWrite(principal);
+      const data = await waitlistService.add(dto, principal);
       sendSuccess(res, data, 202, `대기 등록이 완료되었습니다. 현재 대기 순번: ${data.position}번`);
     } catch (err) { next(err); }
   },
@@ -29,9 +32,7 @@ export const waitlistController = {
    */
   getWaitlist: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { userId } = waitlistQuerySchema.parse(req.query);
-      if (!userId) return next(new Error('userId 쿼리파라미터가 필요합니다.'));
-      const data = await waitlistService.findByUser(userId);
+      const data = await waitlistService.findByUser(principalOf(req));
       sendSuccess(res, data);
     } catch (err) { next(err); }
   },
@@ -45,9 +46,9 @@ export const waitlistController = {
    */
   cancelWaitlist: async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const userId = Number(req.query.userId);
-      if (!userId || isNaN(userId)) return next(new Error('userId 쿼리파라미터가 필요합니다.'));
-      const data = await waitlistService.cancel(Number(req.params.id), userId);
+      const principal = principalOf(req);
+      requireReservationWrite(principal);
+      const data = await waitlistService.cancel(Number(req.params.id), principal);
       sendSuccess(res, data, 200, '대기가 취소되었습니다.');
     } catch (err) { next(err); }
   },

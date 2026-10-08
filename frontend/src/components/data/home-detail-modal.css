@@ -1,0 +1,22 @@
+.modal.home-detail-modal { width: min(820px, 100%); max-height: 90dvh; min-width: 0; }
+.home-detail__nav { display: flex; flex-wrap: wrap; gap: 4px; margin-block: 16px; }
+.home-detail__nav [aria-pressed="true"] { background: var(--of-primary-soft); color: var(--of-primary); }
+.home-detail__overview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.home-detail__overview button { display: flex; justify-content: space-between; padding: 16px; }
+.home-detail__state { padding: 24px 0; }
+.home-detail__note { color: var(--of-text-muted); font-size: 12px; }
+.home-detail__toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: 12px; margin-block: 12px; }
+.home-detail__toolbar label { display: grid; gap: 6px; flex: 1; min-width: 0; }
+.home-detail__toolbar input { min-width: 0; width: 100%; padding: 8px; border: 1px solid var(--of-border); border-radius: var(--r-md); background: var(--of-card); color: var(--of-text); }
+.home-detail-modal .table-wrap { max-width: 100%; }
+.home-detail-modal td button { max-width: 280px; white-space: normal; text-align: left; overflow-wrap: anywhere; }
+.home-detail__pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-block: 12px; }
+.home-detail__record { border-top: 1px solid var(--of-border); padding-top: 12px; overflow-wrap: anywhere; }
+.home-detail__record dl > div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 12px; margin-block: 8px; }
+.home-detail__record dd { margin: 0; white-space: pre-wrap; }
+@media (max-width: 600px) {
+  .modal-scrim.home-detail-scrim { padding: 12px; align-items: center; }
+  .modal.home-detail-modal { padding: 16px; }
+  .home-detail__overview { grid-template-columns: 1fr; }
+  .home-detail__toolbar > span { width: 100%; }
+}
