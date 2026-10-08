@@ -1,103 +1,142 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { useAppContext } from "../../context/AppContext";
 import { useSession } from "../../store/session";
-import { useVaultPref, vaultPrefStore } from "../../store/vaultPref";
-import { Button } from "../ui/Button";
+import { Icon } from "../ui/Icon";
 
+const SUGGEST = [
+  "오늘 브리핑 해줘",
+  "학생회비 얼마야?",
+  "회비 미납자 알려줘",
+  "이번 달 초안 전표 확정해줘",
+  "내일까지 '부스 배치도 검토' 업무 만들어줘",
+  "남은 예산 알려줘",
+];
+
+type Msg = { role: "user" | "ai"; text: string };
+
+// 목업 agentPanel() 이식 — .ap-h / .ap-body / .ap-foot
 export function AgentPanel() {
-  const { agentOpen, setAgentOpen } = useAppContext();
+  const { setAgentOpen } = useAppContext();
   const session = useSession();
-  const useVault = useVaultPref();
-  const userName = session?.name ?? "사용자";
-  const [message, setMessage] = useState("");
-  const [log, setLog] = useState<readonly Readonly<{ role: "user" | "agent"; text: string }>[]>([]);
+  const [q, setQ] = useState("");
+  const [msgs, setMsgs] = useState<Msg[]>([]);
 
-  useEffect(() => {
-    if (!agentOpen) return;
-    function onKey(event: KeyboardEvent): void {
-      if (event.key === "Escape") setAgentOpen(false);
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [agentOpen, setAgentOpen]);
-
-  function send(event: React.FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    const text = message.trim();
-    if (!text) return;
-    setLog((current) => [
-      ...current,
-      { role: "user", text },
+  function ask(text: string) {
+    const t = text.trim();
+    if (!t) return;
+    setMsgs((cur) => [
+      ...cur,
+      { role: "user", text: t },
       {
-        role: "agent",
-        text: useVault
-          ? `"${text}" 에 대해 조직 문서 2건, 업무 3건과 개인 Vault 노트 2건을 근거로 확인했습니다. 변경 작업은 실행 전 미리보기로 보여드립니다. (데모 응답)`
-          : `"${text}" 에 대해 조직 문서 2건과 업무 3건만 근거로 확인했습니다. 개인 Vault는 사용하지 않았습니다. (데모 응답)`,
+        role: "ai",
+        text: `"${t}" — 권한이 허용하는 조직 문서·업무 안에서 확인했습니다. 변경 작업은 실행 전 미리보기로 보여드립니다. (데모 응답)`,
       },
     ]);
-    setMessage("");
+    setQ("");
   }
 
   return (
-    <aside
-      className={`agent-panel ${agentOpen ? "agent-panel--open" : ""}`}
-      aria-label="AI Agent"
-      role="dialog"
-      aria-modal="true"
-      {...(agentOpen ? {} : { "aria-hidden": true })}
-    >
-      <div className="agent-panel__header">
-        <div>
-          <span className="eyebrow eyebrow--ai">ORBITFLOW AI</span>
-          <h2>{userName}님, 무엇을 도와드릴까요?</h2>
-        </div>
-        <Button tone="neutral" size="small" onClick={() => setAgentOpen(false)} aria-label="Agent 패널 닫기">
-          닫기
-        </Button>
+    <aside className="agent-panel" aria-label="AI Agent 패널">
+      <div className="ap-h">
+        <b>
+          <Icon name="sparkles" />
+          Agent
+        </b>
+        <span className="pill ai" title="외부 LLM 정책">
+          로컬 전용
+        </span>
+        <Link className="icon-btn sm" to="/agent" aria-label="Agent 전체 화면">
+          <Icon name="right" />
+        </Link>
+        <button
+          type="button"
+          className="icon-btn sm"
+          onClick={() => setAgentOpen(false)}
+          aria-label="패널 닫기"
+        >
+          <Icon name="x" />
+        </button>
       </div>
-      <div className="agent-panel__body">
-        <p className="agent-hint">
-          조직 권한 안의 문서와 업무만 근거로 답하고, 변경 작업은 실행 전에 미리 보여드립니다.
-        </p>
-        <label className="agent-vault-toggle">
-          <input
-            type="checkbox"
-            checked={useVault}
-            onChange={(event) => vaultPrefStore.set(event.target.checked)}
-          />
-          <span>
-            <b>개인 Vault 사용</b>
-            <small>내 옵시디언형 노트를 답변 근거에 포함합니다. 끄면 조직 데이터만 사용합니다.</small>
-          </span>
-        </label>
-        {log.length > 0 && (
-          <div className="agent-log">
-            {log.map((entry, index) => (
-              <p key={index} className={entry.role === "user" ? "agent-log__user" : "agent-log__agent"}>
-                {entry.text}
+      <div className="ap-body" id="chat-panel">
+        {msgs.length === 0 ? (
+          <div className="stack">
+            <div className="ai-block">
+              <div className="ai-head">
+                <span className="ai-tag">
+                  <Icon name="sparkles" />
+                  {session?.name ?? "개인"} Agent
+                </span>
+              </div>
+              <p className="sm">
+                권한이 허용하는 데이터 안에서만 답합니다. 답변마다 근거·데이터 등급·사용한 모델을 표시하고,
+                금전·권한·발송·삭제·회계확정은 승인과 재인증 없이는 실행하지 않습니다.
               </p>
-            ))}
+            </div>
+            <div className="chips">
+              {SUGGEST.map((s) => (
+                <button type="button" className="chip-btn" key={s} onClick={() => ask(s)}>
+                  {s}
+                </button>
+              ))}
+            </div>
           </div>
+        ) : (
+          msgs.map((m, i) =>
+            m.role === "user" ? (
+              <div className="msg-u" key={i}>
+                {m.text}
+              </div>
+            ) : (
+              <div className="ai-block msg-ai" key={i}>
+                <div className="ai-head">
+                  <span className="ai-tag">
+                    <Icon name="sparkles" />
+                    개인 Agent
+                  </span>
+                </div>
+                <div className="ans">
+                  <div className="ans-sec">
+                    <h4>결론</h4>
+                    <p className="ans-concl">{m.text}</p>
+                  </div>
+                </div>
+              </div>
+            ),
+          )
         )}
-        <div className="prompt-list">
-          <Link to="/agent/brief" onClick={() => setAgentOpen(false)}>오늘 브리핑 보기</Link>
-          <Link to="/approvals" onClick={() => setAgentOpen(false)}>결재 대기 항목 요약</Link>
-          <Link to="/agent/memory" onClick={() => setAgentOpen(false)}>AI 기억 관리</Link>
-        </div>
       </div>
-      <form className="agent-compose" onSubmit={send}>
-        <label htmlFor="agent-message">Agent에게 요청</label>
-        <textarea
-          id="agent-message"
-          rows={3}
-          placeholder="예: 이번 달 예산 위험 항목을 근거와 함께 알려줘"
-          value={message}
-          onChange={(event) => setMessage(event.target.value)}
-        />
-        <Button tone="ai" type="submit" disabled={!message.trim()}>전송</Button>
-      </form>
+      <div className="ap-foot">
+        <form
+          className="chat-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            ask(q);
+          }}
+        >
+          <label className="sr" htmlFor="agent-q-panel">
+            Agent에게 질문
+          </label>
+          <textarea
+            id="agent-q-panel"
+            rows={1}
+            placeholder="질문하거나 요청하세요 (Enter 전송 · Shift+Enter 줄바꿈)"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                ask(q);
+              }
+            }}
+          />
+          <button className="btn btn-ai" type="submit" aria-label="보내기">
+            <Icon name="send" />
+          </button>
+        </form>
+        <span className="hint">답변은 AI 생성물입니다. 근거를 확인하세요.</span>
+      </div>
     </aside>
   );
 }

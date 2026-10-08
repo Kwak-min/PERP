@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { Link, useParams } from "react-router-dom";
 
 import { BarChart, DonutChart, ProgressList, Timeline } from "../components/data/Charts";
 import { MonthCalendar } from "../components/data/MonthCalendar";
@@ -9,18 +9,14 @@ import { OrgTree } from "../components/data/OrgTree";
 import { FlowCanvas, NodeGraph } from "../components/data/Graphs";
 import { PermissionMatrix, WorkloadHeatmap } from "../components/data/Matrix";
 import { StateBoundary } from "../components/common/StateBoundary";
-import { QuickCreateModal } from "../components/common/QuickCreateModal";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { ListRow } from "../components/ui/ListRow";
 import { SectionCard } from "../components/ui/SectionCard";
 import { StatCard, type Stat } from "../components/ui/StatCard";
 import { StatTrendModal, metricKeyOf, type MetricKey } from "../components/data/StatTrendModal";
-import { MemberListModal, membersSchema, type Member } from "../components/data/MemberListModal";
 import { fixtureFor, type ScreenFixture, type TableFixture } from "../fixtures/screens";
-import { useDepartments } from "../hooks/useDepartments";
 import { useResource } from "../hooks/useResource";
-import { useRoles } from "../hooks/useRoles";
 import { sectionLabels, type ScreenDefinition } from "../routes/catalog";
 import { useSession } from "../store/session";
 import { useBranch } from "../store/branch";
@@ -59,34 +55,9 @@ function liveStats(data: unknown): readonly Stat[] | null {
     ([, value]) => typeof value === "number" || typeof value === "string",
   );
   if (scalars.length >= 3) {
-    const labels: Readonly<Record<string, string>> = {
-      members: "구성원",
-      projects: "프로젝트",
-      tasks: "업무",
-      documents: "문서",
-      assets: "자산",
-      notifications: "알림",
-      org_id: "조직",
-      tenant_id: "테넌트",
-      mode: "운영 모드",
-      policy_mode: "정책 모드",
-      provider: "제공자",
-      status: "상태",
-    };
-    const valueLabels: Readonly<Record<string, string>> = {
-      active: "활성",
-      inactive: "비활성",
-      strict: "엄격",
-      balanced: "균형",
-      permissive: "허용",
-      enabled: "사용",
-      disabled: "사용 안 함",
-    };
     return scalars.slice(0, 4).map(([key, value]) => ({
-      label: labels[key] ?? key.replaceAll("_", " "),
-      value: typeof value === "number"
-        ? value.toLocaleString("ko-KR")
-        : valueLabels[String(value)] ?? (/^[0-9a-f-]{32,}$/i.test(String(value)) ? "내부 식별자" : String(value)),
+      label: key.replaceAll("_", " "),
+      value: typeof value === "number" ? value.toLocaleString("ko-KR") : String(value),
       delta: "실시간",
       trend: "flat" as const,
       foot: "서버 데이터",
@@ -120,121 +91,7 @@ function liveTable(data: unknown): TableFixture | null {
   };
 }
 
-const MEMBER_STATUS_LABELS: Readonly<Record<string, string>> = {
-  active: "활성",
-  inactive: "휴면",
-  left: "탈퇴",
-};
-
-function membersTable(
-  data: unknown,
-  departments: readonly { id: string; name: string }[],
-  roles: readonly { key: string; label: string }[],
-): TableFixture | null {
-  if (!data || typeof data !== "object" || !("items" in data)) return null;
-  const items = (data as { items?: unknown }).items;
-  if (!Array.isArray(items) || items.length === 0) return null;
-  const parsed = membersSchema.safeParse(data);
-  if (!parsed.success) return null;
-
-  const deptName = new Map(departments.map((department) => [department.id, department.name]));
-  const roleLabel = new Map(roles.map((role) => [role.key, role.label]));
-  const columns = ["이름", "이메일", "역할", "부서", "상태"];
-  const rows = parsed.data.items.slice(0, 8).map((member: Member): readonly string[] => {
-    const role = member.roles.map((key) => roleLabel.get(key) ?? key).join(" · ") || "역할 미지정";
-    const department = member.department_id
-      ? deptName.get(member.department_id) ?? member.department_id
-      : "미지정";
-    const status = MEMBER_STATUS_LABELS[member.status] ?? member.status;
-    return [member.name, member.email, role, department, status];
-  });
-  return { columns, rows };
-}
-
-function liveFacts(data: unknown): Readonly<{ key: string; value: string }[]> | null {
-  if (!data || typeof data !== "object" || !("items" in data)) return null;
-  const items = (data as { items?: unknown }).items;
-  if (!Array.isArray(items) || items.length === 0) return null;
-  const record = items[0];
-  if (!record || typeof record !== "object") return null;
-  const FACT_LABELS: Readonly<Record<string, string>> = {
-    id: "식별자",
-    name: "이름",
-    email: "이메일",
-    status: "상태",
-    created_at: "생성일",
-    updated_at: "수정일",
-  };
-  return Object.entries(record as Record<string, unknown>)
-    .slice(0, 6)
-    .map(([key, value]) => ({
-      key: FACT_LABELS[key] ?? key.replaceAll("_", " "),
-      value: value === null || value === undefined ? "—" : String(value),
-    }));
-}
-
-function passedDetailFacts(state: unknown): Readonly<{ key: string; value: string }[]> | null {
-  if (!state || typeof state !== "object") return null;
-  const { columns, row } = state as { columns?: unknown; row?: unknown };
-  if (!Array.isArray(columns) || !Array.isArray(row)) return null;
-  return columns.map((column, index) => ({
-    key: String(column).replaceAll("_", " "),
-    value: row[index] === undefined || row[index] === null ? "—" : String(row[index]),
-  }));
-}
-
-const PASSED_STAT_LABELS: Readonly<Record<string, string>> = {
-  id: "식별자",
-  status: "상태",
-  name: "이름",
-  category: "분류",
-  quantity: "수량",
-  threshold: "임계",
-  assignee: "담당자",
-  owner: "책임자",
-};
-
-const PASSED_STAT_VALUE_LABELS: Readonly<Record<string, string>> = {
-  active: "활성",
-  available: "사용 가능",
-  inactive: "비활성",
-  disposed: "폐기",
-  maintained: "점검 중",
-};
-
-function passedStatValue(raw: string): string {
-  const localized = PASSED_STAT_VALUE_LABELS[raw];
-  if (localized) return localized;
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
-    return "내부 식별자";
-  }
-  return raw;
-}
-
-function passedDetailStats(state: unknown): readonly Stat[] | null {
-  if (!state || typeof state !== "object") return null;
-  const { columns, row } = state as { columns?: unknown; row?: unknown };
-  if (!Array.isArray(columns) || !Array.isArray(row)) return null;
-  const stats: Stat[] = [];
-  for (let index = 0; index < Math.min(columns.length, row.length); index += 1) {
-    const key = String(columns[index]);
-    const label = PASSED_STAT_LABELS[key] ?? key.replaceAll("_", " ");
-    const raw = row[index] === undefined || row[index] === null ? "—" : String(row[index]);
-    stats.push({
-      label,
-      value: passedStatValue(raw),
-      delta: "실측",
-      trend: "flat",
-      foot: "서버 데이터",
-    });
-  }
-  return stats.length > 0 ? stats : null;
-}
-
-function DataTable({
-  table,
-  onRowClick,
-}: Readonly<{ table: TableFixture; onRowClick?: (row: readonly string[], index: number) => void }>) {
+function DataTable({ table }: Readonly<{ table: TableFixture }>) {
   return (
     <div className="table-wrap" role="region" aria-label="데이터 표" tabIndex={0}>
       <p className="table-scroll-hint">표를 좌우로 스크롤해 모든 열을 확인할 수 있습니다.</p>
@@ -250,15 +107,7 @@ function DataTable({
         </thead>
         <tbody>
           {table.rows.map((row, index) => (
-            <tr
-              key={index}
-              className={onRowClick ? "table-row--interactive" : undefined}
-              tabIndex={onRowClick ? 0 : undefined}
-              onClick={onRowClick ? () => onRowClick(row, index) : undefined}
-              onKeyDown={onRowClick ? (event) => {
-                if (event.key === "Enter" || event.key === " ") onRowClick(row, index);
-              } : undefined}
-            >
+            <tr key={index}>
               {row.map((cell, cellIndex) => (
                 <td key={cellIndex} className={isNumericColumn(table.columns[cellIndex] ?? "") ? "num" : undefined}>
                   {cell}
@@ -272,11 +121,7 @@ function DataTable({
   );
 }
 
-function DetailAction({
-  to,
-  onClick,
-  label = "자세히 보기",
-}: Readonly<{ to?: string; onClick?: () => void; label?: string }>) {
+function DetailAction({ to, onClick }: Readonly<{ to?: string; onClick?: () => void }>) {
   if (to) {
     return (
       <Link className="button button--ghost button--small" to={to}>
@@ -285,7 +130,7 @@ function DetailAction({
     );
   }
   return (
-    <Button tone="ghost" size="small" onClick={onClick} aria-label={label}>
+    <Button tone="ghost" size="small" onClick={onClick} aria-label="자세히 보기">
       자세히
     </Button>
   );
@@ -308,8 +153,6 @@ function downloadCsv(name: string, table: TableFixture): void {
 
 export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   const session = useSession();
-  const navigate = useNavigate();
-  const location = useLocation();
   const params = useParams();
   const isDetail = Object.keys(params).length > 0;
   const apiSession = useMemo(
@@ -339,32 +182,15 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
   // 구성원 지표는 실제 가입·탈퇴 기록으로 기간별 추이를 보여줄 수 있다.
   const trendable = (screen.endpoint ?? "").startsWith("/members");
   const [trend, setTrend] = useState<{ stat: Stat; metric: MetricKey } | null>(null);
-  const [showMembers, setShowMembers] = useState(false);
-  const [quickModal, setQuickModal] = useState<"create" | "edit" | null>(null);
-  const departments = useDepartments(apiSession);
-  const roles = useRoles(apiSession);
-
-  useEffect(() => {
-    setQuery(new URLSearchParams(location.search).get("q") ?? "");
-  }, [location.search]);
 
   // 서버가 응답했으면(빈 결과 포함) 서버가 진실이다. 데모는 서버가 없을 때만 쓴다.
   const serverAnswered = resource.status === "ready" || resource.status === "empty";
   const blocked = !demoMode && (resource.status === "forbidden" || resource.status === "error");
   const serverStats = serverAnswered && !demoMode ? liveStats(resource.data) : null;
-  const serverTable =
-    serverAnswered && !demoMode
-      ? screen.path === "/members"
-        ? membersTable(resource.data, departments, roles)
-        : liveTable(resource.data)
-      : null;
+  const serverTable = serverAnswered && !demoMode ? liveTable(resource.data) : null;
   const serverEmpty = !demoMode && resource.status === "empty";
-  const serverFacts = serverAnswered && !demoMode ? liveFacts(resource.data) : null;
   const usingDemo = demoMode || !screen.endpoint || (!serverAnswered && !blocked);
-  const passedFacts = !demoMode ? passedDetailFacts(location.state) : null;
-  const passedStats = !demoMode ? passedDetailStats(location.state) : null;
-  const detailFacts = passedFacts ?? serverFacts ?? (usingDemo ? fixture.facts ?? [] : []);
-  const stats = serverStats ?? passedStats ?? (usingDemo ? fixture.stats : []);
+  const stats = serverStats ?? (usingDemo ? fixture.stats : []);
   const baseTable = serverTable ?? (usingDemo ? fixture.table : undefined);
   const filters = fixture.filters ?? ["전체"];
   const filterWord = activeFilter === 0 ? "" : (filters[activeFilter] ?? "");
@@ -418,7 +244,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             <Badge>{screen.id}</Badge>
             {screen.module && <Badge>{screen.module}</Badge>}
             {screen.ai && <Badge tone="ai">AI 검토 필요</Badge>}
-            {usingDemo && !passedFacts && <Badge tone="warning">데모 데이터</Badge>}
+            {usingDemo && <Badge tone="warning">데모 데이터</Badge>}
             {blocked && <Badge tone="danger">{resource.status === "forbidden" ? "권한 없음" : "연결 실패"}</Badge>}
             {serverEmpty && <Badge tone="neutral">데이터 없음</Badge>}
           </div>
@@ -442,7 +268,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
           <Button
             tone={screen.ai ? "ai" : "primary"}
             size="small"
-            onClick={() => setQuickModal(isDetail ? "edit" : "create")}
+            onClick={() => setNotice(`${screen.label} ${isDetail ? "편집" : "새로 만들기"}은 데모에서 준비 중입니다.`)}
           >
             {isDetail ? "편집" : "새로 만들기"}
           </Button>
@@ -463,11 +289,8 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             stat={stat}
             action={
               <DetailAction
-                label={screen.path === "/members" ? "구성원 목록 자세히 보기" : "자세히 보기"}
                 onClick={() =>
-                  screen.path === "/members"
-                    ? setShowMembers(true)
-                    : trendable
+                  trendable
                     ? setTrend({ stat, metric: metricKeyOf(stat, index) })
                     : setNotice(`${stat.label}: ${stat.value}${stat.unit ?? ""} — ${stat.foot ?? "상세 분석 준비 중"}`)
                 }
@@ -486,21 +309,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
         />
       )}
 
-      {showMembers && (
-        <MemberListModal
-          session={apiSession}
-          fallback={fixture.table?.rows ?? []}
-          onClose={() => setShowMembers(false)}
-        />
-      )}
-
-      {!demoMode && screen.endpoint && resource.status === "loading" ? (
-        <SectionCard title="불러오는 중" subtitle="서버 응답 대기">
-          <StateBoundary status="loading" error={null}>
-            <div />
-          </StateBoundary>
-        </SectionCard>
-      ) : blocked ? (
+      {blocked ? (
         <SectionCard title="상태" subtitle="서버 응답" >
           <StateBoundary status={resource.status} error={resource.error}>
             <div />
@@ -648,7 +457,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
         <div className="detail-layout">
           <SectionCard title="상세 정보" subtitle="선택한 항목의 핵심 값" action={<DetailAction />}>
             <dl className="kv-list">
-              {(detailFacts).map((fact) => (
+              {(fixture.facts ?? []).map((fact) => (
                 <div key={fact.key}>
                   <dt>{fact.key}</dt>
                   <dd>{fact.value}</dd>
@@ -660,12 +469,10 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
               </div>
             </dl>
           </SectionCard>
-          {usingDemo && !passedFacts && fixture.timeline ? (
-            <SectionCard title={fixture.timelineTitle ?? "활동 기록"} subtitle="변경 이력" action={<DetailAction />}>
-              <Timeline items={fixture.timeline} />
-            </SectionCard>
-          ) : null}
-          {usingDemo && !passedFacts && visibleRows.length > 0 && (
+          <SectionCard title={fixture.timelineTitle ?? "활동 기록"} subtitle="변경 이력" action={<DetailAction />}>
+            <Timeline items={fixture.timeline ?? []} />
+          </SectionCard>
+          {visibleRows.length > 0 && (
             <SectionCard
               title={fixture.rowsTitle ?? "연결 항목"}
               subtitle="관련 항목과 활동"
@@ -767,12 +574,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
         <SectionCard
           title="목록"
           subtitle="권한 범위 안의 최신 데이터"
-          action={
-            <DetailAction
-              label={screen.path === "/members" ? "구성원 목록 자세히 보기" : "자세히 보기"}
-              {...(screen.path === "/members" ? { onClick: () => setShowMembers(true) } : {})}
-            />
-          }
+          action={<DetailAction />}
           foot={usingDemo ? "데모 데이터 · 서버 연결 시 실제 값으로 대체됩니다" : "서버 데이터 · 10분 전 갱신"}
         >
           <div className="filter-bar">
@@ -814,15 +616,7 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             }
           >
             {table ? (
-              <DataTable
-                table={table}
-                {...(screen.path === "/assets"
-                  ? { onRowClick: (row: readonly string[]) =>
-                      navigate(`/assets/${encodeURIComponent(row[0] ?? "")}`, {
-                        state: { columns: table.columns, row },
-                      }) }
-                  : {})}
-              />
+              <DataTable table={table} />
             ) : visibleRows.length > 0 ? (
               <div className="list-rows">
                 {visibleRows.map((row) => (
@@ -840,17 +634,6 @@ export function ScreenPage({ screen }: Readonly<{ screen: ScreenDefinition }>) {
             ) : null}
           </StateBoundary>
         </SectionCard>
-      )}
-      {quickModal && (
-        <QuickCreateModal
-          entityLabel={screen.label}
-          mode={quickModal}
-          onClose={() => setQuickModal(null)}
-          onSubmit={(name) => {
-            setQuickModal(null);
-            setNotice(`${name}의 상세 입력은 ${screen.label} 화면의 전용 양식에서 계속할 수 있습니다.`);
-          }}
-        />
       )}
     </div>
   );

@@ -25,7 +25,7 @@ const listeners = new Set<() => void>();
 
 function restore(): SessionState | null {
   try {
-    const raw = sessionStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const result = sessionSchema.safeParse(JSON.parse(raw));
     return result.success ? result.data : null;
@@ -47,16 +47,9 @@ export const sessionStore = {
     listeners.add(listener);
     return () => listeners.delete(listener);
   },
-  set(next: SessionState, persistent = true): void {
+  set(next: SessionState): void {
     current = sessionSchema.parse(next);
-    const value = JSON.stringify(current);
-    if (persistent) {
-      localStorage.setItem(STORAGE_KEY, value);
-      sessionStorage.removeItem(STORAGE_KEY);
-    } else {
-      sessionStorage.setItem(STORAGE_KEY, value);
-      localStorage.removeItem(STORAGE_KEY);
-    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
     emit();
   },
   patch(next: Partial<SessionState>): void {
@@ -66,7 +59,6 @@ export const sessionStore = {
   clear(): void {
     current = null;
     localStorage.removeItem(STORAGE_KEY);
-    sessionStorage.removeItem(STORAGE_KEY);
     emit();
   },
 };

@@ -12,6 +12,7 @@ import { integrationsRouter } from "./integrations.routes.js";
 import { documentsRouter } from "./documents.routes.js";
 import { financeRouter } from "./finance.routes.js";
 import { membersRouter } from "./members.routes.js";
+import { pgRouter } from "./pgAuth.routes.js";
 import { projectsRouter } from "./projects.routes.js";
 import { tasksRouter } from "./tasks.routes.js";
 import { tenantsRouter } from "./tenants.routes.js";
@@ -22,6 +23,7 @@ export const API_PREFIX = "/api/v1";
 
 const REGISTRY = [
   { path: "/auth", router: authRouter, module: null },
+  { path: "/pg", router: pgRouter, module: null },
   { path: "/tenants", router: tenantsRouter, module: null },
   { path: "/members", router: membersRouter, module: null },
   { path: "/projects", router: projectsRouter, module: "projects" },
