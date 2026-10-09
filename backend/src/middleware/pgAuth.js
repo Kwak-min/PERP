@@ -48,6 +48,19 @@ export async function pgAuthBridge(req, _res, next) {
     };
     req.sessionId = String(row.session_id);
 
+    // 모듈 게이팅: perp_db org.company_modules 에 켜진 모듈을 레거시
+    // requireModule 이 읽는 req.organization.modules 형태로 부착한다.
+    // (회사가 없으면 코어 모듈만 통과)
+    let modules = "";
+    if (row.company_id != null) {
+      const mod = await pgQuery(
+        "SELECT module_key FROM org.company_modules WHERE company_id = $1",
+        [row.company_id],
+      );
+      modules = mod.rows.map((r) => r.module_key).join(",");
+    }
+    req.organization = { id: row.company_id != null ? String(row.company_id) : null, modules };
+
     // 브리지 단계: pg 인증 사용자에게 전권(*) 부여.
     // (모듈별 데이터가 perp_db 로 이관되면 실제 RBAC 로 대체 예정)
     const permissions = new Set(["*"]);

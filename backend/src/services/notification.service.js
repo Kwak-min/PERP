@@ -1,7 +1,14 @@
 import { db } from "../config/db.js";
 import { insert } from "../models/base.js";
 
-export function notify(entry) {
+export function notify(_entry) {
+  // perp_db 전용 전환: 알림은 SQLite에 쓰지 않는다(런타임 SQLite 제거).
+  // 컨트롤러는 fire-and-forget으로 사용하므로 no-op 안전.
+  // TODO: perp_db 알림 테이블로 이관.
+  return null;
+}
+
+function _notifyLegacyDisabled(entry) {
   if (entry.dedupeKey) {
     const existing = db()
       .prepare(
