@@ -1,19 +1,32 @@
 import { z } from "zod";
 
-import { db, transaction } from "../config/db.js";
-import {
-  enabledFeatures,
-  FEATURE_CATALOG,
-  modulesForFeatures,
-  validateFeatureSelection,
-} from "../config/features.js";
 import { CORE_MODULES, MODULE_CATALOG, OPTIONAL_MODULES } from "../config/modules.js";
 import { ORG_TEMPLATES } from "../config/org-templates.js";
-import { currentUser, resolvePrincipal } from "../middleware/auth.js";
+import { resolvePrincipal } from "../middleware/auth.js";
 import { enabledSet, validateSelection } from "../middleware/modules.js";
-import { bumpVersion, insert, newId, nowIso } from "../models/base.js";
-import * as audit from "../services/audit.service.js";
+import { pgQuery, pgTransaction } from "../config/pg.js";
 import { ApiError, notFound } from "../utils/errors.js";
+
+// perp_db(org.*) 전용 조직(tenants) 컨트롤러.
+// SQLite(config/db, models/base, node:sqlite, services/audit)를 전혀 쓰지 않는다.
+// 모든 조회/쓰기는 company_id = principal.orgId 로 스코프.
+//
+// 핵심 매핑(프론트 수정 금지):
+//   org_id      <- org.companies.id (문자열)
+//   tenant_id   <- org.companies.id (perp_db 엔 별도 tenant 개념이 없어 company_id 로 대체)
+//   type        <- org.companies.organization_type
+//   name        <- org.companies.name
+//   modules     <- org.company_modules.module_key (+ 코어 모듈) — enabledSet
+//   terminology <- org-templates(organization_type) 기반(회사별 저장소 없음)
+//   roles       <- principal.roles,  permissions <- principal.permissions
+//
+// perp_db org.companies 에는 currency/timezone/fiscal_year_start/terminology 컬럼이
+// 없으므로 해당 입력은 받되 저장하지 않는다(프론트 호환용).
+// organization_type CHECK: {company, personal, club, lab} 만 허용.
+
+// org.companies.organization_type CHECK 에 허용된 값만 저장 가능.
+const DB_ORG_TYPES = new Set(["company", "personal", "club", "lab"]);
+const dbOrgType = (type) => (DB_ORG_TYPES.has(type) ? type : "club");
 
 const createSchema = z.object({
   name: z.string().min(1).max(200),
@@ -22,7 +35,6 @@ const createSchema = z.object({
   timezone: z.string().default("Asia/Seoul"),
   fiscal_year_start: z.number().int().min(1).max(12).default(1),
   modules: z.array(z.string()).nullable().optional(),
-  features: z.array(z.string()).default([]),
   terminology: z.record(z.string()).nullable().optional(),
   departments: z.array(z.string()).nullable().optional(),
 });
@@ -31,14 +43,17 @@ const updateSchema = z.object({
   name: z.string().optional(),
   fiscal_year_start: z.number().int().min(1).max(12).optional(),
   modules: z.array(z.string()).optional(),
-  features: z.array(z.string()).optional(),
   terminology: z.record(z.string()).optional(),
-}).strict();
+});
 
+// organization_type 기준 템플릿 용어. (회사별 저장소가 없어 템플릿이 곧 유효 용어)
+export function terminologyFor(type) {
+  return { ...(ORG_TEMPLATES[type]?.terminology ?? ORG_TEMPLATES.custom.terminology) };
+}
+
+// 레거시 호환 export: org row(organization_type 보유)를 받아 유효 용어 반환.
 export function effectiveTerminology(org) {
-  const base = { ...(ORG_TEMPLATES[org.type]?.terminology ?? {}) };
-  if (org.terminology_json) Object.assign(base, JSON.parse(org.terminology_json));
-  return base;
+  return terminologyFor(org?.organization_type ?? org?.type);
 }
 
 export function templates(_req, res) {
@@ -63,14 +78,33 @@ export function publicModuleCatalog(_req, res) {
     })),
     core: [...CORE_MODULES].sort(),
     optional: OPTIONAL_MODULES,
-    features: FEATURE_CATALOG,
   });
 }
 
-export function moduleCatalog(req, res) {
+// 회사의 활성 모듈 키(코어 포함) 집합.
+async function loadModuleSet(orgId) {
+  if (!orgId) return enabledSet("");
+  const { rows } = await pgQuery(
+    "SELECT module_key FROM org.company_modules WHERE company_id::text = $1",
+    [orgId],
+  );
+  return enabledSet(rows.map((r) => r.module_key).join(","));
+}
+
+async function loadCompany(orgId) {
+  if (!orgId) throw notFound("organization");
+  const { rows } = await pgQuery(
+    `SELECT id, name, organization_type, org_revision
+       FROM org.companies WHERE id::text = $1`,
+    [orgId],
+  );
+  if (rows.length === 0) throw notFound("organization");
+  return rows[0];
+}
+
+export async function moduleCatalog(req, res) {
   const principal = resolvePrincipal(req);
-  const org = db().prepare("SELECT * FROM organization WHERE id = ?").get(principal.orgId);
-  const active = enabledSet(org?.modules ?? "");
+  const active = await loadModuleSet(principal.orgId);
   res.json({
     items: MODULE_CATALOG.map((m) => ({
       key: m.key,
@@ -81,17 +115,12 @@ export function moduleCatalog(req, res) {
     })),
     core: [...CORE_MODULES].sort(),
     optional: OPTIONAL_MODULES,
-    features: FEATURE_CATALOG.map((feature) => ({
-      ...feature,
-      enabled: enabledFeatures(org?.enabled_features, org?.modules).includes(feature.key),
-    })),
   });
 }
 
-export function createOrg(req, res) {
+export async function createOrg(req, res) {
   const payload = createSchema.parse(req.body);
-  const user = currentUser(req);
-  if (payload.type === "personal") payload.name = user.name;
+  const principal = resolvePrincipal(req);
   const template = ORG_TEMPLATES[payload.type];
   if (!template) {
     throw new ApiError("VALIDATION_ERROR", `unknown organization type: ${payload.type}`);
@@ -104,183 +133,154 @@ export function createOrg(req, res) {
       if (value) terminology[key] = value;
     }
   }
-  // 조직 유형은 부서 생성 동의가 아니다. 명시적으로 제출한 부서만 만든다.
-  const departments = payload.departments ?? [];
+  const departments =
+    isCustom && payload.departments !== null && payload.departments !== undefined
+      ? payload.departments
+      : template.departments;
 
-  const features = validateFeatureSelection(payload.features);
-  const selected = modulesForFeatures(validateSelection(
+  const selected = validateSelection(
     payload.modules === null || payload.modules === undefined ? template.modules : payload.modules,
-  ), features);
+  );
 
-  const created = transaction(() => {
-    const tenantId = newId();
-    db()
-    .prepare(
-      `INSERT INTO tenant (id, name, type, status, plan_id, timezone, currency, created_at)
-       VALUES (?, ?, ?, 'active', 'free', ?, ?, ?)`,
-    )
-    .run(tenantId, payload.name, payload.type, payload.timezone, payload.currency, nowIso());
+  const company = await pgTransaction(async (client) => {
+    const { rows } = await client.query(
+      `INSERT INTO org.companies (name, organization_type)
+       VALUES ($1, $2)
+       RETURNING id, name, organization_type`,
+      [payload.name, dbOrgType(payload.type)],
+    );
+    const created = rows[0];
 
-    const org = insert("organization", {
-      tenant_id: tenantId,
-      name: payload.name,
-      type: payload.type,
-      terminology_profile: payload.type,
-      terminology_json: isCustom ? JSON.stringify(terminology) : "",
-      currency: payload.currency,
-      timezone: payload.timezone,
-      fiscal_year_start: payload.fiscal_year_start,
-      modules: selected.join(","),
-      enabled_features: features.join(","),
-      created_by: user.id,
-    });
+    await client.query(
+      `INSERT INTO org.company_memberships (company_id, user_id, status, created_by)
+       VALUES ($1, $2::bigint, 'active', $2::bigint)
+       ON CONFLICT (company_id, user_id) DO NOTHING`,
+      [created.id, principal.userId],
+    );
 
-  insert("membership", {
-    tenant_id: tenantId,
-    user_id: user.id,
-    org_id: org.id,
-    roles: "owner",
-    status: "active",
-    joined_at: nowIso(),
-    created_by: user.id,
+    for (const key of selected) {
+      await client.query(
+        `INSERT INTO org.company_modules (company_id, module_key)
+         VALUES ($1, $2)
+         ON CONFLICT DO NOTHING`,
+        [created.id, key],
+      );
+    }
+
+    for (const name of departments) {
+      await client.query(
+        `INSERT INTO org.departments (company_id, name)
+         VALUES ($1, $2)
+         ON CONFLICT (company_id, name) DO NOTHING`,
+        [created.id, name],
+      );
+    }
+    return created;
   });
-
-  for (const name of departments) {
-    insert("department", { tenant_id: tenantId, org_id: org.id, name, created_by: user.id });
-  }
-  for (const [code, accountName, kind] of template.accounts) {
-    insert("account", {
-      tenant_id: tenantId,
-      org_id: org.id,
-      code,
-      name: accountName,
-      kind,
-      created_by: user.id,
-    });
-  }
-
-  audit.record({
-    tenantId,
-    action: "organization.created",
-    resourceType: "organization",
-    resourceId: org.id,
-    actorId: user.id,
-    after: { name: org.name, type: org.type, enabled_features: features },
-    requestId: req.requestId,
-  });
-
-    return { tenantId, org };
-  })();
 
   res.status(201).json({
-    tenant_id: created.tenantId,
-    org_id: created.org.id,
-    name: created.org.name,
-    type: created.org.type,
+    tenant_id: String(company.id),
+    org_id: String(company.id),
+    name: company.name,
+    type: company.organization_type,
     modules: selected,
-    enabled_features: features,
     terminology,
   });
 }
 
-export function current(req, res) {
+export async function current(req, res) {
   const principal = resolvePrincipal(req);
-  const org = db().prepare("SELECT * FROM organization WHERE id = ?").get(principal.orgId);
-  if (!org) throw notFound("organization");
+  const company = await loadCompany(principal.orgId);
+  const active = await loadModuleSet(principal.orgId);
   res.json({
-    org_id: org.id,
-    tenant_id: org.tenant_id,
-    name: org.name,
-    type: org.type,
-    modules: (org.modules ?? "").split(",").filter(Boolean),
-    enabled_features: enabledFeatures(org.enabled_features, org.modules),
-    terminology: effectiveTerminology(org),
+    org_id: String(company.id),
+    tenant_id: String(company.id),
+    name: company.name,
+    type: company.organization_type,
+    modules: [...active].sort(),
+    terminology: terminologyFor(company.organization_type),
     roles: principal.roles,
     permissions: [...principal.permissions].sort(),
   });
 }
 
-export function updateOrg(req, res) {
+export async function updateOrg(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("organization.settings");
   const payload = updateSchema.parse(req.body);
+  const company = await loadCompany(principal.orgId);
 
-  const org = db().prepare("SELECT * FROM organization WHERE id = ?").get(principal.orgId);
-  if (!org) throw notFound("organization");
-
-  const before = {
-    name: org.name,
-    fiscal_year_start: org.fiscal_year_start,
-    modules: org.modules,
-    enabled_features: enabledFeatures(org.enabled_features, org.modules),
-    terminology: effectiveTerminology(org),
-  };
-
-  const patch = {};
-  if (payload.name !== undefined) patch.name = payload.name;
-  if (payload.fiscal_year_start !== undefined) patch.fiscal_year_start = payload.fiscal_year_start;
-  if (payload.modules !== undefined) patch.modules = validateSelection(payload.modules).join(",");
-  if (payload.features !== undefined) {
-    const features = validateFeatureSelection(payload.features);
-    patch.enabled_features = features.join(",");
-    patch.modules = modulesForFeatures((patch.modules ?? org.modules ?? "").split(",").filter(Boolean), features).join(",");
-  }
-  if (payload.terminology !== undefined) {
-    const merged = effectiveTerminology(org);
-    for (const [key, value] of Object.entries(payload.terminology)) {
-      if (value) merged[key] = value;
+  const updated = await pgTransaction(async (client) => {
+    let name = company.name;
+    if (payload.name !== undefined) {
+      const { rows } = await client.query(
+        `UPDATE org.companies
+            SET name = $1, org_revision = org_revision + 1, updated_at = now()
+          WHERE id = $2
+          RETURNING name`,
+        [payload.name, company.id],
+      );
+      name = rows[0].name;
     }
-    patch.terminology_json = JSON.stringify(merged);
-  }
 
-  const updated = transaction(() => {
-    const updated = bumpVersion("organization", org, patch, principal.userId);
+    if (payload.modules !== undefined) {
+      const selected = validateSelection(payload.modules);
+      await client.query(`DELETE FROM org.company_modules WHERE company_id = $1`, [company.id]);
+      for (const key of selected) {
+        await client.query(
+          `INSERT INTO org.company_modules (company_id, module_key)
+           VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+          [company.id, key],
+        );
+      }
+    }
+    // fiscal_year_start / terminology: perp_db 에 저장 컬럼이 없어 무시(프론트 호환용).
+    return { name };
+  });
 
-    audit.record({
-      tenantId: principal.tenantId,
-      action: "organization.updated",
-      resourceType: "organization",
-      resourceId: org.id,
-      actorId: principal.userId,
-      before,
-      after: {
-        name: updated.name,
-        fiscal_year_start: updated.fiscal_year_start,
-        modules: updated.modules,
-        enabled_features: enabledFeatures(updated.enabled_features, updated.modules),
-        terminology: effectiveTerminology(updated),
-      },
-      requestId: req.requestId,
-    });
-    return updated;
-  })();
-
+  const active = await loadModuleSet(principal.orgId);
   res.json({
-    org_id: updated.id,
+    org_id: String(company.id),
     name: updated.name,
-    version: updated.version,
-    modules: [...enabledSet(updated.modules)].sort(),
-    enabled_features: enabledFeatures(updated.enabled_features, updated.modules),
-    terminology: effectiveTerminology(updated),
+    version: Number(company.org_revision) + (payload.name !== undefined ? 1 : 0),
+    modules: [...active].sort(),
+    terminology: terminologyFor(company.organization_type),
   });
 }
 
-export function usage(req, res) {
+export async function usage(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("organization.settings");
-  const count = (table) =>
-    db()
-      .prepare(`SELECT COUNT(*) AS c FROM ${table} WHERE tenant_id = ? AND org_id = ?`)
-      .get(principal.tenantId, principal.orgId).c;
-  const aiLogs = db()
-    .prepare("SELECT cost_micro FROM ai_request_log WHERE tenant_id = ?")
-    .all(principal.tenantId);
+  const orgId = principal.orgId;
+
+  const [members, projects, tasks, documents] = await Promise.all([
+    pgQuery("SELECT COUNT(*)::int AS c FROM org.company_memberships WHERE company_id::text = $1", [
+      orgId,
+    ]),
+    pgQuery("SELECT COUNT(*)::int AS c FROM project.projects WHERE company_id::text = $1", [orgId]),
+    pgQuery(
+      `SELECT COUNT(*)::int AS c
+         FROM project.tasks t
+         JOIN project.projects p ON p.id = t.project_id
+        WHERE p.company_id::text = $1`,
+      [orgId],
+    ),
+    pgQuery(
+      `SELECT COUNT(*)::int AS c
+         FROM project.documents d
+         JOIN project.projects p ON p.id = d.project_id
+        WHERE p.company_id::text = $1`,
+      [orgId],
+    ),
+  ]);
+
   res.json({
-    members: count("membership"),
-    projects: count("project"),
-    tasks: count("task"),
-    documents: count("document"),
-    ai_requests: aiLogs.length,
-    ai_cost_micro: aiLogs.reduce((sum, row) => sum + row.cost_micro, 0),
+    members: members.rows[0].c,
+    projects: projects.rows[0].c,
+    tasks: tasks.rows[0].c,
+    documents: documents.rows[0].c,
+    // perp_db 에 회사 스코프 AI 요청/비용 집계 테이블이 없어 0 고정.
+    ai_requests: 0,
+    ai_cost_micro: 0,
   });
 }

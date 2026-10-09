@@ -9,7 +9,6 @@ type Props = Readonly<{
   editingId: string | null;
   folders: readonly string[];
   busy: boolean;
-  storage?: "legacy" | "pg";
   onChange: (patch: Partial<NoteDraft>) => void;
   onSave: () => void;
   onDelete: () => void;
@@ -28,7 +27,6 @@ export function NoteEditor({
   editingId,
   folders,
   busy,
-  storage = "legacy",
   onChange,
   onSave,
   onDelete,
@@ -47,7 +45,6 @@ export function NoteEditor({
       <label>
         제목
         <input
-          disabled={busy}
           value={draft.title}
           onChange={(event) => onChange({ title: event.target.value })}
           placeholder="예: 2026년 개인 목표"
@@ -58,7 +55,6 @@ export function NoteEditor({
         <label>
           폴더
           <input
-            disabled={busy}
             value={draft.folder}
             onChange={(event) => onChange({ folder: event.target.value })}
             placeholder="/"
@@ -70,15 +66,14 @@ export function NoteEditor({
             ))}
           </datalist>
         </label>
-        {storage !== "pg" && <label>
+        <label>
           태그 (쉼표로 구분)
           <input
-            disabled={busy}
             value={draft.tags}
             onChange={(event) => onChange({ tags: event.target.value })}
             placeholder="예: 목표, 회고"
           />
-        </label>}
+        </label>
       </div>
       <div className="note-editor__content">
         <div className="note-editor__tabs" role="tablist" aria-label="본문 편집 모드">
@@ -106,7 +101,6 @@ export function NoteEditor({
           <textarea
             aria-label="본문 마크다운"
             className="note-editor__markdown"
-            disabled={busy}
             value={draft.content}
             onChange={(event) => onChange({ content: event.target.value })}
             rows={14}
@@ -124,11 +118,10 @@ export function NoteEditor({
           <code>[링크](url)</code> <code>[[다른 노트]]</code>
         </p>
       </div>
-      {storage !== "pg" && <div className="note-editor__toggles">
+      <div className="note-editor__toggles">
         <label>
           <input
             type="checkbox"
-            disabled={busy}
             checked={draft.pinned}
             onChange={(event) => onChange({ pinned: event.target.checked })}
           />
@@ -137,18 +130,14 @@ export function NoteEditor({
         <label>
           <input
             type="checkbox"
-            disabled={busy}
             checked={draft.agent_enabled}
             onChange={(event) => onChange({ agent_enabled: event.target.checked })}
           />
           <span>AI Agent가 이 노트를 참고해도 됨</span>
         </label>
-      </div>}
+      </div>
       <p className="note-editor__note">
-        개인 노트는 소유자 본인만 볼 수 있습니다.{" "}
-        {storage === "pg"
-          ? "이 저장소는 제목·폴더·본문 저장을 지원합니다."
-          : "비밀번호·API 키·주민등록번호 같은 자격증명은 저장이 거부됩니다."}
+        개인 노트는 소유자 본인만 볼 수 있습니다. 비밀번호·API 키·주민등록번호 같은 자격증명은 저장이 거부됩니다.
       </p>
       <div className="note-editor__actions">
         {editingId && (

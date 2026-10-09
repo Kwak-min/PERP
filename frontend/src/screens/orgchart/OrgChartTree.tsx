@@ -1,14 +1,12 @@
 import { useState } from "react";
 
-import { seatLabel, type OrgSeat } from "./model";
+import { PERMISSION_LABELS, permissionsOf, seatLabel, type OrgSeat } from "./model";
 
 type TreeProps = Readonly<{
   roots: readonly OrgSeat[];
   selectedMemberId: string | null;
   selectedSeatId: string | null;
   busy: boolean;
-  canSetup: boolean;
-  canAdd: boolean;
   onSelectMember: (membershipId: string) => void;
   onSetupSeat: (seat: OrgSeat) => void;
   onAddChild: (seat: OrgSeat, name: string) => void;
@@ -19,13 +17,16 @@ function SeatCard({
   depth,
   ...handlers
 }: Readonly<{ seat: OrgSeat; depth: number }> & Omit<TreeProps, "roots">) {
-  const { selectedMemberId, selectedSeatId, busy, canSetup, canAdd, onSelectMember, onSetupSeat, onAddChild } = handlers;
+  const { selectedMemberId, selectedSeatId, busy, onSelectMember, onSetupSeat, onAddChild } = handlers;
   const [adding, setAdding] = useState(false);
   const [childName, setChildName] = useState("");
   const locked = !seat.configured || !seat.leader;
+  const permissions = PERMISSION_LABELS.filter(({ key }) =>
+    permissionsOf(seat.leader?.roles ?? []).includes(key),
+  );
 
   return (
-    <li className="orgchart__item" aria-label={`${seat.name} ${seatLabel(seat)}`}>
+    <li className="orgchart__item" role="treeitem" aria-label={`${seat.name} ${seatLabel(seat)}`}>
       {depth > 0 && <span className="orgchart__connector" aria-hidden="true" />}
       <article
         className={[
@@ -61,10 +62,14 @@ function SeatCard({
           </div>
           <span className="orgchart__department">{seat.name}</span>
           {locked ? (
-            <p className="orgchart__lock-note">책임자가 지정되지 않은 부서입니다.</p>
+            <p className="orgchart__lock-note">한 번도 설정하지 않은 자리입니다. 잠금을 풀려면 설정하세요.</p>
           ) : (
-            <div className="orgchart__permissions" aria-label="책임자 역할">
-              {seat.leader?.roles.map(role => <span key={role} className="orgchart__permission">{role}</span>)}
+            <div className="orgchart__permissions" aria-label="보유 권한">
+              {permissions.map(({ key, label }) => (
+                <span key={key} className={`orgchart__permission orgchart__permission--${key}`}>
+                  {label}
+                </span>
+              ))}
             </div>
           )}
           {seat.members.length > 0 && (
@@ -90,12 +95,29 @@ function SeatCard({
         <span className="orgchart__count">{seat.member_count}명</span>
       </article>
 
-      {(canSetup || canAdd) && <div className="orgchart__actions">
-        {canSetup && <button type="button" className={locked ? "orgchart__setup" : "orgchart__reassign"} disabled={busy} onClick={() => onSetupSeat(seat)}>{locked ? "이 자리 설정" : "인원 배치"}</button>}
-        {canAdd && <button type="button" className="orgchart__add" aria-expanded={adding} disabled={busy} onClick={() => setAdding(value => !value)}><span aria-hidden="true">+</span> 하위 부서 추가</button>}
-      </div>}
+      <div className="orgchart__actions">
+        {locked ? (
+          <button type="button" className="orgchart__setup" onClick={() => onSetupSeat(seat)}>
+            이 자리 설정
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="orgchart__add"
+              aria-expanded={adding}
+              onClick={() => setAdding((value) => !value)}
+            >
+              <span aria-hidden="true">+</span> 하위 직급 추가
+            </button>
+            <button type="button" className="orgchart__reassign" onClick={() => onSetupSeat(seat)}>
+              인원 배치
+            </button>
+          </>
+        )}
+      </div>
 
-      {adding && canAdd && (
+      {adding && (
         <form
           className="orgchart__add-form"
           onSubmit={(event) => {
@@ -128,7 +150,7 @@ function SeatCard({
       )}
 
       {seat.children.length > 0 && (
-        <ul className="orgchart__children">
+        <ul className="orgchart__children" role="group">
           {seat.children.map((child) => (
             <SeatCard key={child.id} seat={child} depth={depth + 1} {...handlers} />
           ))}
@@ -150,10 +172,10 @@ export function OrgChartTree({ roots, ...handlers }: TreeProps) {
     <div className="orgchart">
       <div className="orgchart__legend">
         <span>선은 보고·관리 관계를 나타냅니다.</span>
-        <span>배지는 책임자에게 배정된 역할입니다. 직책은 권한을 부여하지 않습니다.</span>
-        <span>🔒 표시는 책임자 미지정 부서입니다.</span>
+        <span>권한 배지는 해당 직급이 실행할 수 있는 작업입니다.</span>
+        <span>🔒 표시는 아직 설정하지 않아 잠긴 자리입니다.</span>
       </div>
-      <ul className="orgchart__root" aria-label="조직 구조">
+      <ul className="orgchart__root" role="tree" aria-label="조직 권한 구조">
         {roots.map((seat) => (
           <SeatCard key={seat.id} seat={seat} depth={0} {...handlers} />
         ))}

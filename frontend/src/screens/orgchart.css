@@ -88,29 +88,6 @@
 .seat-flow__arrow { padding-top: 28px; color: var(--of-text-muted); text-align: center; }
 .seat-setup__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
-.orgchart-main { display: grid; gap: 16px; min-width: 0; }
-.org-directory { min-width: 0; }
-.org-directory__filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 12px 15px 0; }
-.org-directory__filters label { display: grid; gap: 5px; min-width: 0; color: var(--of-text-muted); font-size: 12px; }
-.org-directory__filters label:first-child { flex: 1 1 200px; }
-.org-directory__filters input, .org-directory__filters select { width: 100%; min-width: 0; }
-.org-directory__count { margin: 10px 15px; color: var(--of-text-muted); font-size: 12px; }
-.org-directory__table { overflow-x: auto; }
-.org-directory table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
-.org-directory th, .org-directory td { border-bottom: 1px solid var(--of-border); padding: 10px 15px; overflow-wrap: anywhere; }
-.org-directory th { color: var(--of-text-muted); white-space: nowrap; }
-.org-directory tr[data-selected="true"] { background: var(--of-primary-soft); }
-.org-directory tbody button { min-height: 32px; }
-.org-unified .orgchart__permission, .org-unified .orgchart__count, .org-unified .orgchart__chip { border-radius: var(--r-sm); }
-.org-unified .orgchart__seat, .org-unified .orgchart__chip { overflow-wrap: anywhere; }
-.org-unified .member-detail__ladder label { display: grid; gap: 6px; margin-bottom: 8px; font-size: 12px; }
-.org-unified .orgchart__root { justify-content: safe center; }
-
-@media (max-width: 600px) {
-  .org-directory__table table { min-width: 600px; }
-  .org-unified .screen-header__actions { flex-wrap: wrap; }
-}
-
 @media (max-width: 1100px) {
   .orgchart-layout { grid-template-columns: minmax(0, 1fr); }
   .orgchart-aside { position: static; }

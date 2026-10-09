@@ -7,11 +7,11 @@ export function ProtectedRoute({ children }: Readonly<{ children: ReactNode }>) 
   const session = useSession();
   const location = useLocation();
   if (!session) {
-    return <Navigate to={`/login?next=${encodeURIComponent(location.pathname + location.search)}`} replace />;
+    return <Navigate to={`/login?next=${encodeURIComponent(location.pathname)}`} replace />;
   }
   if (session.mustChangePassword && location.pathname !== "/change-password") {
     return <Navigate to="/change-password" replace />;
   }
-  if (session.organizationStatus === "loading" || !session.orgId) return <Navigate to="/welcome" replace />;
+  if (!session.orgId) return <Navigate to="/welcome" replace />;
   return children;
 }
