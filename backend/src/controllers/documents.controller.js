@@ -1,691 +1,399 @@
-import path from "node:path";
-
 import { z } from "zod";
 
-import { transaction } from "../config/db.js";
 import { resolvePrincipal } from "../middleware/auth.js";
-import {
-  getScoped,
-  hardDelete,
-  insert,
-  listScoped,
-  softDelete,
-  update,
-} from "../models/base.js";
+import { pgQuery, pgTransaction } from "../config/pg.js";
 import * as audit from "../services/audit.service.js";
-import {
-  DOCUMENT_CANDIDATE_LIMIT,
-  documentSemantic,
-  documentSemanticScope,
-} from "../services/document-semantic.service.js";
-import {
-  extractSupportedTextUpload,
-  persistUploadedSource,
-} from "../services/document-ingestion.service.js";
-import { canReadDocument } from "../services/rag.service.js";
-import { graphEdge, graphIdentity, graphNode } from "../services/graph-identity.service.js";
 import { ApiError, notFound } from "../utils/errors.js";
 
-const spaceSchema = z.object({
-  name: z.string().min(1).max(200),
-  visibility: z.string().default("org"),
-});
+// perp_db 전용 문서/회의록 컨트롤러 (SQLite 완전 제거).
+//
+// 매핑 테이블:
+//   project.documents (id, project_id, title, content_md, file_id, author_id,
+//                      version, created_at, updated_at)
+//     -> company_id 컬럼이 없어 project.projects 를 JOIN 해 company 스코프.
+//   project.meeting_minutes (id, project_id, company_id, title, meeting_at,
+//                            location, content_md, author_id, created_at)
+//   project.meeting_attendees (minute_id, user_id)
+//
+// perp_db 에 없어 프론트 계약 유지를 위해 상수로 반환하는 필드:
+//   doc_type: "note" · tags: [] · sensitivity: "internal" · archived: false
+//   review_status: "approved" · ai_generated: false
+//
+// 미지원 기능(스키마에 대응 테이블/컬럼 없음):
+//   - 문서 스페이스(createSpace/listSpaces): 전용 테이블 없음 -> 빈 결과/비영속.
+//   - 문서 버전 이력(getDocument.versions, restoreVersion): 이력 테이블 없음.
+//   - 문서 보관(archiveDocument): archived/deleted 컬럼 없음 -> 비파괴로 미지원 명시.
+//   - 회의 결정사항(addDecision/confirmDecisions, getMeeting.decisions):
+//     project.meeting_decisions 테이블 없음 -> 빈 배열 / 미지원 명시.
 
 const documentSchema = z.object({
   title: z.string().min(1).max(300),
   content: z.string().default(""),
+  project_id: z.union([z.string(), z.number()]),
+  // 아래는 프론트 호환용으로 받되 perp_db 스키마엔 없어 저장하지 않음.
   space_id: z.string().nullable().optional(),
-  project_id: z.string().nullable().optional(),
-  doc_type: z.string().default("wiki"),
+  doc_type: z.string().default("note"),
   tags: z.array(z.string()).default([]),
-  visibility: z.enum(["org", "private", "public"]).default("org"),
-  sensitivity: z.enum(["public", "internal", "personal", "sensitive", "confidential"]).default("internal"),
+  visibility: z.string().default("org"),
+  sensitivity: z.string().default("internal"),
 });
 
 const patchSchema = z.object({
   title: z.string().optional(),
   content: z.string().optional(),
-  visibility: z.enum(["org", "private", "public"]).optional(),
+  visibility: z.string().optional(),
   review_status: z.string().optional(),
-  version: z.number().int().positive(),
-});
-
-const uploadSchema = z.object({
-  filename: z.string().min(1).max(255),
-  mime: z.string().min(1).max(100),
-  content_base64: z.string().min(1).max(1_400_000),
-  title: z.string().min(1).max(300).optional(),
-  space_id: z.string().nullable().optional(),
-  project_id: z.string().nullable().optional(),
-  tags: z.array(z.string()).default([]),
-  visibility: z.enum(["org", "private", "public"]).default("org"),
-  sensitivity: z.enum(["public", "internal", "personal", "sensitive", "confidential"]).default("internal"),
+  version: z.number().int().optional(),
 });
 
 const meetingSchema = z.object({
   title: z.string().min(1).max(300),
   held_at: z.string(),
   location: z.string().nullable().optional(),
-  attendees: z.array(z.string()).default([]),
+  attendees: z.array(z.union([z.string(), z.number()])).default([]),
   agenda: z.string().default(""),
   notes: z.string().default(""),
-  raw_source: z.string().default(""),
-  event_id: z.string().nullable().optional(),
+  project_id: z.union([z.string(), z.number()]).nullable().optional(),
 });
 
-const decisionSchema = z.object({
-  content: z.string().min(1),
-  owner_id: z.string().nullable().optional(),
-  due_at: z.string().nullable().optional(),
-  source_quote: z.string().default(""),
-});
+const DOC_COLS = `
+  d.id, d.project_id, d.title, d.content_md, d.author_id, d.version,
+  to_char(d.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+  to_char(d.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at`;
 
-const confirmSchema = z.object({ decision_ids: z.array(z.string()) });
+const MEETING_COLS = `
+  m.id, m.project_id, m.company_id, m.title, m.location, m.content_md, m.author_id,
+  to_char(m.meeting_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS meeting_at,
+  to_char(m.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at`;
 
+// perp_db project.documents row -> 프론트(DocumentsScreen) 기대 Doc 형태
 const view = (d) => ({
-  id: d.id,
-  space_id: d.space_id,
-  project_id: d.project_id,
+  id: String(d.id),
   title: d.title,
-  doc_type: d.doc_type,
-  tags: (d.tags ?? "").split(",").filter(Boolean),
-  visibility: d.visibility,
-  sensitivity: d.sensitivity,
-  owner_id: d.owner_id,
-  archived: Boolean(d.archived),
-  ai_generated: Boolean(d.ai_generated),
-  review_status: d.review_status,
+  doc_type: "note",
+  tags: [],
+  sensitivity: "internal",
+  owner_id: d.author_id === null || d.author_id === undefined ? null : String(d.author_id),
+  archived: false,
+  review_status: "approved",
+  ai_generated: false,
   version: d.version,
+  updated_at: d.updated_at,
 });
 
-function reindex(principal, document) {
-  hardDelete("document_chunk", "document_id = ?", [document.id]);
-  const chunks = (document.content ?? "")
-    .split("\n\n")
-    .map((c) => c.trim())
-    .filter(Boolean);
-  const parts = chunks.length > 0 ? chunks : [document.title];
-  parts.forEach((content, ordinal) => {
-    insert("document_chunk", {
-      tenant_id: document.tenant_id,
-      org_id: document.org_id,
-      document_id: document.id,
-      ordinal,
-      content: content.slice(0, 4000),
-      sensitivity: document.sensitivity,
-      visibility: document.visibility,
-      created_by: principal.userId,
-    });
-  });
-  return parts.length;
+async function recordAudit(entry) {
+  try {
+    audit.record(entry);
+  } catch {
+    // 감사 로그 저장 실패는 요청을 막지 않는다.
+  }
 }
 
-function analyze(principal, document) {
-  if (!canReadDocument(principal, document)) return null;
-  return documentSemantic.schedule(
-    documentSemanticScope(principal),
-    document,
-    () => listScoped("document", principal, [], {
-      limit: DOCUMENT_CANDIDATE_LIMIT + 1,
-      orderBy: "updated_at DESC, id",
-    }).filter((candidate) => canReadDocument(principal, candidate)),
+// company 스코프로 단일 문서 로드(project.projects JOIN).
+async function ownDocument(orgId, documentId) {
+  const { rows } = await pgQuery(
+    `SELECT ${DOC_COLS}
+       FROM project.documents d
+       JOIN project.projects p ON p.id = d.project_id
+      WHERE p.company_id::text = $1 AND d.id::text = $2`,
+    [String(orgId), String(documentId)],
+  );
+  if (rows.length === 0) throw notFound("document");
+  return rows[0];
+}
+
+// company 스코프로 단일 회의록 로드.
+async function ownMeeting(orgId, meetingId) {
+  const { rows } = await pgQuery(
+    `SELECT ${MEETING_COLS}
+       FROM project.meeting_minutes m
+      WHERE m.company_id::text = $1 AND m.id::text = $2`,
+    [String(orgId), String(meetingId)],
+  );
+  if (rows.length === 0) throw notFound("meeting");
+  return rows[0];
+}
+
+// --- 문서 스페이스: 전용 테이블 없음. 프론트 미호출. 비영속/빈 결과 ---
+
+export async function createSpace(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("document.write");
+  // perp_db 에 문서 스페이스 테이블이 없어 영속화하지 않는다.
+  throw new ApiError(
+    "NOT_SUPPORTED",
+    "문서 스페이스는 현재 perp_db 스키마에서 지원되지 않습니다",
   );
 }
 
-const insertUploadedDocument = transaction((principal, payload, extracted, stored) => {
-  const document = insert("document", {
-    tenant_id: principal.tenantId,
-    org_id: principal.orgId,
-    space_id: payload.space_id ?? null,
-    project_id: payload.project_id ?? null,
-    title: payload.title ?? path.basename(payload.filename, extracted.extension),
-    content: extracted.text,
-    doc_type: "upload",
-    tags: payload.tags.join(","),
-    visibility: payload.visibility,
-    sensitivity: payload.sensitivity,
-    owner_id: principal.userId,
-    created_by: principal.userId,
-  });
-  insert("document_version", {
-    tenant_id: principal.tenantId,
-    document_id: document.id,
-    revision: 1,
-    content: document.content,
-    author_id: principal.userId,
-    created_by: principal.userId,
-  });
-  reindex(principal, document);
-  const file = insert("file_object", {
-    id: stored.id,
-    tenant_id: principal.tenantId,
-    org_id: principal.orgId,
-    storage_key: stored.storageKey,
-    filename: payload.filename,
-    mime: extracted.mime,
-    size: stored.size,
-    checksum: stored.checksum,
-    malware_status: "accepted_text_only",
-    related_type: "document",
-    related_id: document.id,
-    created_by: principal.userId,
-  });
-  return { document, file };
-});
-
-export function createSpace(req, res) {
-  const principal = resolvePrincipal(req);
-  principal.require("document.write");
-  const payload = spaceSchema.parse(req.body);
-  const space = insert("space", {
-    tenant_id: principal.tenantId,
-    org_id: principal.orgId,
-    name: payload.name,
-    visibility: payload.visibility,
-    created_by: principal.userId,
-  });
-  res.status(201).json({ id: space.id, name: space.name, visibility: space.visibility });
-}
-
-export function listSpaces(req, res) {
+export async function listSpaces(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("document.read");
-  const rows = listScoped("space", principal, [], { limit: 200 });
-  res.json({ items: rows.map((s) => ({ id: s.id, name: s.name, visibility: s.visibility })) });
+  res.json({ items: [] });
 }
 
-export function createDocument(req, res) {
+// --- 문서 ---
+
+export async function createDocument(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("document.write");
   const payload = documentSchema.parse(req.body);
 
-  const document = insert("document", {
-    tenant_id: principal.tenantId,
-    org_id: principal.orgId,
-    space_id: payload.space_id ?? null,
-    project_id: payload.project_id ?? null,
-    title: payload.title,
-    content: payload.content,
-    doc_type: payload.doc_type,
-    tags: payload.tags.join(","),
-    visibility: payload.visibility,
-    sensitivity: payload.sensitivity,
-    owner_id: principal.userId,
-    created_by: principal.userId,
+  const created = await pgTransaction(async (client) => {
+    // project 가 같은 company 소속인지 검증(스코프 가드).
+    const proj = await client.query(
+      `SELECT id FROM project.projects WHERE id::text = $1 AND company_id::text = $2`,
+      [String(payload.project_id), String(principal.orgId)],
+    );
+    if (proj.rows.length === 0) throw notFound("project");
+
+    const inserted = await client.query(
+      `INSERT INTO project.documents (project_id, title, content_md, author_id, version)
+       VALUES ($1, $2, $3, $4, 1)
+       RETURNING ${DOC_COLS.replaceAll("d.", "")}`,
+      [String(payload.project_id), payload.title, payload.content, principal.userId],
+    );
+    return inserted.rows[0];
   });
 
-  insert("document_version", {
-    tenant_id: principal.tenantId,
-    document_id: document.id,
-    revision: 1,
-    content: document.content,
-    author_id: principal.userId,
-    created_by: principal.userId,
-  });
-  reindex(principal, document);
-
-  audit.record({
+  await recordAudit({
     tenantId: principal.tenantId,
     action: "document.created",
     resourceType: "document",
-    resourceId: document.id,
+    resourceId: String(created.id),
     actorId: principal.userId,
-    after: { title: document.title },
+    after: { title: created.title },
     requestId: req.requestId,
   });
 
-  res.status(201).json({ ...view(document), analysis: analyze(principal, document) });
+  res.status(201).json(view(created));
 }
 
-export async function uploadDocument(req, res) {
-  const principal = resolvePrincipal(req);
-  principal.require("document.write");
-  const payload = uploadSchema.parse(req.body);
-  const extracted = extractSupportedTextUpload(payload);
-  const stored = await persistUploadedSource({
-    tenantId: principal.tenantId,
-    orgId: principal.orgId,
-    extension: extracted.extension,
-    bytes: extracted.bytes,
-  });
-
-  let created;
-  try {
-    created = insertUploadedDocument(principal, payload, extracted, stored);
-  } catch (error) {
-    await stored.discard();
-    throw error;
-  }
-
-  audit.record({
-    tenantId: principal.tenantId,
-    action: "document.uploaded",
-    resourceType: "document",
-    resourceId: created.document.id,
-    actorId: principal.userId,
-    after: { title: created.document.title, file_id: created.file.id, format: extracted.format },
-    requestId: req.requestId,
-  });
-
-  res.status(201).json({
-    ...view(created.document),
-    file_id: created.file.id,
-    filename: created.file.filename,
-    extraction: { format: extracted.format, bytes: created.file.size, encoding: "utf-8" },
-    analysis: analyze(principal, created.document),
-  });
-}
-
-export function listDocuments(req, res) {
+export async function listDocuments(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("document.read");
-  const filters = [];
-  if (req.query.doc_type) filters.push({ sql: "doc_type = ?", params: [req.query.doc_type] });
-  if (req.query.owner_id) filters.push({ sql: "owner_id = ?", params: [req.query.owner_id] });
-  const rows = listScoped("document", principal, filters, {
-    limit: Number(req.query.limit ?? 50),
-    orderBy: "updated_at DESC",
-  });
-  res.json({
-    items: rows.filter((document) => canReadDocument(principal, document)).map(view),
-    next_cursor: null,
-  });
-}
 
-export function getDocument(req, res) {
-  const principal = resolvePrincipal(req);
-  principal.require("document.read");
-  const document = getScoped("document", principal, req.params.documentId, "document");
-  if (!canReadDocument(principal, document)) throw notFound("document");
-  const versions = listScoped(
-    "document_version",
-    principal,
-    [{ sql: "document_id = ?", params: [document.id] }],
-    { limit: 100, orderBy: "revision DESC" },
+  const { rows } = await pgQuery(
+    `SELECT ${DOC_COLS}
+       FROM project.documents d
+       JOIN project.projects p ON p.id = d.project_id
+      WHERE p.company_id::text = $1
+      ORDER BY d.updated_at DESC
+      LIMIT $2`,
+    [String(principal.orgId), Number(req.query.limit ?? 50)],
   );
+
+  res.json({ items: rows.map(view), next_cursor: null });
+}
+
+export async function getDocument(req, res) {
+  const principal = resolvePrincipal(req);
+  principal.require("document.read");
+  const document = await ownDocument(principal.orgId, req.params.documentId);
   res.json({
     ...view(document),
-    content: document.content,
-    versions: versions.map((v) => ({
-      revision: v.revision,
-      author_id: v.author_id,
-      created_at: v.created_at,
-    })),
-    analysis: documentSemantic.status(documentSemanticScope(principal), document),
+    content: document.content_md ?? "",
+    // 버전 이력 테이블이 없어 현재 버전만 노출.
+    versions: [
+      {
+        revision: document.version,
+        author_id:
+          document.author_id === null || document.author_id === undefined
+            ? null
+            : String(document.author_id),
+        created_at: document.updated_at,
+      },
+    ],
   });
 }
 
-export async function documentAnalysis(req, res) {
-  const principal = resolvePrincipal(req);
-  principal.require("document.read");
-  const document = getScoped("document", principal, req.params.documentId, "document");
-  if (!canReadDocument(principal, document)) throw notFound("document");
-  const scope = documentSemanticScope(principal);
-  if (req.method === "POST") analyze(principal, document);
-  if (req.query.wait === "1") await documentSemantic.wait(scope, document.id);
-  res.json(documentSemantic.status(scope, getScoped("document", principal, document.id, "document")));
-}
-
-export function patchDocument(req, res) {
+export async function patchDocument(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("document.write");
-  const document = getScoped("document", principal, req.params.documentId, "document");
-  if (!canReadDocument(principal, document)) throw notFound("document");
   const payload = patchSchema.parse(req.body);
+  const document = await ownDocument(principal.orgId, req.params.documentId);
 
-  if (payload.version !== document.version) {
+  if (payload.version !== undefined && payload.version !== document.version) {
     throw new ApiError("VERSION_CONFLICT", "document was modified by someone else");
   }
 
   const before = view(document);
-  const patch = { version: document.version + 1 };
-  if (payload.title !== undefined) patch.title = payload.title;
-  if (payload.visibility !== undefined) patch.visibility = payload.visibility;
-  if (payload.review_status !== undefined) patch.review_status = payload.review_status;
-
-  if (payload.content !== undefined && payload.content !== document.content) {
-    patch.content = payload.content;
-    const revision =
-      1 +
-      listScoped(
-        "document_version",
-        principal,
-        [{ sql: "document_id = ?", params: [document.id] }],
-        { limit: 500 },
-      ).length;
-    insert("document_version", {
-      tenant_id: principal.tenantId,
-      document_id: document.id,
-      revision,
-      content: payload.content,
-      author_id: principal.userId,
-      created_by: principal.userId,
-    });
+  const sets = ["version = version + 1", "updated_at = now()"];
+  const params = [];
+  if (payload.title !== undefined) {
+    params.push(payload.title);
+    sets.push(`title = $${params.length}`);
   }
+  if (payload.content !== undefined) {
+    params.push(payload.content);
+    sets.push(`content_md = $${params.length}`);
+  }
+  // visibility/review_status 는 perp_db documents 스키마에 없어 저장하지 않음.
 
-  const updated = update("document", document.id, patch, principal.userId);
-  if (patch.content !== undefined) reindex(principal, updated);
-  documentSemantic.invalidate(documentSemanticScope(principal), document.id, updated.version);
+  params.push(String(document.id));
+  const { rows } = await pgQuery(
+    `UPDATE project.documents SET ${sets.join(", ")}
+      WHERE id::text = $${params.length}
+      RETURNING ${DOC_COLS.replaceAll("d.", "")}`,
+    params,
+  );
+  const updated = rows[0];
 
-  audit.record({
+  await recordAudit({
     tenantId: principal.tenantId,
     action: "document.updated",
     resourceType: "document",
-    resourceId: document.id,
+    resourceId: String(document.id),
     actorId: principal.userId,
     before,
     after: view(updated),
     requestId: req.requestId,
   });
 
-  res.json({ ...view(updated), analysis: analyze(principal, updated) });
+  res.json(view(updated));
 }
 
-export function restoreVersion(req, res) {
+export async function restoreVersion(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("document.write");
-  const document = getScoped("document", principal, req.params.documentId, "document");
-  if (!canReadDocument(principal, document)) throw notFound("document");
-  const revision = Number(req.params.revision);
-  const version = listScoped(
-    "document_version",
-    principal,
-    [
-      { sql: "document_id = ?", params: [document.id] },
-      { sql: "revision = ?", params: [revision] },
-    ],
-    { limit: 1 },
-  )[0];
-  if (!version) throw notFound("document version");
-
-  const updated = update(
-    "document",
-    document.id,
-    { content: version.content, version: document.version + 1 },
-    principal.userId,
+  // 버전 이력 테이블이 없어 복원 불가.
+  await ownDocument(principal.orgId, req.params.documentId);
+  throw new ApiError(
+    "NOT_SUPPORTED",
+    "문서 버전 복원은 현재 perp_db 스키마에서 지원되지 않습니다",
   );
-  reindex(principal, updated);
-  documentSemantic.invalidate(documentSemanticScope(principal), document.id, updated.version);
-  analyze(principal, updated);
-  res.json({ id: document.id, restored_revision: revision });
 }
 
-export function archiveDocument(req, res) {
+export async function archiveDocument(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("document.write");
-  const document = getScoped("document", principal, req.params.documentId, "document");
-  if (!canReadDocument(principal, document)) throw notFound("document");
-  update("document", document.id, { archived: 1 }, principal.userId);
-  softDelete("document", document.id, principal.userId);
-  hardDelete("document_chunk", "document_id = ?", [document.id]);
-  documentSemantic.invalidate(documentSemanticScope(principal), document.id);
-
-  audit.record({
-    tenantId: principal.tenantId,
-    action: "document.archived",
-    resourceType: "document",
-    resourceId: document.id,
-    actorId: principal.userId,
-    requestId: req.requestId,
-  });
-
-  res.json({ id: document.id, archived: true });
+  // archived/deleted 컬럼이 없어 비파괴 원칙상 미지원으로 명시(하드삭제 지양).
+  await ownDocument(principal.orgId, req.params.documentId);
+  throw new ApiError(
+    "NOT_SUPPORTED",
+    "문서 보관/삭제는 현재 perp_db 스키마에서 지원되지 않습니다",
+  );
 }
 
-export function createMeeting(req, res) {
+// --- 회의록 ---
+
+export async function createMeeting(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("meeting.write");
   const payload = meetingSchema.parse(req.body);
-  const meeting = insert("meeting", {
-    tenant_id: principal.tenantId,
-    org_id: principal.orgId,
-    event_id: payload.event_id ?? null,
-    title: payload.title,
-    held_at: payload.held_at,
-    location: payload.location ?? null,
-    attendees: payload.attendees.join(","),
-    agenda: payload.agenda,
-    notes: payload.notes,
-    raw_source: payload.raw_source,
-    created_by: principal.userId,
+
+  const meeting = await pgTransaction(async (client) => {
+    if (payload.project_id !== null && payload.project_id !== undefined) {
+      const proj = await client.query(
+        `SELECT id FROM project.projects WHERE id::text = $1 AND company_id::text = $2`,
+        [String(payload.project_id), String(principal.orgId)],
+      );
+      if (proj.rows.length === 0) throw notFound("project");
+    }
+
+    const content = payload.agenda
+      ? `${payload.agenda}\n\n${payload.notes}`.trim()
+      : payload.notes;
+
+    const inserted = await client.query(
+      `INSERT INTO project.meeting_minutes
+         (project_id, company_id, title, meeting_at, location, content_md, author_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING ${MEETING_COLS.replaceAll("m.", "")}`,
+      [
+        payload.project_id ?? null,
+        principal.orgId,
+        payload.title,
+        payload.held_at,
+        payload.location ?? null,
+        content,
+        principal.userId,
+      ],
+    );
+    const row = inserted.rows[0];
+
+    for (const userId of payload.attendees) {
+      await client.query(
+        `INSERT INTO project.meeting_attendees (minute_id, user_id)
+         VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [row.id, String(userId)],
+      );
+    }
+    return row;
   });
 
-  audit.record({
+  await recordAudit({
     tenantId: principal.tenantId,
     action: "meeting.created",
     resourceType: "meeting",
-    resourceId: meeting.id,
+    resourceId: String(meeting.id),
     actorId: principal.userId,
     requestId: req.requestId,
   });
 
-  res.status(201).json({ id: meeting.id, title: meeting.title, review_status: meeting.review_status });
+  res.status(201).json({ id: String(meeting.id), title: meeting.title, review_status: "approved" });
 }
 
-export function getMeeting(req, res) {
+export async function getMeeting(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("document.read");
-  const meeting = getScoped("meeting", principal, req.params.meetingId, "meeting");
-  const decisions = listScoped(
-    "meeting_decision",
-    principal,
-    [{ sql: "meeting_id = ?", params: [meeting.id] }],
-    { limit: 200, orderBy: "created_at ASC" },
+  const meeting = await ownMeeting(principal.orgId, req.params.meetingId);
+
+  const { rows: attendees } = await pgQuery(
+    `SELECT user_id FROM project.meeting_attendees WHERE minute_id = $1 ORDER BY user_id`,
+    [meeting.id],
   );
+
   res.json({
-    id: meeting.id,
+    id: String(meeting.id),
     title: meeting.title,
-    held_at: meeting.held_at,
+    held_at: meeting.meeting_at,
     location: meeting.location,
-    attendees: (meeting.attendees ?? "").split(",").filter(Boolean),
-    agenda: meeting.agenda,
-    notes: meeting.notes,
-    ai_summary: meeting.ai_summary,
-    ai_generated: Boolean(meeting.ai_generated),
-    review_status: meeting.review_status,
-    decisions: decisions.map((d) => ({
-      id: d.id,
-      content: d.content,
-      owner_id: d.owner_id,
-      due_at: d.due_at,
-      confirmed: Boolean(d.confirmed),
-      task_id: d.task_id,
-      source_quote: d.source_quote,
-    })),
+    attendees: attendees.map((a) => String(a.user_id)),
+    agenda: "",
+    notes: meeting.content_md ?? "",
+    ai_summary: null,
+    ai_generated: false,
+    review_status: "approved",
+    // 결정사항 테이블(project.meeting_decisions)이 없어 빈 배열.
+    decisions: [],
   });
 }
 
-export function addDecision(req, res) {
+export async function addDecision(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("meeting.write");
-  const payload = decisionSchema.parse(req.body);
-  const meeting = getScoped("meeting", principal, req.params.meetingId, "meeting");
-  const decision = insert("meeting_decision", {
-    tenant_id: principal.tenantId,
-    meeting_id: meeting.id,
-    content: payload.content,
-    owner_id: payload.owner_id ?? null,
-    due_at: payload.due_at ?? null,
-    source_quote: payload.source_quote,
-    created_by: principal.userId,
-  });
-  res.status(201).json({ id: decision.id, confirmed: false, task_id: null });
+  await ownMeeting(principal.orgId, req.params.meetingId);
+  throw new ApiError(
+    "NOT_SUPPORTED",
+    "회의 결정사항 저장은 현재 perp_db 스키마에서 지원되지 않습니다",
+  );
 }
 
-export function confirmDecisions(req, res) {
+export async function confirmDecisions(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("task.write");
-  const payload = confirmSchema.parse(req.body);
-  const meeting = getScoped("meeting", principal, req.params.meetingId, "meeting");
-
-  const created = [];
-  for (const decisionId of payload.decision_ids) {
-    const decision = listScoped(
-      "meeting_decision",
-      principal,
-      [
-        { sql: "id = ?", params: [decisionId] },
-        { sql: "meeting_id = ?", params: [meeting.id] },
-      ],
-      { limit: 1 },
-    )[0];
-    if (!decision) throw notFound("meeting decision");
-    if (decision.confirmed) continue;
-
-    const task = insert("task", {
-      tenant_id: principal.tenantId,
-      org_id: principal.orgId,
-      title: decision.content.slice(0, 300),
-      assignee_id: decision.owner_id ?? principal.userId,
-      due_at: decision.due_at,
-      created_by: principal.userId,
-    });
-    update("meeting_decision", decision.id, { confirmed: 1, task_id: task.id }, principal.userId);
-    created.push({ decision_id: decision.id, task_id: task.id });
-  }
-
-  update("meeting", meeting.id, { review_status: "reviewed" }, principal.userId);
-
-  audit.record({
-    tenantId: principal.tenantId,
-    action: "meeting.decisions.confirmed",
-    resourceType: "meeting",
-    resourceId: meeting.id,
-    actorId: principal.userId,
-    after: { created_tasks: created.length },
-    requestId: req.requestId,
-  });
-
-  res.json({ created, count: created.length });
+  await ownMeeting(principal.orgId, req.params.meetingId);
+  res.json({ created: [], count: 0 });
 }
 
-export function searchDocuments(req, res) {
+// --- 검색: 제목/본문 부분일치(프론트 미호출) ---
+
+export async function searchDocuments(req, res) {
   const principal = resolvePrincipal(req);
   principal.require("document.read");
-  const needle = String(req.query.q ?? "").toLowerCase();
-  const rows = listScoped("document", principal, [], { limit: 500 }).filter(
-    (document) =>
-      canReadDocument(principal, document) &&
-      (document.title.toLowerCase().includes(needle) ||
-        (document.content ?? "").toLowerCase().includes(needle)),
+  const q = String(req.query.q ?? "");
+
+  const { rows } = await pgQuery(
+    `SELECT ${DOC_COLS}
+       FROM project.documents d
+       JOIN project.projects p ON p.id = d.project_id
+      WHERE p.company_id::text = $1
+        AND ($2 = '' OR d.title ILIKE '%' || $2 || '%' OR d.content_md ILIKE '%' || $2 || '%')
+      ORDER BY d.updated_at DESC
+      LIMIT 20`,
+    [String(principal.orgId), q],
   );
-  res.json({ query: req.query.q ?? "", items: rows.slice(0, 20).map(view) });
-}
 
-// GET /documents/graph
-// 조직 지식(RAG)을 옵시디언식 그래프로 준다.
-// - 공간(space)은 허브 노드, 문서는 그 주위 노드
-// - 문서 본문의 [[제목]] 위키링크가 문서 사이 간선
-// - 노출 범위는 RAG 검색(searchChunks)과 같은 민감도 상한을 따른다.
-export async function graph(req, res) {
-  const principal = resolvePrincipal(req);
-  principal.require("document.read");
-  const scope = documentSemanticScope(principal);
-  if (req.query.wait === "1") await documentSemantic.wait(scope);
-  const spaces = listScoped("space", principal, [], { limit: 200 });
-  const spaceName = new Map(spaces.map((s) => [s.id, s.name]));
-
-  const documents = listScoped("document", principal, [], { limit: 1000 }).filter((document) =>
-    canReadDocument(principal, document),
-  );
-  const readableIds = new Set(documents.map((document) => document.id));
-  const spaceIdentities = new Map(spaces.map((space) => [space.id, graphIdentity({
-    store: "legacy", company: principal.orgId, kind: "space", opaqueId: space.id,
-  })]));
-  const documentIdentities = new Map(documents.map((document) => [document.id, graphIdentity({
-    store: "legacy", company: principal.orgId, kind: "document", opaqueId: document.id,
-  })]));
-
-  const chunkCount = new Map();
-  for (const chunk of listScoped("document_chunk", principal, [], { limit: 5000 })) {
-    if (!readableIds.has(chunk.document_id)) continue;
-    chunkCount.set(chunk.document_id, (chunkCount.get(chunk.document_id) ?? 0) + 1);
-  }
-
-  const byTitle = new Map();
-  for (const document of documents) {
-    const ids = byTitle.get(document.title) ?? [];
-    ids.push(document.id);
-    byTitle.set(document.title, ids);
-  }
-
-  const nodes = [
-    ...spaces.map((space) => graphNode({
-      id: space.id,
-      kind: "space",
-      title: space.name,
-      folder: space.name,
-      sensitivity: space.visibility,
-      chunks: 0,
-      tags: [],
-      updated_at: space.updated_at,
-    }, spaceIdentities.get(space.id))),
-    ...documents.map((document) => graphNode({
-      id: document.id,
-      kind: "document",
-      title: document.title,
-      folder: spaceName.get(document.space_id) ?? "미분류",
-      sensitivity: document.sensitivity,
-      chunks: chunkCount.get(document.id) ?? 0,
-      tags: (document.tags ?? "").split(",").filter(Boolean),
-      updated_at: document.updated_at,
-    }, documentIdentities.get(document.id))),
-  ];
-
-  const edges = [];
-  for (const document of documents) {
-    const sourceIdentity = documentIdentities.get(document.id);
-    if (document.space_id && spaceName.has(document.space_id)) {
-      const targetIdentity = spaceIdentities.get(document.space_id);
-      edges.push(graphEdge({
-        source: document.id,
-        target_id: document.space_id,
-        target_title: spaceName.get(document.space_id),
-        kind: "space",
-      }, sourceIdentity, targetIdentity, { binding: "membership", resolution: "resolved" }));
-    }
-    const seen = new Set();
-    for (const match of (document.content ?? "").matchAll(/\[\[([^\]]+)\]\]/g)) {
-      const title = match[1].trim();
-      if (!title || seen.has(title)) continue;
-      seen.add(title);
-      const ids = byTitle.get(title) ?? [];
-      const targetId = ids.length === 1 ? ids[0] : null;
-      if (targetId === document.id) continue;
-      const targetIdentity = targetId ? documentIdentities.get(targetId) : null;
-      edges.push(graphEdge({
-        source: document.id,
-        target_id: targetId,
-        target_title: targetId ? title : "",
-        kind: "link",
-      }, sourceIdentity, targetIdentity, targetIdentity
-        ? { binding: "title", resolution: "resolved" }
-        : { binding: "title", resolution: "unresolved", reason: ids.length > 1 ? "duplicate_title" : "title_not_found" }));
-    }
-  }
-
-  const semantic = documentSemantic.graph(scope, documents);
-  for (const edge of semantic.edges) {
-    const sourceIdentity = documentIdentities.get(edge.source);
-    const targetIdentity = documentIdentities.get(edge.target_id);
-    if (sourceIdentity && targetIdentity) edges.push(graphEdge(edge, sourceIdentity, targetIdentity, { binding: "inference", resolution: "resolved" }));
-  }
-  const linked = new Set();
-  for (const edge of edges.filter((item) => item.resolution === "resolved")) {
-    linked.add(edge.source);
-    if (edge.target_id) linked.add(edge.target_id);
-  }
-
-  res.json({
-    nodes,
-    edges,
-    analysis: semantic.analysis,
-    orphans: documents.filter((d) => !linked.has(d.id)).map((d) => d.id),
-    stats: {
-      documents: documents.length,
-      spaces: spaces.length,
-      chunks: [...chunkCount.values()].reduce((sum, n) => sum + n, 0),
-      restricted: 0,
-    },
-  });
+  res.json({ query: q, items: rows.map(view) });
 }

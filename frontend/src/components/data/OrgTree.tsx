@@ -1,5 +1,4 @@
 import { useMemo, useState, type FormEvent } from "react";
-import { createRequestKey } from '../../services/requestKey';
 
 import {
   ORG_PERMISSION_OPTIONS,
@@ -50,7 +49,7 @@ function AddNodeForm({
     if (!canSubmit) return;
 
     onAdd(parent.id, {
-      id: `org-${createRequestKey()}`,
+      id: `org-${crypto.randomUUID()}`,
       name: name.trim(),
       title: title.trim(),
       department: department.trim(),

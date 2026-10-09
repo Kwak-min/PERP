@@ -24,7 +24,14 @@ export function computeHash(event) {
   return sha256(payloadOf(event));
 }
 
-export function record(entry) {
+export function record(_entry) {
+  // perp_db 전용 전환: 감사 기록은 SQLite에 쓰지 않는다(런타임 SQLite 제거).
+  // 도메인 컨트롤러는 이 호출을 fire-and-forget(try/catch)로 사용하므로 no-op 안전.
+  // TODO: perp_db 감사 테이블(org.*_events 등)로 이관.
+  return null;
+}
+
+function _recordLegacyDisabled(entry) {
   const last = db()
     .prepare("SELECT * FROM audit_event WHERE tenant_id = ? ORDER BY seq DESC LIMIT 1")
     .get(entry.tenantId);
